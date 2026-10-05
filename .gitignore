@@ -1,0 +1,19 @@
+# Go build output
+/herddash
+/dist/
+*.test
+*.out
+
+# Go workspace
+go.work
+go.work.sum
+
+# Local runtime state
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+
+# Editor / OS
+.DS_Store
+*.swp
