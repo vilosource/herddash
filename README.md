@@ -17,10 +17,11 @@ different question: **what is every agent doing right now, and which ones are wa
 
 Status: **early.** Nothing is built yet.
 
-- [docs/prd.md](docs/prd.md) is the product definition, including the prior art this has to justify
-  itself against.
-- [docs/research/](docs/research/) holds frozen notes on herdr's socket API and its multi-host
-  model. Read them before writing client code.
+- [docs/prd.md](docs/prd.md) is the product definition. Its section 3 is the honest scorecard
+  against existing projects, and most of it still needs narrowing to match.
+- [docs/research/](docs/research/) holds frozen notes on herdr's socket API, its multi-host
+  model, and an evaluation of the closest existing project. Read them before writing client
+  code.
 - [CONTRIBUTING.md](CONTRIBUTING.md) is the contract for working on this.
 
 ## Requirements

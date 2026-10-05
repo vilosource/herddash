@@ -63,23 +63,31 @@ herdr already:
 There are also three unofficial Go socket clients. The most complete generates its types from
 `herdr api schema` and is a reusable approach even if the library itself is not adopted.
 
-So the honest framing is that "a web interface for herdr" is taken. What is not obviously taken is
-this specific thesis:
+The largest of them, devswha/herdr-web-ui, **has now been installed and run against a live herdr
+session.** The evaluation is
+[docs/research/prior-art-herdr-web-ui.md](research/prior-art-herdr-web-ui.md), and the local clone
+is at `~/GitHub/herdr-web-ui`. Read that record before writing any code here, because it narrows
+this product considerably.
 
-1. **A daemon that does not depend on an attached client.** The existing projects are largely
-   interfaces onto a session you are already in. herddash's reason to exist is working while you
-   are detached, which is exactly when herdr's own notifications go silent.
-2. **Triage, not remote control.** The board is sorted by who has been blocked longest and is
-   meant to be read from across a desk. It is not a terminal in a browser.
-3. **Persisted history.** A timeline of what each agent did, which none of the above appears to
-   keep.
-4. **Several subscriptions of the same agent program, disambiguated.** herdr cannot tell these
-   apart. See §6.1.
-5. **One static binary deployable to several machines by configuration management**, rather than a
-   Node or Rust toolchain per host.
+The first draft of this PRD claimed five differentiators. Against the evidence, two and a half
+survive:
 
-**This is open question 1 in §11 and it should be answered before milestone 1 starts.** Reading
-devswha's project may well shorten this project or end it.
+| Claimed | Verdict |
+|---|---|
+| A daemon that works while detached | **Neutralised.** Its server holds its own herdr socket and subscribes to the same events. No attached terminal client is needed. |
+| Triage rather than remote control | **Largely neutralised.** It already ships a "Needs you" grouping. |
+| Persisted history | **Holds.** It has no database and keeps no status-transition history or timeline. |
+| Telling several subscriptions of one agent apart | **Holds, narrowly.** It reads several Claude config directories, but only to aggregate plan usage, and does not attribute a pane to an account. |
+| One static binary, no per-host runtime | **Holds.** It needs Bun and Node on every host. |
+
+So "a web interface for herdr" is comprehensively taken, and taken well. The honest remaining gap
+is **history, per-account attribution, and single-binary deployability** — a real product, but a
+much smaller one than the rest of this document describes, and arguably a complement to that
+project rather than a replacement for it.
+
+**Sections 7 through 12 below still describe the larger product and have not yet been rewritten to
+match this finding.** Narrowing them, or deciding to contribute the gap upstream instead, is open
+question 1 in §11 and belongs in an ADR before milestone 1 starts.
 
 ## 4. Non-goals for v1
 
@@ -275,9 +283,11 @@ private source code.
 
 ## 11. Open questions
 
-1. **Does this project survive contact with the prior art?** Read devswha/herdr-web-ui and
-   alecuba16/herdr-webui against §3's five differentiators before milestone 1. Adopting or forking
-   one of them is a legitimate outcome.
+1. **Given §3, what is herddash actually for?** devswha/herdr-web-ui has been evaluated and takes
+   most of the original thesis with it. The three gaps that remain are history, per-account
+   attribution and single-binary deployability. Decide in an ADR whether that is a product, a
+   narrowed version of this one, or a contribution upstream — then rewrite §7 through §12 to
+   match. alecuba16/herdr-webui has not been evaluated and may narrow it further.
 2. **Verify one-request-per-connection against a real 0.9.3 binary.** It is empirically true on an
    earlier release and consistent with unchanged 0.9.3 source, but it determines the entire
    connection design, so it is the first thing milestone 1 proves.
@@ -286,7 +296,9 @@ private source code.
 4. **The fate of that plugin.** Retire it once the daemon works, so there is one mechanism, or keep
    it as an independent push path?
 5. **Acknowledgement interaction.** What does the operator actually do on the page to mark an agent
-   as dealt with, given that §6.1 forbids borrowing herdr's own seen state?
+   as dealt with, given that §6.1 forbids borrowing herdr's own seen state? There is now a working
+   precedent to copy: devswha/herdr-web-ui keeps its own finished-pane set beside a server
+   generation marker. See the evaluation record.
 
 Resolved since the first draft, and recorded in the research files rather than here: the socket
 wire protocol, and whether herdr's multi-host support gives us several machines for free. It does
