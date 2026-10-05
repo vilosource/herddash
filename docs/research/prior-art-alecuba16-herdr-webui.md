@@ -1,5 +1,10 @@
 # Prior art: alecuba16/herdr-webui
 
+**Status: PARKED, 2026-10-05.** Partially evaluated. It requires herdr 0.9.0 and this machine runs
+0.8.2, so the product itself could not be exercised. The upgrade is deferred because the herdr
+server is hosting live agent work. What is recorded here from source and release artifacts is
+enough to settle the scorecard; what is missing is any judgement of the interface itself.
+
 **Evaluated 2026-10-05 by building it from source and running it against a live herdr session.**
 The companion record is
 [prior-art-herdr-web-ui.md](prior-art-herdr-web-ui.md) for devswha's project. Between them, they
@@ -144,6 +149,24 @@ certainly before contributing to it.**
 **Two of five survive: a persisted history of what agents did, and attributing a pane to the
 account that owns it.** Neither existing project keeps any status history, and neither labels a
 pane by subscription.
+
+## Resuming this evaluation after the herdr upgrade
+
+Two traps will waste the attempt otherwise.
+
+1. **Reset the persisted backend mode first.** This project writes `"backend_mode": "builtin"` into
+   `~/.config/herdr-webui/webui-settings.json` whenever it falls back, and that file outlives the
+   process. Starting it again after the upgrade with the same settings file would keep it in
+   built-in mode and reproduce the same empty session. Delete the file, or the whole
+   `~/.config/herdr-webui` directory, before retrying. It was removed when this spike was parked.
+2. **Check the session list, not the API.** `/api/versions` reporting `backend_mode` as
+   `external-herdr` does not mean it is using the external backend, and the data endpoints proxy
+   whatever sockets were passed on the command line regardless. The honest check is
+   `/api/sessions`: the listed session's `backend` must read `external-herdr`, and
+   `herdr_compatible` must be true.
+
+The clone and the compiled debug binary remain at `~/GitHub/herdr-webui`, so resuming is a rebuild
+at most, not a fresh setup.
 
 ## What this means
 
