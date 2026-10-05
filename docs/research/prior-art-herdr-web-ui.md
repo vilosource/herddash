@@ -7,6 +7,9 @@ this record is the evidence for answering it.
 Read this before writing herddash code. Three of the five differentiators the PRD claimed are
 weaker than they looked, and this project has already solved a problem the PRD listed as open.
 
+The companion record is [prior-art-alecuba16-herdr-webui.md](prior-art-alecuba16-herdr-webui.md),
+which takes a further differentiator. The combined scorecard is in that file and in PRD §3.
+
 ## What it is
 
 | | |

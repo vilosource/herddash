@@ -20,8 +20,8 @@ Status: **early.** Nothing is built yet.
 - [docs/prd.md](docs/prd.md) is the product definition. Its section 3 is the honest scorecard
   against existing projects, and most of it still needs narrowing to match.
 - [docs/research/](docs/research/) holds frozen notes on herdr's socket API, its multi-host
-  model, and an evaluation of the closest existing project. Read them before writing client
-  code.
+  model, and hands-on evaluations of the two closest existing projects. Read them before
+  writing client code.
 - [CONTRIBUTING.md](CONTRIBUTING.md) is the contract for working on this.
 
 ## Requirements

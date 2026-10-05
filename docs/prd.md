@@ -63,31 +63,41 @@ herdr already:
 There are also three unofficial Go socket clients. The most complete generates its types from
 `herdr api schema` and is a reusable approach even if the library itself is not adopted.
 
-The largest of them, devswha/herdr-web-ui, **has now been installed and run against a live herdr
-session.** The evaluation is
-[docs/research/prior-art-herdr-web-ui.md](research/prior-art-herdr-web-ui.md), and the local clone
-is at `~/GitHub/herdr-web-ui`. Read that record before writing any code here, because it narrows
-this product considerably.
+**The two largest have now been installed and run against a live herdr session**, rather than
+judged from their READMEs:
 
-The first draft of this PRD claimed five differentiators. Against the evidence, two and a half
-survive:
+- [prior-art-herdr-web-ui.md](research/prior-art-herdr-web-ui.md) for devswha's TypeScript client,
+  cloned at `~/GitHub/herdr-web-ui`.
+- [prior-art-alecuba16-herdr-webui.md](research/prior-art-alecuba16-herdr-webui.md) for
+  alecuba16's Rust project, cloned at `~/GitHub/herdr-webui`. It could only be assessed from
+  source and release artifacts: it requires herdr 0.9.0 and silently falls back to its own
+  embedded multiplexer below that, so it showed none of the live agents.
 
-| Claimed | Verdict |
-|---|---|
-| A daemon that works while detached | **Neutralised.** Its server holds its own herdr socket and subscribes to the same events. No attached terminal client is needed. |
-| Triage rather than remote control | **Largely neutralised.** It already ships a "Needs you" grouping. |
-| Persisted history | **Holds.** It has no database and keeps no status-transition history or timeline. |
-| Telling several subscriptions of one agent apart | **Holds, narrowly.** It reads several Claude config directories, but only to aggregate plan usage, and does not attribute a pane to an account. |
-| One static binary, no per-host runtime | **Holds.** It needs Bun and Node on every host. |
+Read both before writing code here. They narrow this product severely.
 
-So "a web interface for herdr" is comprehensively taken, and taken well. The honest remaining gap
-is **history, per-account attribution, and single-binary deployability** — a real product, but a
-much smaller one than the rest of this document describes, and arguably a complement to that
-project rather than a replacement for it.
+The first draft of this PRD claimed five differentiators. After both evaluations, **two survive**:
 
-**Sections 7 through 12 below still describe the larger product and have not yet been rewritten to
-match this finding.** Narrowing them, or deciding to contribute the gap upstream instead, is open
-question 1 in §11 and belongs in an ADR before milestone 1 starts.
+| Claimed | devswha | alecuba16 | Net |
+|---|---|---|---|
+| A daemon that works while detached | neutralised | neutralised | **gone** |
+| Triage rather than remote control | largely neutralised | holds | **weak** |
+| Persisted history | holds | holds | **holds** |
+| Per-account attribution | holds narrowly | holds | **holds** |
+| One static binary per host | holds | neutralised | **gone** |
+
+The two that survive are **a persisted history of what agents did**, and **attributing a pane to
+the account that owns it.** Neither project keeps any status-transition history, and neither labels
+a pane by subscription. Everything else is mature, working and in use elsewhere.
+
+Worth noting what one of them already has that this PRD defers: alecuba16's project ships token
+authentication with expiry, HTTPS with self-signed certificate generation, and service installers
+for both operating systems. Its licence is AGPL, so none of it can be copied into an MIT project.
+
+**That leaves a feature pair, not a product, and sections 7 through 12 below still describe the
+larger one.** The three honest options are to contribute the gap upstream to devswha's MIT
+project, to build herddash as a narrow history-and-attribution complement that runs beside an
+existing interface, or to build the full thing anyway and duplicate mature work. **This is open
+question 1 and belongs in an ADR before milestone 1 starts.**
 
 ## 4. Non-goals for v1
 
@@ -283,11 +293,11 @@ private source code.
 
 ## 11. Open questions
 
-1. **Given §3, what is herddash actually for?** devswha/herdr-web-ui has been evaluated and takes
-   most of the original thesis with it. The three gaps that remain are history, per-account
-   attribution and single-binary deployability. Decide in an ADR whether that is a product, a
-   narrowed version of this one, or a contribution upstream — then rewrite §7 through §12 to
-   match. alecuba16/herdr-webui has not been evaluated and may narrow it further.
+1. **Given §3, what is herddash actually for?** Both major existing projects have now been
+   evaluated and between them take three of the five original differentiators. What remains is a
+   persisted history of agent activity and per-account attribution of a pane. Decide in an ADR
+   whether that is a narrow complement built here, a contribution upstream to devswha's MIT
+   project, or grounds to stop — then rewrite §7 through §12 to match.
 2. **Verify one-request-per-connection against a real 0.9.3 binary.** It is empirically true on an
    earlier release and consistent with unchanged 0.9.3 source, but it determines the entire
    connection design, so it is the first thing milestone 1 proves.
