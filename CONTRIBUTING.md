@@ -3,14 +3,23 @@
 herddash follows a few conventions that aren't GitHub defaults. This document is the contract: it
 tells you what a maintainer expects, so a PR doesn't stall on something you had no way to guess.
 
-## Branch and PR — never `main`
+## Branch flow — never `main`, never `develop`
 
-All work lands on a topic branch and ships as a pull request. Nobody, maintainers included, commits
-or pushes directly to `main`.
+```
+feat/* ──▶ develop ──▶ main
+```
 
-- Branch from a fresh `main`. Use `feat/`, `fix/`, `docs/` or `chore/` prefixes.
-- Keep the PR scoped to one change. Small, reviewable diffs merge faster than large ones.
-- CI must be green before merge.
+`develop` is the integration branch and `main` is the released one. Nobody, maintainers included,
+commits directly to either.
+
+- Branch from a fresh `develop`. Use `feat/`, `fix/`, `docs/` or `chore/` prefixes.
+- Keep the branch scoped to one change. Small, reviewable diffs merge faster than large ones.
+- Merge into `develop` when the change is complete and CI is green.
+- `main` advances only from `develop`, by pull request. That is what cuts a release, since
+  release-please watches `main`.
+
+Why two branches rather than topic branches straight to `main`: `main` advancing is a release
+event, so work needs somewhere to accumulate and be seen together first.
 
 ## Conventional Commits
 
@@ -33,8 +42,8 @@ isn't a judgment on how you worked, it's just keeping the history clean.
 ## Decisions before code
 
 Architecture-level changes start as a written decision record, not as a PR. Numbered, immutable
-records live in [`docs/adr/`](docs/adr/) in Nygard format: Context, Decision, Consequences,
-Alternatives Considered.
+records live in [`docs/adr/`](docs/adr/README.md) in Nygard format: Context, Decision,
+Consequences, Alternatives Considered. That file is also the index and explains the statuses.
 
 Open one before the code if you're proposing something structural: a new dependency, a change to
 the herdr protocol handling, a change to the stored event schema, or a new network surface. Small

@@ -15,14 +15,19 @@ different question: **what is every agent doing right now, and which ones are wa
 - Sorted by who has been blocked longest, because that is the actionable number.
 - Click an agent for its state history and what it last said.
 
-Status: **early.** Nothing is built yet.
+Status: **early.** Nothing is built yet, and what this project should be is an open decision:
+two browser interfaces for herdr already exist, and evaluating them took three of the five
+differentiators this one claimed. See [ADR-0001](docs/adr/0001-what-herddash-is.md).
 
 - [docs/prd.md](docs/prd.md) is the product definition. Its section 3 is the honest scorecard
   against existing projects, and most of it still needs narrowing to match.
 - [docs/research/](docs/research/) holds frozen notes on herdr's socket API, its multi-host
   model, and hands-on evaluations of the two closest existing projects. Read them before
   writing client code.
-- [CONTRIBUTING.md](CONTRIBUTING.md) is the contract for working on this.
+- [docs/adr/](docs/adr/README.md) holds the decision records. ADR-0001 is open and blocks the
+  build.
+- [CONTRIBUTING.md](CONTRIBUTING.md) is the contract for working on this, and
+  [CLAUDE.md](CLAUDE.md) is the orientation for an agent session.
 
 ## Requirements
 

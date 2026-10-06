@@ -17,3 +17,13 @@ go.work.sum
 # Editor / OS
 .DS_Store
 *.swp
+
+# vfkb per-project knowledge base. entries.jsonl is the committed record if this
+# project adopts one; everything below is per-session scratch and rebuildable, so
+# it never lands in a public repository. Pattern copied from the vfkb repo itself.
+.vfkb/index-meta.json
+.vfkb/.sessions/
+.vfkb/.signals/
+.vfkb/.journal/
+.vfkb/.lock
+.vfkb/.write-probe-*
