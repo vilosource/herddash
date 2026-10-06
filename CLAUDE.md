@@ -74,6 +74,43 @@ On that last distinction generally: the socket API record has a **Provenance** s
 what was confirmed against the running server from what was taken from herdr's published
 documentation and marked UNVERIFIED. Read it before a claim from it decides a design.
 
+## Releases, and the setting that is not in this repository
+
+Releases are release-please's job. It watches `main`, maintains a standing release pull request,
+and on merge tags the version and cuts the GitHub release. It never publishes artifacts; that would
+be a separate workflow keyed off the tag, and none exists yet.
+
+**Two things about it are not obvious from the workflow file.**
+
+First, the job declaring `pull-requests: write` is **not sufficient.** There is a separate
+repository setting, *Allow GitHub Actions to create and approve pull requests*, which is off by
+default. Without it release-please does all its work, pushes its release branch, and then fails on
+the last step with:
+
+```
+release-please failed: GitHub Actions is not permitted to create or approve pull requests.
+```
+
+That happened here on the first two runs. It is fixed, by setting
+`can_approve_pull_request_reviews` to true on `repos/vilosource/herddash/actions/permissions/workflow`.
+If release-please starts failing that way again, check that setting before the workflow.
+
+Second, **release-please targets the repository's default branch**, not the branch that triggered
+the run. When this repository was created, `develop` was briefly the default because it was pushed
+first, so an early run built a release branch against `develop`. That stray branch was deleted. If
+you ever see a `release-please--branches--develop--*` branch, the default branch is wrong.
+
+Third, **`docs` commits do trigger a release here**, because `docs` is configured visible in
+`changelog-sections` rather than hidden. Only `chore`, `ci`, `test` and `refactor` are hidden. The
+first successful run duly proposed a release containing nothing but documentation.
+
+And it proposed **1.0.0**, for a repository with no code. release-please defaults a first release
+to 1.0.0 when it finds no previous release, and a manifest of `0.0.0` with no matching tag reads as
+no previous release. `bump-minor-pre-major` does not help, because that governs how a breaking
+change behaves while already pre-1.0. The config now pins `initial-version` to `0.1.0` for the
+package. **Check the version a release pull request proposes before merging it** — the first one
+is the only chance to get it right, and a published 1.0.0 cannot be withdrawn.
+
 ## Build and test
 
 Requires Go 1.25 or newer. There is no code yet, so these are the intended commands:

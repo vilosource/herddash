@@ -43,7 +43,8 @@
   ],
   "packages": {
     ".": {
-      "package-name": "herddash"
+      "package-name": "herddash",
+      "initial-version": "0.1.0"
     }
   },
   "include-component-in-tag": false
