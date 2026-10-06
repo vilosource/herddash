@@ -4,6 +4,20 @@
 record. It exists because the obvious reading of the 0.9.0 release notes is wrong in a way that
 would have shaped herddash's architecture incorrectly.
 
+## Provenance
+
+**Everything in this file is UNVERIFIED by direct test.** It comes from a research pass over
+herdr's published 0.9.3 documentation and its v0.9.3 source, because multi-host support postdates
+the 0.8.2 server on this machine and there is no second host configured to try it against.
+
+Two points were checked first-hand and are consistent with it: no machine or `machine_id` field
+appears anywhere in a live snapshot from the local server, and the local `herdr` binary offers no
+`machine` subcommand at 0.8.2.
+
+The architectural conclusion drawn at the end is safe under either reading. If multi-host turns out
+to be more capable than described, one daemon per host still works and simply does more work than
+strictly needed.
+
 ## The claim, and the correction
 
 herdr 0.9.0 announced managing local and saved SSH machines from one window, with a combined agent

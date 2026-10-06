@@ -60,11 +60,19 @@ to the stored event schema, or a new network surface.
   already carries a plugin that matters. Run things from their own directory instead.
 - **Reading pane output is not passive.** An unbounded `recent` read drives the agent's own scroll
   interface and fails outright on a working or blocked pane. Read `visible`, or `recent` bounded by
-  the pane's `viewport_rows`.
+  the pane's `viewport_rows`. *Sourced from herdr's documentation, not tested here: testing it
+  means experimenting on a live agent pane. Complying costs nothing, so comply.*
 - **Never call `pane.focus` or `agent.focus`.** They mutate herdr's seen state and would silently
-  clear a completion the operator has not looked at. Reads do not.
+  clear a completion the operator has not looked at. Reads do not. *Same provenance, same
+  asymmetry: if the claim is wrong, not calling focus costs nothing.*
 - **There is no global agent-status subscription.** Status must be subscribed per pane, with the
-  pane set tracked from the global pane lifecycle events.
+  pane set tracked from the global pane lifecycle events. *Confirmed first-hand against the
+  installed binary's own schema: 27 subscription variants, exactly three of which require a pane
+  id, and agent status is one of the three.*
+
+On that last distinction generally: the socket API record has a **Provenance** section separating
+what was confirmed against the running server from what was taken from herdr's published
+documentation and marked UNVERIFIED. Read it before a claim from it decides a design.
 
 ## Build and test
 

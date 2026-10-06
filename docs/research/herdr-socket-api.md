@@ -7,6 +7,51 @@ built from. Where it is wrong, fix the code and amend this file in the same chan
 0.9.3 is a two-line hotfix over 0.9.2 affecting terminal escape-sequence key handling, with no API
 changes. Everything here applies equally to 0.9.2.
 
+## Provenance of these claims
+
+Not all of this is first-hand, and the difference matters because some of it is load-bearing.
+Treat anything labelled UNVERIFIED as a thing to confirm before it decides a design, not as
+established fact.
+
+**Confirmed directly against the installed herdr 0.8.2 on this machine:**
+
+- The socket path, its `0600` mode, and the sibling client socket.
+- One request per connection. A second request on the same socket raised a broken pipe. See the
+  section below.
+- The request and response envelopes, and the `ping` payload including `version`, `protocol` and
+  `capabilities`.
+- The subscription set: exactly 27 variants in the bundled schema's `Subscription` request type, of
+  which exactly three require a `pane_id` — `pane.output_matched`,
+  `pane.agent_status_changed` and `pane.scroll_changed`. **This is the basis of the
+  no-global-agent-status finding and it is first-hand.**
+- The snapshot method, its result shape, and the agent and pane record fields, read from a live
+  snapshot.
+- The `AgentStatus` and other enums, read from `herdr api schema --json`.
+
+**UNVERIFIED, sourced from a research pass over herdr's published 0.9.3 documentation and its
+v0.9.3 source** (`herdr.dev/llms-full.txt` and the `herdrdev/herdr` repository at tag `v0.9.3`),
+not reproduced by hand here:
+
+- That reading pane output is not always passive, that an unbounded `recent` read drives a
+  recognised agent's own scroll interface, and that such a read returns `agent_not_idle` for a
+  working, blocked or unknown agent. **This was deliberately not tested, because the only way to
+  test it is against a live agent pane belonging to real work.** It is treated as true in the
+  design because the failure mode if it is true is severe and the cost of complying is nil.
+- The `events_lost` error, its shape and its recovery procedure. A 0.9.2 feature, so not testable
+  against 0.8.2.
+- The 0.9.0 change from replaying retained history to delivering live events only, and therefore
+  the subscribe-before-snapshot ordering. Not testable against 0.8.2.
+- That a single bad `pane_id` rejects an entire subscribe request and closes the connection.
+- The two differing push-envelope naming conventions, underscored for lifecycle events and dotted
+  for the three pane-scoped streams.
+- The 0.9.3 seen-state semantics, including that reads do not mark a pane seen while focus calls
+  do. **The hard rule never to call focus rests on this.** The underlying risk is asymmetric: if
+  the claim is wrong, not calling focus costs nothing.
+- The absence of any concurrent-connection cap.
+
+**Re-dump the schema from a real 0.9.3 binary before freezing Go types**, and promote the items
+above from UNVERIFIED as they are confirmed.
+
 ## Socket discovery
 
 ```
