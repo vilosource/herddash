@@ -89,6 +89,14 @@ No npm, no build step for assets. Web assets are embedded in the binary.
 
 ## Repository state
 
-`main` and `develop` are level. Four documentation commits, no code. The remote is
-`git@github.com:vilosource/herddash.git`, public, MIT. This repository's git identity is pinned
-locally to the GitHub noreply address rather than the machine's global work email.
+**There is no code yet** — documentation and project setup only. `main` and `develop` are kept
+level; if they are not, a `develop` into `main` pull request is open or overdue.
+
+The remote is `git@github.com:vilosource/herddash.git`, public, MIT. This repository's git identity
+is **pinned locally** to the GitHub noreply address rather than the machine's global work email, so
+commits here do not leak it. Check with `git config --local user.email` before the first commit of
+a session.
+
+Deliberately unmanaged: nothing in this repository installs or configures anything on a machine.
+Deployment to the operator's three machines is the provisioning repository's job, and that is a
+later concern than anything blocking here.
