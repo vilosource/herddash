@@ -18,5 +18,5 @@ a new ADR that supersedes it and say so in both.
 
 | ADR | Title | Status |
 |---|---|---|
-| [0001](0001-what-herddash-is.md) | What herddash is, after evaluating the prior art | **Proposed** |
-| [0002](0002-adopt-bmad-method.md) | Adopt the BMAD Method, and where its records live | **Proposed** |
+| [0001](0001-what-herddash-is.md) | What herddash is, after evaluating the prior art | Accepted, option B |
+| [0002](0002-adopt-bmad-method.md) | Adopt the BMAD Method, and where its records live | Accepted |
