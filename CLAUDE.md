@@ -32,6 +32,16 @@ The ADR names three options and recommends the second, a narrow complement. **Ea
 different build, so decide it before writing code.** Accepting it also resolves three of the PRD's
 open questions, which the ADR lists.
 
+## Working method
+
+Planning and delivery run on the [BMAD Method](https://bmadcode.com/), installed into this
+repository as the 29 `bmad-*` skills under `.claude/skills/`. Start with `/bmad-help`; it reads
+`docs/` and recommends the next step. How BMAD's documents relate to the PRD and the ADRs, and why
+everything it produces lands under `docs/planning/` and `docs/implementation/` rather than its
+default folder, is [ADR-0002](docs/adr/0002-adopt-bmad-method.md). The order is fixed: decide
+ADR-0001, then rework the PRD with `/bmad-prd`, then architecture, epics, sprint planning. The
+skills need `uv` on the machine; building herddash does not.
+
 ## Non-negotiables
 
 **No AI attribution.** Commits and pull request descriptions must not carry `Co-Authored-By`
