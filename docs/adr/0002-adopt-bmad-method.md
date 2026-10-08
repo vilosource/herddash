@@ -1,6 +1,6 @@
 # ADR-0002: Adopt the BMAD Method, and where its records live
 
-**Status: Proposed.** Written 2026-10-07. Accepting it changes no code, only how planning and
+**Status: Accepted.** Written 2026-10-07, accepted 2026-10-08. It changes no code, only how planning and
 delivery documents are produced and where they are kept.
 
 ## Context

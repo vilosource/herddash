@@ -5,12 +5,16 @@ The question it answers: what is every agent doing, and which ones are waiting o
 
 **Nothing is built yet. Do not start writing code — see "What blocks the build" below.**
 
+herddash is a **headless recorder**, not a dashboard in the full sense: it persists every agent
+status transition with per-account attribution and serves a minimal page and a read-only API
+beside the existing browser interfaces. That is ADR-0001, accepted 2026-10-08.
+
 ## Read these first, in this order
 
 | Document | Why |
 |---|---|
-| [docs/adr/0001-what-herddash-is.md](docs/adr/0001-what-herddash-is.md) | **Open and blocking.** What this project even is, after the prior art took three of its five differentiators. |
-| [docs/prd.md](docs/prd.md) | The product definition. Section 3 is the honest scorecard. Sections 7 to 12 still describe a larger product than survives and need rewriting once the ADR lands. |
+| [docs/adr/0001-what-herddash-is.md](docs/adr/0001-what-herddash-is.md) | **Accepted, option B.** What this project is, after the prior art took three of its five differentiators. Everything else is scoped by it. |
+| [docs/prd.md](docs/prd.md) | The product definition, **being reworked** against ADR-0001 through `/bmad-prd`. Section 3 is the honest scorecard. Sections 7 to 12 still describe the larger product that ADR-0001 rejected; do not design from them. |
 | [docs/research/herdr-on-this-machine.md](docs/research/herdr-on-this-machine.md) | The setup this project grew out of, none of which is visible from this repository. |
 | [docs/research/herdr-socket-api.md](docs/research/herdr-socket-api.md) | How to talk to herdr. Read before any client code; it contains traps that look like free choices. |
 | [docs/research/herdr-multi-host.md](docs/research/herdr-multi-host.md) | Why several machines means several daemons. |
@@ -23,14 +27,16 @@ them to disagree.
 
 ## What blocks the build
 
-**ADR-0001 is Proposed, not Accepted.** Two browser interfaces for herdr already exist and were
-evaluated hands-on. Between them they took three of the five differentiators this project claimed,
-including its primary thesis. What survives is a persisted history of agent activity and
-attributing a pane to the account that owns it — a feature pair, not a product.
+**The PRD does not yet describe the product ADR-0001 accepted.** Two browser interfaces for herdr
+already exist and were evaluated hands-on. Between them they took three of the five differentiators
+this project claimed, including its primary thesis. What survives is a persisted history of agent
+activity and attributing a pane to the account that owns it, and ADR-0001 settled that herddash is
+a narrow complement built around exactly that pair.
 
-The ADR names three options and recommends the second, a narrow complement. **Each implies a
-different build, so decide it before writing code.** Accepting it also resolves three of the PRD's
-open questions, which the ADR lists.
+The PRD's sections 7 to 12 predate that decision. Until `/bmad-prd` has reworked them, followed by
+architecture, epics and sprint planning per ADR-0002, there is nothing agreed to build from.
+ADR-0001's acceptance also resolved PRD open questions 1, 4 and 5 and made question 3, backfill
+from the existing plugin's log, important rather than optional.
 
 ## Working method
 
