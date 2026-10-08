@@ -1,8 +1,8 @@
 # ADR-0001: What herddash is, after evaluating the prior art
 
-**Status: Proposed.** Written 2026-10-05. This record exists to be accepted or overturned
-deliberately, not to be inherited by default. Nothing should be built until it is decided, because
-every option below implies a different build.
+**Status: Accepted, option B.** Written 2026-10-05, decided 2026-10-08. This record existed to be
+accepted or overturned deliberately, not inherited by default, because every option below implies
+a different build.
 
 ## Context
 
@@ -51,7 +51,11 @@ question resolved first.
 
 ## Decision
 
-**Not yet made.** The recommendation is option B below.
+**Option B, the narrow complement, accepted 2026-10-08.** herddash is a headless recorder: it
+subscribes to herdr, persists every agent status transition with per-account attribution under a
+bounded retention policy, and exposes a deliberately minimal page of its own plus a read-only API.
+It runs beside whichever browser interface the operator prefers and does not replace one. The
+options are kept below as written, since the choice was made against them.
 
 ## Options
 
