@@ -1,0 +1,507 @@
+---
+title: herddash — Product Requirements
+status: draft
+created: 2026-10-08
+updated: 2026-10-14
+supersedes: docs/prd.md (draft, 2026-10-05)
+governed_by: [docs/adr/0001-what-herddash-is.md, docs/adr/0003-the-board-is-the-product.md]
+---
+
+# PRD: herddash
+
+## 0. Document Purpose
+
+This is the product definition for herddash, written for the operator who builds and uses it, and
+for the architecture, epic and story work that BMAD derives from it. It replaces the 2026-10-05
+draft, whose sections 7 to 12 described a product ADR-0001 rejected. Vocabulary is fixed in §3 and
+used exactly everywhere else. Features are grouped in §4 with globally numbered requirements.
+Inferences made while drafting were confirmed or revised by the operator; §9 records them.
+
+Protocol detail, stack choices, rejected alternatives and the reasoning behind hard constraints
+live in `addendum.md` beside this file and in `docs/research/`. This document says what herddash
+does. Those say how and why.
+
+## 1. Vision
+
+An operator running many AI coding agents in herdr has no single place to see them. herdr knows
+every agent's state and tells the operator through desktop toasts, which are suppressed for the
+active tab, silent when no terminal client is attached, capped at eight, and gone in eight
+seconds. The operator ends up herding agents by cycling through panes to find the one that
+stopped.
+
+herddash is a **notification center for herdr agents**: one Board, open in a browser window beside
+the terminal all day, with one Box per agent. A glance says which agents are working, which have
+finished and are waiting for the next prompt, and which are blocked on a question, and for how
+long. The longest-waiting agent is at the top. Nothing else is on the page. There is no terminal,
+no chat, no pane control, because herdr already does those and the operator is happy with it.
+
+Underneath, herddash is a recorder. It holds its own connection to herdr, records every status
+transition with the Profile that owns the agent, and keeps that history under bounded retention.
+The Board is believable because of that record: "waiting 40 minutes" is a fact, not an estimate,
+and "which profile, and so which subscription, is this" is resolved rather than guessed. The same record is exposed
+read-only, so any future surface shows the same truth the Board does.
+
+## 2. Target User
+
+### 2.1 Jobs To Be Done
+
+- **Functional:** know, without looking at each pane, which agents are waiting on me right now and
+  which has waited longest, so I prompt the right one next.
+- **Functional:** know which of several Claude Code subscriptions, and which other agent programs,
+  each running agent belongs to, because the same binary runs under several profiles.
+- **Emotional:** stop the low-grade anxiety of "something finished and I missed it" that the toast
+  channel creates by being transient and lossy.
+- **Contextual:** keep working in herdr's own interface. herddash is glanced at, never operated.
+- **Builder:** dogfood it on three machines, then publish it for other herdr operators.
+
+### 2.2 Non-Users (v1)
+
+- Anyone who wants to drive agents from a browser. devswha/herdr-web-ui does that.
+- Teams. v1 is one operator, one host, one browser, on loopback.
+- Anyone on herdr older than 0.9.2. herddash targets 0.9.2 or newer and is tested against 0.8.2
+  only because that is what the operator's machine runs today.
+
+### 2.3 Key User Journeys
+
+- **UJ-1. Jason finds the agent that has been waiting longest.** Ten agents across three
+  workspaces. Jason has been heads-down in one pane for twenty minutes. He glances at the Board
+  in the other window. The top Box is red: `cldw · claude · ~/GitHub/herddash · Needs you · 14m`.
+  Below it two amber Boxes finished a few minutes ago. The rest are calm. He switches to that pane
+  in herdr, answers the question, and the Box turns to Working within a second without him
+  touching the Board.
+  **Edge case:** herdr restarts. The Board shows a single thin "disconnected from herdr, last
+  update 12:04:31" strip; the Boxes stay but dim. When herdr is back the strip disappears and
+  Boxes refresh from a fresh snapshot.
+
+- **UJ-2. Jason tells two identical `claude` panes apart.** Two Boxes both say `claude`. One says
+  `cldp`, the other `cldw`. He knows which subscription's quota he is spending and which one is
+  the permission-prompting one, without opening either pane.
+
+- **UJ-3. Jason wants to know how long an agent has really been sitting there.** A Box says
+  `Finished · 2h 10m`. That number came from a recorded transition at 09:54, not from when the page
+  was loaded or when herdr was restarted. He trusts it.
+
+- **UJ-4. A second surface, later.** Jason's phone, or a status bar widget, or a terminal one-liner
+  asks the daemon for the current state and gets the same sorted list the Board renders, with the
+  same Profiles and the same waiting times.
+  *(Deferred beyond v1; it exists to shape the API, not to be built now.)*
+
+## 3. Glossary
+
+- **herdr** — the terminal workspace manager herddash observes. Runs one **herdr server** per host,
+  reachable over a Unix socket.
+- **Agent** — a herdr pane that herdr has detected as running an AI coding agent program. herdr
+  reports its **Agent Program** (for example `claude`, `codex`) and its **Status**.
+- **Status** — herdr's own classification of an Agent: `working`, `blocked`, `done`, `idle` or
+  `unknown`. herddash records Status verbatim and never redefines it.
+- **Transition** — one change of an Agent's Status, with the time herddash observed it, the
+  herdr sequence information that orders it, and the Agent's Profile at that moment.
+- **Profile** — the launcher identity an Agent runs under, as a short human name such as `cldp`
+  or `cldw`. For Claude Code it is resolved from the pane process's `CLAUDE_CONFIG_DIR` through
+  the **Profile Map**, a configured mapping from process environment values to Profile names. For
+  other Agent Programs it defaults to the Agent Program name. Profiles usually correspond to
+  subscriptions, which is why the operator cares; herdr itself has no notion of either.
+- **Box** — the Board's representation of one Agent. Its heading is the Profile and Agent Program;
+  its body is the project directory, Attention Class, Waiting Time, and one Context Line.
+- **Pane Title** — the one-line label an Agent sets on its own pane, reported by herdr as the
+  pane's terminal title. Set by the Agent Program, not by herdr and not by the operator; Claude
+  Code sets it to its short session name, and to a placeholder before one exists.
+- **Context Line** — the single line of information inside a Box beneath the status. The Daemon
+  derives it per Agent Program: from the Pane Title when that program provides a meaningful one,
+  otherwise from one global default. Every surface receives the Context Line from the API; none
+  computes its own.
+- **Attention Class** — the Board's grouping of Status for display: **Needs you** (`blocked`),
+  **Finished** (`done`, and `idle` reached from `working` or `done`), **Working** (`working`), and
+  **Unknown** (`unknown`, or no Status yet). A display concept; Status is the recorded fact.
+- **Waiting Time** — time since the Transition that put an Agent into its current Status.
+- **Board** — the single page herddash serves: every Box, sorted by Attention Class then Waiting
+  Time, live.
+- **Daemon** — the herddash process: herdr client, recorder, and HTTP server in one binary. It
+  runs on the Host it observes, as the same user as the Agents, because it gathers facts that
+  exist only there: the herdr socket and the Agents' process environments. It gathers what the
+  Board needs to answer its question, and nothing because it is merely available.
+- **Host** — the machine a herdr server runs on. Every id herddash stores is namespaced by Host.
+- **Retention** — the bounded policy under which recorded Transitions are kept and then deleted.
+- **API** — the Daemon's read-only HTTP surface: current state, history, and an event stream.
+
+## 4. Features
+
+### 4.1 The Board
+
+**Description:** The Board is one HTML page served by the Daemon on loopback. It shows every
+Agent on the Host as a Box, sorted so the Agent that has needed the operator longest is first:
+Needs you before Finished before Working before Unknown, and within a class by Waiting Time,
+longest first. Boxes in Needs you are visually dominant; Finished is clearly marked; Working and
+Unknown are calm. The Board repaints a Box within a second of the Daemon recording a Transition,
+with no page refresh. It is readable from across a desk and carries nothing that is not in a Box
+or the connection strip. Realizes UJ-1, UJ-2, UJ-3.
+
+Boxes are laid out as a responsive grid of cards grouped by workspace, with the workspace label
+as a thin header, since herdr already provides that hierarchy; grouping never overrides the sort
+within the page's top section, which is flat and Needs-you first.
+
+The Context Line is derived by the Daemon, per Agent Program, with one global default. Measured
+on the operator's machine on 2026-10-13, Claude Code Pane Titles run 7 to 45 characters and read
+as session names, not prompt text. The Pane Title comes from the snapshot and status events, so
+no pane output is read to obtain it.
+
+**Functional Requirements:**
+
+#### FR-1: One Box per Agent
+
+The Board shows exactly one Box for every Agent herdr currently reports on the Host, and no Box
+for panes that are not Agents. Realizes UJ-1.
+
+**Consequences (testable):**
+- An Agent appearing in herdr produces a Box without a page reload.
+- A pane closing removes its Box without a page reload.
+- A pane that herdr later detects as an Agent gains a Box at that moment.
+
+#### FR-2: Box contents
+
+Each Box shows the Profile and Agent Program as its heading, and the project directory
+(shortened), the Attention Class, the Waiting Time and the Context Line as its body. Realizes
+UJ-2, UJ-3.
+
+**Consequences (testable):**
+- Two Agents with the same Agent Program under different Profiles show different Profile labels.
+- An Agent whose Profile cannot be resolved shows `unresolved`, never a blank or a guess.
+- Waiting Time is derived from the recorded Transition, not from page load or Daemon start.
+- The Context Line occupies exactly one line: truncated with an ellipsis at the Box width, full
+  text on hover, never wrapped, so no title can change a Box's height or the grid.
+- The Context Line's space is reserved even when empty, so Boxes stay uniform.
+
+#### FR-2a: Context Line derivation
+
+The Daemon derives each Agent's Context Line through a per-Agent-Program rule with a global
+default, so a harness that provides no usable Pane Title still yields a defined result.
+
+**Consequences (testable):**
+- A Claude Code Agent whose Pane Title is a session name shows that name.
+- A Claude Code Agent whose Pane Title is the harness placeholder (`Claude Code`) or empty shows
+  the global default, not the placeholder.
+- An Agent Program with no specific rule shows the global default.
+- The global default is an empty Context Line, rather than, say, the project directory again or
+  the foreground command; nothing on the Board is duplicated or guessed.
+- The rule set is extensible per Agent Program without changing the Board or the API, and is
+  documented so a new harness can be added when its title behaviour is known.
+
+#### FR-3: Sort and emphasis
+
+Boxes are ordered Needs you, Finished, Working, Unknown, and within each class by Waiting Time
+descending. Needs you is visually dominant. Realizes UJ-1.
+
+**Consequences (testable):**
+- A Transition into `blocked` moves that Box to the top section immediately.
+- A Transition into `working` moves that Box out of the top sections immediately.
+- Order within a class changes as Waiting Times grow, without reload.
+
+#### FR-4: Live without reload
+
+The Board reflects a recorded Transition within one second under normal conditions, through the
+API's event stream, and recovers on its own when the stream drops.
+
+**Consequences (testable):**
+- Closing and reopening the Daemon while the Board is open results in the Board reconnecting and
+  refreshing without user action.
+- No polling loop in the page; updates are pushed.
+
+#### FR-5: Connection truth
+
+The Board shows whether the Daemon is currently connected to herdr and when it last received an
+authoritative snapshot. Boxes from a stale state are visibly dimmed, never hidden. Realizes UJ-1
+edge case.
+
+**Consequences (testable):**
+- Stopping herdr produces the disconnected strip within the Daemon's reconnect interval.
+- Restarting herdr clears the strip and refreshes every Box from a new snapshot.
+
+**Out of Scope for the Board:**
+- Any action on an Agent: no focus, no send, no kill, no open-in-terminal.
+- Pane output, excerpts, or scrollback.
+- Per-Agent detail pages. `[NON-GOAL for MVP: a history timeline per Agent is a natural second
+  page and is deferred; see §6.2.]`
+
+### 4.2 Recording
+
+**Description:** The Daemon holds its own subscriptions to the herdr server and records every
+Transition for every Agent on the Host, whether or not any terminal client is attached, whether
+or not the Board is open. The record is the source of Waiting Time and of everything the API
+serves. It survives Daemon restarts and herdr restarts and is kept under Retention. Realizes UJ-3.
+
+**Functional Requirements:**
+
+#### FR-6: Record every Transition
+
+The Daemon records each Transition with: Host, pane id, Agent Program, Profile at the time,
+previous Status, new Status, herdr's ordering information, and the observation time.
+
+**Consequences (testable):**
+- A Status change observed by herdr while no browser and no terminal client is attached is in the
+  record.
+- Two Transitions on one Agent are ordered consistently with herdr's own sequence.
+- The record distinguishes a Transition observed live from one inferred by comparing snapshots.
+
+#### FR-7: Never lose a Transition silently
+
+When the Daemon cannot guarantee it saw every event, it resynchronises from an authoritative
+snapshot and records the resynchronisation. A gap is a recorded fact, not a silent omission.
+
+**Consequences (testable):**
+- After herdr signals that the Daemon fell behind, the record contains a resync marker and a
+  Status for every Agent consistent with the subsequent snapshot.
+- Starting the Daemon while herdr is not running results in connection on herdr's return and a
+  snapshot-derived Status for every Agent, with each marked as snapshot-derived.
+
+#### FR-8: Survive restarts, indefinitely
+
+The Daemon reconnects to herdr forever, with backoff, and treats herdr's absence as normal.
+Recorded history is intact across Daemon and herdr restarts.
+
+**Consequences (testable):**
+- Daemon restarted: Waiting Times on the Board after restart equal those before, for Agents whose
+  Status did not change.
+- herdr restarted: no Transition is recorded for an Agent whose Status is the same before and
+  after, other than the resync marker.
+
+#### FR-9: Bounded Retention
+
+Transitions older than the configured Retention are deleted. Retention is finite by default.
+
+**Consequences (testable):**
+- With Retention set to N days, no Transition older than N days remains after the next sweep.
+- Default Retention is 90 days.
+
+### 4.3 Attribution
+
+**Description:** Several launchers exec the same `claude` binary, so herdr reports every such
+pane as Agent Program `claude`. herddash resolves which Profile each Agent runs under through a
+**Profile rule** registered for that Agent Program. Each rule uses whatever signal its harness
+actually exposes; the only rule known today is Claude Code's, which reads `CLAUDE_CONFIG_DIR`
+from the pane's foreground process environment and maps it through the Profile Map. The existing
+herdr plugin on the operator's machine is the reference implementation of that rule. Resolution
+happens on the Host: the Daemon obtains the foreground process from herdr and reads its
+environment from the operating system, which only works locally and as the same user. Realizes
+UJ-2.
+
+**Functional Requirements:**
+
+#### FR-10: Resolve Profile per Agent
+
+For each Agent, the Daemon resolves a Profile through the Profile rule registered for its Agent
+Program, re-resolving when the pane's foreground process changes. A program with no rule resolves
+to its program name.
+
+**Consequences (testable):**
+- A pane launched with `CLAUDE_CONFIG_DIR=~/.claude-cldw` under a map entry naming it `cldw` is
+  recorded and shown as Profile `cldw`.
+- A Claude Code pane with `CLAUDE_CONFIG_DIR` unset resolves to the Profile Map's absent-case
+  entry for Claude Code, since an unset variable means the stock `~/.claude` profile and is the
+  common case, not an error. The shipped configuration includes that entry, so a fresh install
+  never shows a stock pane as `unresolved`.
+- A pane whose variable is set but matches no entry is recorded as `unresolved` and shown so.
+- An Agent Program with no entries in the Profile Map resolves to its Agent Program name, whether
+  its distinguishing variable is unknown or merely absent. This holds for Codex and Antigravity
+  today (confirmed by the operator, 2026-10-13).
+- When Profile equals Agent Program, the Box heading shows the name once, never `codex · codex`.
+
+#### FR-11: Profile rules are selected and parameterised in configuration
+
+The Profile Map lives in the Daemon's configuration file, is documented, and can be changed
+without rebuilding. It selects a rule per Agent Program and supplies that rule's parameters. A
+harness whose signal fits an existing rule type, such as the environment-variable rule Claude Code
+uses, is added by configuration alone. A harness with a new kind of signal needs a new rule,
+which touches neither the Board nor the API. Claude Code's rule is the environment-variable rule
+on `CLAUDE_CONFIG_DIR` with a named absent case; Codex and Antigravity rules are unknown until one
+pane of each has been observed, and until then they resolve to their program name.
+
+**Consequences (testable):**
+- Editing the map and restarting the Daemon changes the Profile shown for affected Agents.
+- Transitions recorded before the edit keep the Profile they were recorded with.
+- Adding a rule for a new Agent Program changes no Board or API code.
+
+### 4.4 Read-only API and event stream
+
+**Description:** Everything the Board shows comes from the API. The API is read-only, served on
+the same loopback listener, and designed for the Board first and for future surfaces second.
+Realizes UJ-4.
+
+**Functional Requirements:**
+
+#### FR-12: Current state
+
+A single request returns every Agent on the Host with Profile, Agent Program, project directory,
+Status, Attention Class, Waiting Time, Pane Title, Context Line and Host, already sorted as the
+Board sorts.
+
+**Consequences (testable):**
+- The Board renders from this response alone on first load.
+- The response includes connection truth: connected or not, and last snapshot time.
+
+#### FR-13: Event stream
+
+A long-lived server-sent events endpoint pushes each recorded Transition, each resync, and each
+connection change as it happens.
+
+**Consequences (testable):**
+- A client holding the stream receives a Transition within one second of its recording.
+- The stream carries enough to update one Box without a second request.
+
+#### FR-14: History per Agent
+
+A request for one pane returns its recorded Transitions within Retention, in order.
+
+**Consequences (testable):**
+- The response for an Agent contains the Transition that defines its current Waiting Time.
+- No filtering or aggregation beyond this in v1; UJ-4 surfaces do not need it yet.
+
+**Feature-specific NFRs:**
+- No endpoint mutates anything. There are no POST, PUT or DELETE routes.
+- The API never proxies a herdr call on demand; it serves the Daemon's own record and cache.
+
+### 4.5 Running it
+
+**Description:** One static binary per platform, one Daemon per Host, started by the operator or by
+a user-level service manager, configured by one file. Realizes the builder job in §2.1.
+
+**Functional Requirements:**
+
+#### FR-15: One binary, one config file
+
+The Daemon ships as a single binary with embedded web assets and reads one configuration file:
+herdr socket location (defaulting to herdr's own discovery), bind address (default loopback),
+database path, Retention, and the Profile Map.
+
+**Consequences (testable):**
+- A fresh host with herdr and the binary, and a config file with only the Profile Map, runs
+  and serves the Board.
+- No runtime, package manager or build step is required on the Host.
+
+#### FR-16: Version gate
+
+On connecting, the Daemon checks herdr's reported version and refuses to record from a server
+older than the supported minimum, saying so on the Board and in its log.
+
+**Consequences (testable):**
+- Against a server below the minimum, the Board shows an unsupported-version strip and records
+  nothing.
+- The gate is advisory against 0.8.2 during dogfooding on the operator's machine, controlled by
+  a config flag, so the Board can be used before that machine is upgraded. The flag is off by
+  default, and while it is on the Board shows the unsupported-version strip as a warning.
+
+#### FR-17: Loopback only, owner only
+
+The Daemon binds to loopback by default. Its database and log are created owner-only. The browser
+never reaches the herdr socket.
+
+**Consequences (testable):**
+- Default configuration is unreachable from another machine on the network.
+- Database file mode is `0600`.
+- Setting a non-loopback bind address without authentication configured is refused at startup.
+
+## 5. Non-Goals (Explicit)
+
+- **Not a herdr client.** No terminal, no chat, no sending prompts or keys, no creating, splitting,
+  focusing or killing panes. devswha/herdr-web-ui exists for that and is MIT.
+- **Never calls focus.** `pane.focus` and `agent.focus` mutate herdr's seen state and would clear a
+  completion the operator has not looked at. This is a correctness rule, not a scope choice.
+- **Never reads pane output in v1.** No excerpts, no scrollback, no activity capture. This removes
+  the one herdr read path that is not passive and the one data flow that captures secrets.
+- **No authentication in v1, therefore no network exposure.** Loopback only. Exposure gets its own
+  ADR before any code.
+- **No cross-Host aggregation in v1.** One Daemon per Host, for two independent reasons: herdr's
+  socket is local, and Profile resolution reads process environments that exist only on the Host.
+  Ids are Host-namespaced from the first commit so aggregation is additive later, by reading
+  several Daemons' APIs, never several sockets.
+- **Does not replace herdr's toasts.** They stay on until the Board has earned trust.
+- **Not an orchestrator, scheduler, cost tracker or usage dashboard.**
+- **Not installed as a herdr plugin.** It runs from its own directory with its own socket
+  connection.
+
+## 6. MVP Scope
+
+### 6.1 In Scope
+
+- The Board: FR-1 to FR-5.
+- Recording: FR-6 to FR-9.
+- Attribution: FR-10, FR-11.
+- API: FR-12, FR-13, FR-14.
+- Running it: FR-15, FR-16, FR-17.
+- One Host, one operator, loopback, herdr 0.9.2 or newer with the dogfooding gate for 0.8.2.
+
+### 6.2 Out of Scope for MVP
+
+- **Per-Agent history page.** Deferred to v2. The API already serves it (FR-14); the page is a
+  later addition once the Board has proven its restraint. `[NOTE FOR PM: this is the first thing
+  that will want to be added; it should be added as a page, not as clutter on the Board.]`
+- **Acknowledgement.** Marking a Finished Agent as dealt with without prompting it. Deferred; the
+  Attention Class model relies on herdr's own Transitions instead. See §8.
+- **Backfill from the existing plugin's log.** Deferred to a one-shot import command after the
+  recorder is trusted. See §8.
+- **Service units** (launchd, systemd user). Deferred to the first release; dogfooding runs the
+  binary by hand.
+- **Phone or other surfaces.** The API is shaped for them (UJ-4); none is built.
+- **Second and third Hosts.** Same binary, one Daemon each, no aggregation.
+- **Publishing for others.** Documentation, release artifacts and an install story come after
+  dogfooding on all three Hosts.
+
+## 7. Success Metrics
+
+**Primary**
+- **SM-1: The Board is the operator's first glance.** Over 30 consecutive working days of
+  dogfooding, the operator reports checking the Board rather than cycling panes to find a waiting
+  Agent. Validates FR-1 to FR-5. Measured by the operator's own judgement; a tool for one person
+  does not need telemetry.
+- **SM-2: No missed waiting Agent.** Zero occurrences in those 30 days of an Agent found to have
+  been in Needs you for more than ten minutes without the Board having shown it. Validates FR-3,
+  FR-4, FR-6, FR-7.
+
+**Secondary**
+- **SM-3: Waiting Time is trusted.** Zero occurrences of a Waiting Time the operator believed to be
+  wrong, after checking against the terminal. Validates FR-6, FR-8, FR-14.
+- **SM-4: Attribution is right.** Every Claude Code Agent on the Host shows its correct Profile on
+  the first day of dogfooding. Validates FR-10, FR-11.
+
+**Counter-metrics (do not optimize)**
+- **SM-C1: Elements on the Board.** The Board carries only Boxes and the connection strip. Any
+  proposal to add a control, an excerpt, or a second data type per Box is a product change
+  requiring this PRD to be updated. Counterbalances SM-1.
+- **SM-C2: herdr load.** The Daemon issues no on-demand herdr reads to serve a page view; snapshot
+  frequency is bounded by the reconcile timer. Counterbalances SM-2.
+
+## 8. Open Questions
+
+1. **Acknowledgement.** Is herdr's own `done` to `idle` Transition, which happens when the operator
+   views the pane in a terminal client, sufficient for the Board to stop showing an Agent as
+   Finished? The old PRD observed the same pane reported `idle` and `done` to different calls
+   minutes apart, so the distinction may not be trustworthy. devswha/herdr-web-ui keeps its own
+   finished-pane set beside a server generation marker; herddash can copy that shape if needed.
+   Decide after two weeks of dogfooding.
+2. **Backfill.** The existing plugin has logged 1627 `done` and 288 `blocked` Transitions with
+   Profile already resolved, but many `done` entries predate herdr 0.9.2's fix for spurious `done`
+   on startup and restore. Import, import with a flag marking them as backfilled, or ignore?
+3. **The plugin's fate.** Retire it when the Daemon works, so there is one recorder, or keep it as
+   an independent push path? ADR-0001 leans retire.
+4. **One request per connection on 0.9.3.** Empirically true on 0.8.2 and consistent with 0.9.3
+   source, unverified against a 0.9.3 binary. It shapes the whole client; milestone 1 proves it.
+5. **Profile rules for other harnesses.** Observe one Codex pane and one Antigravity pane on the
+   operator's machine, record what signal each exposes (Codex is believed to use `CODEX_HOME`,
+   UNVERIFIED), and pick or write the rule. Until then FR-10's program-name default applies.
+   Belongs in milestone 2.
+6. **Pane Titles from other harnesses.** Claude Code's Pane Title is its session name and has been
+   observed to be short and free of prompt text. Codex and Antigravity titles have not been
+   observed. Until they are, FR-2a's global default applies to them. Revisit when an Agent of each
+   program has been seen on the Board.
+
+## 9. Confirmed Assumptions
+
+Drafted as assumptions, then confirmed or revised by the operator on 2026-10-13 and 2026-10-14.
+
+- §4.1 — Boxes are a responsive card grid grouped by workspace, with a flat Needs-you-first top
+  section.
+- §4.1 FR-2a — The global default Context Line is empty.
+- §4.2 FR-9 — Default Retention is 90 days.
+- §4.3 FR-11 — Claude Code's Profile rule is the environment-variable rule on
+  `CLAUDE_CONFIG_DIR` with a named absent case; other harnesses' rules are unknown until observed.
+- §4.4 FR-14 — No history filtering or aggregation in v1.
+- §4.5 FR-16 — The version gate is advisory against 0.8.2 behind a config flag during dogfooding.
