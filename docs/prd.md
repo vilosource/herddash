@@ -87,7 +87,8 @@ read-only, so any future surface shows the same truth the Board does.
 - **UJ-4. A second surface, later.** Jason's phone, or a status bar widget, or a terminal one-liner
   asks the Daemon for the current state and gets the same sorted list the Board renders, with the
   same Profiles and the same waiting times.
-  *(Deferred beyond v1; it exists to shape the API, not to be built now.)*
+  *(Deferred beyond v1; it exists to shape the API, not to be built now. A phone off the Host
+  needs network exposure, which waits on its own authentication ADR; see §5.)*
 
 ## 3. Glossary
 
