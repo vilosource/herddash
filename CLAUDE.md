@@ -5,16 +5,19 @@ The question it answers: what is every agent doing, and which ones are waiting o
 
 **Nothing is built yet. Do not start writing code — see "What blocks the build" below.**
 
-herddash is a **headless recorder**, not a dashboard in the full sense: it persists every agent
-status transition with per-account attribution and serves a minimal page and a read-only API
-beside the existing browser interfaces. That is ADR-0001, accepted 2026-10-08.
+herddash is a **notification board backed by a recorder**: one read-only page with one box per
+agent, longest-waiting first, plus a daemon that persists every agent status transition with the
+profile that owns it and serves a read-only API. It runs beside the existing browser interfaces,
+not instead of them. That is ADR-0001 (accepted 2026-10-08) as amended by ADR-0003: the board is
+the product, and the recorder is what makes it trustworthy.
 
 ## Read these first, in this order
 
 | Document | Why |
 |---|---|
 | [docs/adr/0001-what-herddash-is.md](docs/adr/0001-what-herddash-is.md) | **Accepted, option B.** What this project is, after the prior art took three of its five differentiators. Everything else is scoped by it. |
-| [docs/prd.md](docs/prd.md) | The product definition, **being reworked** against ADR-0001 through `/bmad-prd`. Section 3 is the honest scorecard. Sections 7 to 12 still describe the larger product that ADR-0001 rejected; do not design from them. |
+| [docs/adr/0003-the-board-is-the-product.md](docs/adr/0003-the-board-is-the-product.md) | Amends one ADR-0001 consequence: the board is what herddash is measured by, and its restraint (read-only, no terminal, no pane control) is the differentiator. |
+| [docs/prd.md](docs/prd.md) | The product definition, **final** as of 2026-10-14. §3 is the vocabulary, used exactly everywhere; §4 holds FR-1 to FR-17 plus FR-2a and FR-9a. Its [addendum](docs/planning/prds/prd-herddash-2026-10-08/addendum.md) holds the protocol constraints, stack and build order. |
 | [docs/research/herdr-on-this-machine.md](docs/research/herdr-on-this-machine.md) | The setup this project grew out of, none of which is visible from this repository. |
 | [docs/research/herdr-socket-api.md](docs/research/herdr-socket-api.md) | How to talk to herdr. Read before any client code; it contains traps that look like free choices. |
 | [docs/research/herdr-multi-host.md](docs/research/herdr-multi-host.md) | Why several machines means several daemons. |
@@ -27,16 +30,14 @@ them to disagree.
 
 ## What blocks the build
 
-**The PRD does not yet describe the product ADR-0001 accepted.** Two browser interfaces for herdr
-already exist and were evaluated hands-on. Between them they took three of the five differentiators
-this project claimed, including its primary thesis. What survives is a persisted history of agent
-activity and attributing a pane to the account that owns it, and ADR-0001 settled that herddash is
-a narrow complement built around exactly that pair.
+**The PRD is final, but there is no architecture, no epics and no sprint plan yet.** ADR-0002
+fixes the order: architecture with `/bmad-architecture`, then epics and stories, then sprint
+planning. Until those exist there is nothing agreed to build from, so do not start code.
 
-The PRD's sections 7 to 12 predate that decision. Until `/bmad-prd` has reworked them, followed by
-architecture, epics and sprint planning per ADR-0002, there is nothing agreed to build from.
-ADR-0001's acceptance also resolved PRD open questions 1, 4 and 5 and made question 3, backfill
-from the existing plugin's log, important rather than optional.
+The PRD's remaining open questions (§8) are answered during the build, not before it: whether
+acknowledgement is needed at all after two weeks of dogfooding, one-request-per-connection on a
+0.9.3 binary in milestone 1, and Profile rules and Pane Titles for Codex and Antigravity once one
+pane of each has been observed.
 
 ## Working method
 
@@ -46,6 +47,8 @@ repository as the 29 `bmad-*` skills under `.claude/skills/`. Start with `/bmad-
 everything it produces lands under `docs/planning/` and `docs/implementation/` rather than its
 default folder, is [ADR-0002](docs/adr/0002-adopt-bmad-method.md). The order is fixed: decide
 ADR-0001, then rework the PRD with `/bmad-prd`, then architecture, epics, sprint planning. The
+first two are done. The PRD's BMAD run folder keeps a `prd.md` symlink to `docs/prd.md`, so the
+skills find it and there is still only one PRD. The
 skills need `uv` on the machine; building herddash does not.
 
 ## Non-negotiables
