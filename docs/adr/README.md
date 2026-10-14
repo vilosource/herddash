@@ -20,3 +20,4 @@ a new ADR that supersedes it and say so in both.
 |---|---|---|
 | [0001](0001-what-herddash-is.md) | What herddash is, after evaluating the prior art | Accepted, option B |
 | [0002](0002-adopt-bmad-method.md) | Adopt the BMAD Method, and where its records live | Accepted |
+| [0003](0003-the-board-is-the-product.md) | The board is the product, and the recorder is what makes it trustworthy | Accepted; amends one consequence of 0001 |
