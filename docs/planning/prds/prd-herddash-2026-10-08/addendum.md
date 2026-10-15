@@ -21,10 +21,10 @@ herddash Daemon
    └─ HTTP on loopback
          GET /            the Board (embedded HTML + small JS)
          GET /api/state   current state, sorted, with connection truth
-         GET /api/panes/{host}/{pane}/history
+         GET /api/agents/{host}/{server}/{epoch}/{pane}/history
          GET /events      server-sent events
    ▼
-browser: loads /, fetches /api/state once, holds /events, repaints one Box per event
+browser: loads /, opens /events (first event is the whole state), repaints one Box per event
 ```
 
 The browser never touches the herdr socket. The Daemon never makes a herdr call to serve a page.
@@ -53,8 +53,9 @@ so comply.
   `{event, data}`; the pane-scoped streams keep dotted names.
 - **`events_lost` is a resynchronise signal** (UNVERIFIED, 0.9.2+). It arrives as an error on the
   subscription; the server then closes it. Recovery: new subscription, wait for
-  `subscription_started`, snapshot on a separate connection, replace the cache. Snapshots and
-  events share no sequence boundary; events are invalidation signals, never deltas. Serialise
+  `subscription_started`, snapshot on a separate connection, replace the cache. Snapshots and events
+  share no sequence boundary; buffered events are never replayed onto a snapshot. Status events are
+  recorded as live Transitions (spine AD-11), and the snapshot settles disagreements. Serialise
   refreshes; refresh again if events arrive mid-read. Record a resync marker (FR-7).
 - **Version-gate on `ping`**, not on a protocol number (FR-16). There is no handshake; the
   `protocol` integer in responses belongs to a different protocol.
@@ -151,12 +152,12 @@ The generation marker also matters to FR-8, since pane ids may not survive a her
 
 | Choice | Rationale |
 |---|---|
-| Go 1.25+ | One static binary per platform, no runtime on target, trivial cross-compilation to macOS and Linux. Many long-lived subscription connections fanning out to browser clients fit its concurrency model. |
+| Go 1.26+ | One static binary per platform, no runtime on target, trivial cross-compilation to macOS and Linux. Many long-lived subscription connections fanning out to browser clients fit its concurrency model. |
 | Standard library HTTP | No framework. |
 | Server-sent events | One-way feed, plain HTTP, browsers reconnect for free. |
 | SQLite, pure-Go driver | Real queries for history; no C toolchain, so cross-compilation stays trivial. |
 | Embedded assets, hand-written JavaScript | No npm, no build step, nothing to install per Host. |
-| Types generated from `herdr api schema --json` of a real 0.9.3 binary | Field lists in the research lean partly on an older bundled schema; types are not frozen until that dump exists. |
+| Types generated from `herdr api schema --json` of a real 0.9.5 binary | Field lists in the research lean partly on an older bundled schema; types are not frozen until that dump exists. |
 
 ## G. Security posture, and the bar set by prior art
 

@@ -4,8 +4,8 @@ type: architecture-spine
 purpose: build-substrate
 altitude: initiative
 paradigm: 'hexagonal (ports and adapters) around a pure core, with a single-writer engine actor'
-scope: 'herddash v1: one Daemon per Host - herdr client, recorder, attribution, read-only HTTP API and SSE, embedded Board, plugin-log import'
-status: draft
+scope: 'herddash v1: one Daemon per Host observing one herdr server - herdr client, recorder, attribution, read-only HTTP API and SSE, embedded Board, plugin-log import'
+status: final
 created: '2026-10-14'
 updated: '2026-10-15'
 binds: [FR-1, FR-2, FR-2a, FR-3, FR-4, FR-5, FR-6, FR-7, FR-8, FR-9, FR-9a, FR-10, FR-11, FR-12, FR-13, FR-14, FR-15, FR-16, FR-17]
@@ -21,26 +21,25 @@ companions: []
 
 # Architecture Spine — herddash
 
-Vocabulary is the PRD's §3 Glossary, used exactly. Structural decisions that meet the ADR threshold
-in CONTRIBUTING.md are numbered ADRs; an `AD` here cites the ADR, and the ADR is the authority.
+Vocabulary is the PRD's §3 Glossary, used exactly. Where an `AD` cites an ADR, the ADR is the
+authority and the `AD` states only what a builder must obey.
 
 ## Design Paradigm
 
 **Hexagonal, with one actor.** A pure **core** holds every domain rule and does no I/O. **Adapters**
-touch the outside world: the herdr socket, the operating system's process environments, SQLite,
-HTTP, and the plugin log. One **engine** goroutine sits between them as the only owner of current
-state and the only writer of the record.
+touch the outside world: the herdr socket, process environments, SQLite, HTTP, and the plugin log.
+One **engine** goroutine is the only owner of current state and the only caller of store writes.
 
 | Layer | Package | Holds |
 | --- | --- | --- |
-| Core | `internal/core` | Agent, Transition, AgentKey, Status, Attention Class, Waiting Time, ordering, Profile rules, Context Line rules, AgentView |
-| Engine | `internal/engine` | the actor: current state, applying events and snapshots, resync, publishing views |
-| Adapter | `internal/herdr` | socket client, subscriptions, snapshot, generated wire types |
-| Adapter | `internal/procenv` | reading a process's environment from the OS |
-| Adapter | `internal/store` | SQLite schema, migrations, append, Retention sweep, history reads |
+| Core | `internal/core` | AgentKey, Agent, Transition and its constructor, Status, Attention Class, Waiting Time and exactness, sort key, history fold, Profile and Context Line rules, AgentView, ConnectionTruth |
+| Engine | `internal/engine` | the actor: pane set, current state, reconcile and Retention timers, resync decisions, publishing views |
+| Adapter | `internal/herdr` | socket mechanics: dial, ping, snapshot, subscribe, stream-health signals, generated wire types |
+| Adapter | `internal/procenv` | reading one process's environment (linux: `/proc`; darwin: `kern.procargs2`) |
+| Adapter | `internal/store` | open with lock, migrations, append, history reads and fold input, Retention sweep |
 | Adapter | `internal/httpapi` | GET routes, SSE, embedded Board assets |
-| Adapter | `internal/importer` | plugin-log parsing for FR-9a |
-| Wiring | `internal/config`, `cmd/herddash` | TOML config, flags, process lifecycle, subcommands |
+| Adapter | `internal/importer` | parsing the plugin log into core Transitions |
+| Wiring | `internal/config`, `cmd/herddash` | TOML config, socket and Server resolution, flags, lifecycle, subcommands |
 
 ## Invariants & Rules
 
@@ -50,149 +49,235 @@ graph TD
   cmd --> httpapi
   cmd --> importer
   cmd --> config
+  cmd --> store
   engine --> core
   engine --> herdr
   engine --> procenv
   engine --> store
   httpapi --> core
-  httpapi -->|read port only| engine
+  httpapi -->|published view| engine
+  httpapi -->|history reads| store
   importer --> core
   importer --> store
+  importer --> config
   store --> core
   herdr --> core
   config --> core
 ```
 
-Arrows are the only permitted import directions. `core` imports nothing outside the standard
-library.
+Arrows are the only permitted import directions. `core` imports only the standard library.
+`httpapi` may call only `store`'s read functions; only `engine` and `importer` call `store.Append`.
 
 ### AD-1 — Core is pure; every derived value is computed once, there
 
 - **Binds:** FR-2, FR-2a, FR-3, FR-10, FR-12, FR-13
-- **Prevents:** the Board, the API and a future surface each deriving Attention Class, Waiting Time,
-  Profile, Context Line or order slightly differently.
-- **Rule:** Attention Class, Waiting Time and its lower-bound flag, Profile, Context Line and Box
-  order are functions in `internal/core`, taking state and a clock. They produce one `AgentView`
-  type. `/api/state` and every SSE event carry `AgentView` verbatim. The Board renders it and
-  computes nothing, except advancing the displayed Waiting Time from the view's start instant
-  between events.
+- **Prevents:** the Board, the API and a later surface each deriving Attention Class, Waiting Time,
+  Profile, Context Line or order differently.
+- **Rule:** Attention Class, Waiting Time with its exactness, Profile, Context Line and the **sort
+  key** are functions in `internal/core` that take state and a clock and produce one `AgentView`.
+  The sort key is `[zone, group, class_rank, start, agent_key]`, compared element by element:
+  - **Top zone** (Needs you, Finished): `group` is 0, so the zone is flat across workspaces.
+  - **Lower zone** (Working, Unknown): `group` is the workspace's position in herdr's snapshot.
+
+  The Board does exactly three things beyond rendering. It advances the displayed Waiting Time from
+  the view's start instant. It orders Boxes by the sort key. It draws a workspace header wherever
+  `group` changes in the lower zone. A shared golden fixture with several workspaces tests that the
+  Board's order and headers equal core's.
 
 ### AD-2 — One writer: the engine actor [ADOPTED]
 
-- **Binds:** FR-4, FR-6, FR-7, FR-8, FR-9, FR-9a
-- **Prevents:** two goroutines mutating current state or writing transitions, and so two orders
-  of truth.
-- **Rule:** current state lives only inside the engine goroutine. The herdr client, the
-  reconcile and Retention timers, and Profile re-resolution send it messages, and it alone calls
-  `store` writes. After each change it publishes an immutable view (current `AgentView`s, the
-  connection truth and a view sequence number); readers take that view and never lock engine
-  state. The FR-9a import runs only while no Daemon holds the database (AD-9).
+- **Binds:** FR-4, FR-6, FR-7, FR-8, FR-9
+- **Prevents:** two goroutines mutating current state or writing Transitions.
+- **Rule:** current state lives only inside the engine goroutine. Everything else reaches it by
+  message. It publishes an immutable view after each change, holding the current `AgentView`s, the
+  ConnectionTruth, a view sequence number and the run id. Readers take that view and never lock
+  engine state. The importer is the one other writer; AD-9 keeps it from ever running alongside the
+  engine.
 
-### AD-3 — Agent identity is (Host, herdr server, pane id) [ADOPTED]
+### AD-3 — Agent identity is (Host, Server, server epoch, pane id)
 
-- **Binds:** FR-6, FR-12, FR-14, PRD §5 (multi-Host later)
-- **Prevents:** pane id collisions across machines or named sessions, and a later aggregation that
-  needs a schema change.
-- **Rule:** `AgentKey{Host, Server, PaneID}` is the identity everywhere: store rows, `AgentView`,
-  API paths (`/api/agents/{host}/{server}/{pane}/history`), SSE events. Host is the configured
+- **Binds:** FR-6, FR-12, FR-14, PRD §5
+- **Prevents:** pane-id collisions across machines and named sessions, and one Agent's history
+  spliced onto another's when herdr reuses ids after a restart.
+- **Rule:** `AgentKey{Host, Server, Epoch, PaneID}` is the identity in store rows, `AgentView`, SSE
+  and API paths (`/api/agents/{host}/{server}/{epoch}/{pane}/history`). Host is the configured
   name, defaulting to the OS hostname. Server is the herdr session name: `default` for
-  `~/.config/herdr/herdr.sock`, and `<name>` for `sessions/<name>/herdr.sock`. Nothing is keyed by
-  pane id alone.
+  `~/.config/herdr/herdr.sock`, `<name>` for `sessions/<name>/herdr.sock`. `internal/config`
+  resolves both in one function used by serve and import alike. Epoch changes when the engine
+  detects a new herdr server instance. How it detects one, and whether herdr pane ids survive a
+  restart, is UNVERIFIED and is milestone 1's finding. The epoch changes only on evidence that
+  herdr reassigned pane ids, so a herdr restart that keeps ids keeps every Agent (FR-8). Epoch 0 is
+  reserved for backfilled rows, which therefore never join a live Agent (AD-13). Nothing is keyed
+  by pane id alone.
 
 ### AD-4 — The record is append-only — ADR-0005
 
 - **Binds:** FR-6, FR-7, FR-8, FR-9, FR-9a, FR-11, FR-14
-- **Prevents:** history being rewritten by a Profile Map edit, a resync or an import, and
-  provenance being lost.
-- **Rule:** transitions and resync markers are inserted, never updated. Only the Retention sweep
-  deletes. Each transition stores the AgentKey, Agent Program, Profile as resolved then, previous
-  and new Status, herdr ordering where known, herdr version, provenance (`live`, `snapshot` or
-  `backfill`), a possibly-spurious flag, and `observed_at`. The table shape is ADR-0005.
+- **Prevents:** history rewritten by a Profile Map edit, a resync or an import.
+- **Rule:** Transitions and resync markers are inserted and never updated. The only delete is the
+  Retention sweep. For each Agent still present, it keeps every Transition from the one that began
+  the current Attention Class onward, plus the latest `working` Transition. Agents no longer present
+  are swept purely by age. Each Daemon start is recorded as a resync marker with reason
+  `daemon_start`.
 
 ### AD-5 — herdr is reached only through `internal/herdr` — ADR-0006
 
 - **Binds:** FR-6, FR-7, FR-8, FR-16, PRD §5 never-focus and never-read-output rules
-- **Prevents:** a second socket client, a pooled or multiplexed connection, a focus call, or an
-  output read creeping in from another package.
-- **Rule:** only `internal/herdr` opens the socket. It dials one connection per request and holds
-  one long-lived connection per subscription. It subscribes before snapshotting, treats the
-  snapshot as truth and events as invalidation, reconciles on a timer, and runs at most one resync
-  at a time. Its API has **no** focus method and **no** pane-output method in v1. The capability is
-  absent, not merely unused. Wire types are generated from `herdr api schema --json`. The protocol
-  rules are ADR-0006.
+- **Prevents:** a second socket client, pooled connections, a focus call or an output read
+  appearing anywhere.
+- **Rule:** only `internal/herdr` opens the socket. It dials once per request and holds one
+  long-lived connection per subscription, with each Agent pane's status subscription on its own
+  connection. Its API has **no** focus method and **no** pane-output method; the capability is
+  absent, not merely unused. Wire types live in `internal/herdr/gen` and are mapped to core types at
+  the package edge.
 
 ### AD-6 — The HTTP surface is read-only and never calls herdr — ADR-0007
 
-- **Binds:** FR-12, FR-13, FR-14, FR-17, PRD §4.4 NFRs
-- **Prevents:** a write route, an on-demand herdr call per page view, or a second network surface.
-- **Rule:** one loopback listener serves only GET: `/`, `/api/state`,
-  `/api/agents/{host}/{server}/{pane}/history`, and `/events`. Every response is built from the
-  engine's published view or a `store` read. The listener and its defaults are ADR-0007.
+- **Binds:** FR-12, FR-13, FR-14, FR-17
+- **Prevents:** a write route, an on-demand herdr call per page view, or a page on another origin
+  reading the API.
+- **Rule:** GET only. The routes are `/` (root only), `/assets/` (the embedded Board files),
+  `/api/state`, the history route in AD-3, and `/events`. Every response is built from the published
+  view or a `store` read. A request whose `Host` header is not a loopback name is rejected. Errors,
+  including 405, use the JSON error shape.
 
-### AD-7 — SSE has no replay; clients resync by refetching
+### AD-7 — The event stream begins with the whole state
 
 - **Binds:** FR-4, FR-5, FR-13
-- **Prevents:** a server-side event buffer whose semantics drift from `/api/state`, and clients
-  that apply stale events after a reconnect.
-- **Rule:** every published view carries a monotonically increasing sequence number. An SSE event
-  is a whole `AgentView`, a removal of one AgentKey, or the connection truth, stamped with that
-  sequence number. On every connect and reconnect the client fetches `/api/state` first, then
-  applies only events with a higher sequence number. The server keeps no event history.
+- **Prevents:** clients losing changes between a fetch and a subscribe, dropping events that share
+  a sequence number, or comparing sequence numbers across Daemon restarts.
+- **Rule:**
+  - **Opening.** The Board opens `/events` and fetches nothing first. On every connection the
+    server's first event is `state`, whose body has exactly the shape of `/api/state`, with run id
+    and view sequence.
+  - **Change events.** The engine publishes each view together with the change list that produced
+    it. `httpapi` turns that list into `agent`, `removed`, `transition`, `resync` and `connection`
+    events, in publish order. The client applies events in arrival order.
+  - **Reconnects and slow clients.** Each stream has a bounded buffer. On overflow the server closes
+    that stream, and the client reconnects to a fresh `state`. The server keeps no event history.
+  - **Non-streaming clients** use `/api/state`, which serves the same body.
 
 ### AD-8 — Configuration is one TOML file, read at start — ADR-0004
 
-- **Binds:** FR-11, FR-15
-- **Prevents:** settings scattered across flags, environment variables and files, and live
-  reloads that leave half-applied Profile rules.
-- **Rule:** `internal/config` parses one TOML file into one immutable struct. It validates the
-  struct at start, fails fast on error, and changes take effect only on restart. Precedence is
-  fixed: a command-line flag beats the file, which beats the defaults. The socket path, when not
-  configured, follows herdr's own resolution order (`--session`, `HERDR_SOCKET_PATH`,
-  `HERDR_SESSION`, then the default session).
+- **Binds:** FR-11, FR-15, FR-16
+- **Prevents:** settings scattered across sources, and live reloads leaving half-applied Profile
+  rules.
+- **Rule:** `internal/config` parses one file into one immutable struct, validates it, fails fast,
+  and applies changes only on restart. A command-line flag beats the file, which beats the
+  defaults. It owns socket-path resolution (`--session`, `HERDR_SOCKET_PATH`, `HERDR_SESSION`, then
+  the default session) and FR-16's dogfooding flag. Defaults: `~/.config/herddash/config.toml`, and
+  a data directory of `$XDG_DATA_HOME/herddash`, falling back to `~/.local/share/herddash`, on both
+  operating systems.
 
-### AD-9 — One process owns the database at a time
+### AD-9 — One process owns the database
 
 - **Binds:** FR-9a, FR-15, FR-17
-- **Prevents:** the importer and a running Daemon writing concurrently, and two Daemons sharing a
-  database.
-- **Rule:** the Daemon takes an exclusive lock file beside the database at start and holds it
-  until exit. `herddash import-plugin-log` takes the same lock and refuses to run while it is
-  held. The data directory is created `0700`; the database, its lock and the log are `0600`.
+- **Prevents:** the importer and a Daemon, or two Daemons, writing at once, and a stale lock after
+  a crash.
+- **Rule:** `store.Open` takes an exclusive advisory `flock` on a lock file beside the database,
+  for serve and import alike, and fails if the lock is held. The operating system releases it when
+  the process dies. The process sets umask `077` at start, so the data directory is `0700` and the
+  database, its WAL and SHM files, the lock and the log are `0600`.
 
-### AD-10 — Schema changes are numbered migrations, and the event schema needs an ADR
+### AD-10 — Schema changes are numbered migrations
 
 - **Binds:** FR-6, FR-8, FR-9
-- **Prevents:** a hand-altered database, or a stored-event change that silently breaks history
-  reads.
-- **Rule:** migrations are embedded, numbered SQL files, applied in order at start inside one
-  transaction. The schema version is recorded in the database. A migration that touches the
-  transitions table is a stored-event-schema change and needs an ADR first (CONTRIBUTING).
+- **Prevents:** a hand-altered database, or a binary running against a schema it does not know.
+- **Rule:** migrations are embedded, numbered SQL files applied in order at start in one
+  transaction, and the database records its schema version. A database newer than the binary is
+  refused at start. The database runs in WAL mode. A migration touching the transitions table needs
+  an ADR first.
+
+### AD-11 — The engine decides; `internal/herdr` only does
+
+- **Binds:** FR-6, FR-7, FR-8, FR-16
+- **Prevents:** two reconcile timers, two resync guards, and a pane set kept in two places.
+- **Rule:** `internal/herdr` provides dial, ping, snapshot, subscribe, unsubscribe and stream-health
+  signals, and nothing that decides. The engine owns:
+  - the pane set and the reconcile timer
+  - the decision to resync, a guard allowing one resync at a time, and a minimum interval between
+    resyncs
+  - resync markers, the version gate and server-epoch detection
+
+  The gate's outcomes:
+  - **Refused:** the engine publishes ConnectionTruth with `gate: refused` and no AgentViews, and
+    records nothing.
+  - **Advisory:** FR-16's flag is set and herdr is below 0.9.5. The engine records and publishes
+    normally, with `gate: advisory`.
+- **Event handling:** a status event is recorded at once as a `live` Transition, because it is an
+  observed fact carrying herdr's ordering. The snapshot is the truth for which panes exist and their
+  current Status, and any disagreement is recorded as a `snapshot` Transition. Buffered events are
+  never replayed onto a snapshot. Events that arrive during a snapshot read cause another read.
+
+### AD-12 — Waiting Time comes from the record, through one fold
+
+- **Binds:** FR-2, FR-3, FR-8, PRD §3 Waiting Time
+- **Prevents:** the store and the engine choosing different start instants after a restart, and a
+  Finished Agent turning Working because history was lost.
+- **Rule:** at start and after each resync, the engine loads each Agent's history through one
+  `store` read and passes it to `core.Fold`. The fold returns the instant the current Attention
+  Class began, that Transition's provenance, and whether the Agent has ever been `working`.
+  - **Exact** only when that Transition was observed `live` and the Status seen on reconnect is
+    unchanged.
+  - **Otherwise a lower bound**, taken from the earliest evidence.
+  - Backfilled rows sit under epoch 0, so they never reach a live Agent's fold (AD-13).
+
+### AD-13 — One way to make and write a Transition
+
+- **Binds:** FR-6, FR-9a
+- **Prevents:** the importer and the engine writing differently shaped rows that never join.
+- **Rule:**
+  - **One constructor and one insert.** `core.NewTransition` builds every Transition and
+    `store.Append` writes every one, for serve and import alike.
+  - **Unknown means NULL.** An unknown value is stored as NULL, never as a string such as
+    `unknown`, which is a real Status.
+  - **Re-import is safe.** Imported rows carry a unique `import_key`, so running the import twice
+    adds nothing.
+  - **Same identity, apart from epoch.** The importer gets Host and Server from the same
+    `internal/config` function as the Daemon, writes epoch 0, and stores the Profile the plugin
+    log recorded. Imported history is never Waiting Time evidence for a live Agent.
+  - **Spurious `done`.** The operator supplies the date the Host reached herdr 0.9.2; imported `done`
+    before it is flagged possibly spurious.
+
+### AD-14 — Profile is resolved before an Agent's first Transition
+
+- **Binds:** FR-10, FR-11
+- **Prevents:** every new Agent's first Transition being permanently recorded as `unresolved`
+  because resolution raced it.
+- **Rule:** the engine resolves the Profile through `internal/procenv` before recording an Agent's
+  first Transition, with a bounded timeout that yields `unresolved`. It re-resolves on agent
+  detection and when herdr reports a foreground-process change. Which herdr call yields the
+  foreground process, and which signal reports a change, is UNVERIFIED until milestone 1. A pane
+  herdr restored without `CLAUDE_CONFIG_DIR` resolves to the absent case, which is the true Profile.
 
 ## Consistency Conventions
 
 | Concern | Convention |
 | --- | --- |
-| Naming | PRD §3 terms become Go identifiers verbatim: `Agent`, `Transition`, `Profile`, `AttentionClass`, `WaitingTime`, `ContextLine`, `AgentKey`, `AgentView`. herdr wire names stay in `internal/herdr` and are mapped at its edge. |
-| Time | Stored and transmitted as UTC Unix milliseconds. `observed_at` is the Daemon's clock. Order within one Agent is herdr's sequence when known, else `observed_at`. |
-| Status values | herdr's strings verbatim: `working`, `blocked`, `done`, `idle`, `unknown`. Attention Class values: `needs_you`, `finished`, `working`, `unknown`. |
-| JSON | `snake_case` fields. Errors are `{"error": {"code": "...", "message": "..."}}` with a matching HTTP status. Absent values are omitted, never empty strings, except an empty Context Line, which is `""` by FR-2a. |
-| SSE | Event names `agent`, `removed` and `connection`; `id:` is the view sequence number; `data:` is one JSON object. |
-| Errors | Adapters wrap with `%w` and context; core returns typed errors. herdr error codes are an open set: an unknown code from a subscription triggers a resync, never a crash. |
-| Logging | `log/slog`, JSON to the log file, owner-only. Never log environment values beyond the matched `CLAUDE_CONFIG_DIR`, and never log the Pane Title at levels above debug. |
-| Clock | Every time-dependent core function takes the clock as a parameter; no `time.Now()` inside `core`. |
-| Tests | Core is table-tested with no I/O. Adapters are tested against fakes or temporary files; nothing in `go test ./...` touches a live herdr. |
+| Naming | PRD §3 terms become Go identifiers verbatim: `Agent`, `Transition`, `Profile`, `AttentionClass`, `WaitingTime`, `ContextLine`, `AgentKey`, `AgentView`, `ConnectionTruth`. herdr wire names stay inside `internal/herdr`. |
+| Time | UTC Unix milliseconds in storage and on the wire. `observed_at` is the Daemon's clock. Order within an Agent is herdr's sequence when known, else `observed_at`. |
+| Status and class values | herdr's strings verbatim: `working`, `blocked`, `done`, `idle`, `unknown`. Attention Class values are `needs_you`, `finished`, `working` and `unknown`. Provenance is one of `live`, `snapshot` or `backfill`. |
+| ConnectionTruth | `{connected, last_snapshot_at, herdr_version, gate: ok\|advisory\|refused, resync_guaranteed}`. |
+| JSON | `snake_case` fields. Errors are `{"error":{"code":"...","message":"..."}}` with a matching status. Absent values are omitted, except an empty Context Line, which is `""`. Each AgentView carries `waiting_since` and `waiting_exact`. |
+| SSE | Event names `state`, `agent`, `removed`, `transition`, `resync` and `connection`. `id:` is the view sequence. `data:` is one JSON object. The write deadline is cleared per stream. |
+| Errors | Adapters wrap with `%w`. herdr error codes are an open set: an unknown code on a subscription is a resync, never a crash. |
+| Logging | `log/slog`, JSON, to `herddash.log` in the data directory. Never log environment values except a matched `CLAUDE_CONFIG_DIR`; Pane Titles only at debug. |
+| Clock | Time-dependent core functions take the clock as a parameter; `core` never calls `time.Now()`. |
+| Tests | Core is table-tested with no I/O. Adapters are tested against fakes and temporary files. `go test ./...` never touches a live herdr. |
 
 ## Stack
 
 | Name | Version |
 | --- | --- |
-| Go (go.mod `go` directive) | 1.26 |
-| Go toolchain for releases | 1.27.2 |
+| Go (`go.mod` directive; required by the SQLite driver) | 1.26 |
+| Go toolchain for releases (needs macOS 13 or newer) | 1.27.2 |
 | modernc.org/sqlite | v1.60.1 |
+| modernc.org/libc (pinned exactly to the driver's requirement) | v1.77.1 |
 | github.com/BurntSushi/toml | v1.6.0 |
-| HTTP, SSE, embedding, logging | Go standard library (`net/http`, `embed`, `log/slog`) |
+| golang.org/x/sys (darwin process environment) | v0.49.0 |
+| HTTP, SSE, embedding, logging | Go standard library |
 | Board | hand-written HTML, CSS and JavaScript, embedded; no npm, no build step |
-| herdr supported | 0.9.2 or newer (latest 0.9.4); 0.8.2 only behind FR-16's dogfooding flag |
+| herdr supported | 0.9.5 or newer (latest 0.9.5); older versions, including the operator's 0.8.2, only behind FR-16's dogfooding flag |
 
 ## Structural Seed
 
@@ -200,73 +285,93 @@ library.
 graph LR
   subgraph Host
     herdr[(herdr server<br/>unix socket 0600)]
-    procs[Agent processes<br/>environments]
-    subgraph Daemon[herddash Daemon]
+    procs[Agent processes]
+    subgraph Daemon[herddash Daemon, operator's user, umask 077]
       hc[internal/herdr] --> eng[engine actor]
       pe[internal/procenv] --> eng
-      eng --> st[(SQLite<br/>0600)]
+      eng --> st[(SQLite WAL<br/>flock)]
       eng --> view[published view]
       view --> api[internal/httpapi<br/>loopback GET + SSE]
+      st --> api
     end
     herdr --> hc
     procs --> pe
-    imp[import-plugin-log] -.lock.-> st
+    imp[import-plugin-log] -.flock.-> st
   end
-  browser[Browser: the Board] --> api
+  browser[Board in a browser] -->|/events first| api
 ```
 
 ```mermaid
 erDiagram
   AGENT_KEY ||--o{ TRANSITION : records
-  AGENT_KEY ||--o{ RESYNC_MARKER : "affected by"
+  AGENT_KEY }o--|| SERVER_EPOCH : "scoped by"
+  SERVER_EPOCH ||--o{ RESYNC_MARKER : "affected by"
   SCHEMA_VERSION ||--|| DATABASE : versions
 ```
 
 ```text
-cmd/herddash/          # main: serve (default), import-plugin-log, version
-internal/core/         # pure domain rules and AgentView
+cmd/herddash/          # serve (default), import-plugin-log, version
+internal/core/         # pure rules, fold, sort key, AgentView, ConnectionTruth
 internal/engine/       # the single-writer actor
-internal/herdr/        # socket client; gen/ holds generated wire types
-internal/procenv/      # process environment readers, per OS (linux, darwin)
-internal/store/        # SQLite; migrations/ holds numbered .sql files
+internal/herdr/        # socket mechanics; gen/ holds generated wire types
+internal/procenv/      # env readers: procenv_linux.go, procenv_darwin.go
+internal/store/        # SQLite; migrations/ holds numbered .sql
 internal/httpapi/      # routes, SSE; web/ holds embedded Board assets
 internal/importer/     # plugin-log parser
-internal/config/       # TOML config and validation
+internal/config/       # TOML, validation, socket and Server resolution
 ```
 
-**Deployment.** One binary per OS and architecture (darwin/arm64, darwin/amd64, linux/amd64,
-linux/arm64), run as the operator's own user on each Host. During dogfooding it is started by hand.
-A launchd agent and a systemd user unit come with the first release; they set no
-`HERDR_SOCKET_PATH`, which AD-8 covers. No container, no root, no system service.
+**Deployment.** One binary each for darwin/arm64, darwin/amd64, linux/amd64 and linux/arm64, built
+with `CGO_ENABLED=0`, run as the operator's own user on each Host. It is started by hand while
+dogfooding; a launchd agent and a systemd user unit come with the first release and set no
+`HERDR_SOCKET_PATH` (AD-8). It shuts down cleanly on SIGINT and SIGTERM. There is no container, no
+root and no system service.
 
 ## Capability → Architecture Map
 
 | Capability | Lives in | Governed by |
 | --- | --- | --- |
-| FR-1 to FR-5 Board | `internal/httpapi/web`, `internal/core` (AgentView, order) | AD-1, AD-6, AD-7 |
-| FR-6 to FR-8 Recording | `internal/engine`, `internal/herdr`, `internal/store` | AD-2, AD-4, AD-5 |
-| FR-9 Retention | `internal/engine` timer, `internal/store` sweep | AD-2, AD-4 |
-| FR-9a Backfill | `internal/importer`, `cmd/herddash` | AD-4, AD-9 |
-| FR-10, FR-11 Attribution | `internal/core` rules, `internal/procenv`, `internal/config` | AD-1, AD-8 |
-| FR-12 to FR-14 API | `internal/httpapi`, `internal/store` reads | AD-6, AD-7, AD-3 |
+| FR-1 to FR-5 Board | `internal/httpapi/web`, `internal/core` | AD-1, AD-6, AD-7 |
+| FR-6 to FR-8 Recording | `internal/engine`, `internal/herdr`, `internal/store` | AD-2, AD-4, AD-5, AD-11, AD-12 |
+| FR-9 Retention | engine timer, `store` sweep | AD-2, AD-4 |
+| FR-9a Backfill | `internal/importer`, `cmd/herddash` | AD-9, AD-13 |
+| FR-10, FR-11 Attribution | `internal/core`, `internal/procenv`, `internal/config` | AD-1, AD-8, AD-14 |
+| FR-12 to FR-14 API | `internal/httpapi`, `store` reads | AD-3, AD-6, AD-7 |
 | FR-15 Binary and config | `cmd/herddash`, `internal/config` | AD-8 |
-| FR-16 Version gate | `internal/herdr` (ping), `internal/engine` | AD-5 |
+| FR-16 Version gate | `internal/engine` via `herdr` ping | AD-8, AD-11 |
 | FR-17 Loopback, owner-only | `internal/httpapi`, `internal/store` | AD-6, AD-9 |
+
+## Open Questions
+
+Each is answered in milestone 1, against a herdr 0.9.5 binary, before ADR-0005's columns are fixed.
+
+1. **Pane ids across a herdr restart.** Do they survive, and how does a new server instance show
+   itself? This sets how the engine detects a new epoch (AD-3).
+2. **Foreground process.** Which call yields a pane's foreground process id, and which event reports
+   a change (AD-14)?
+3. **Herdr's ordering field.** Which field orders Transitions within an Agent, `state_change_seq` or
+   another?
+4. **One request per connection on 0.9.x.** It is confirmed only on 0.8.2. It is PRD open question
+   2.
 
 ## Deferred
 
-- **The exact transitions table columns and indexes.** ADR-0005 fixes them in milestone 2, once
-  the 0.9.x schema dump shows which herdr ordering fields exist.
-- **Generated wire types.** They come from `herdr api schema --json` against a 0.9.2-or-newer
-  binary in milestone 1. Until then, field names in the research are provisional.
+- **Transitions table columns and indexes.** These are seed for milestone 2, after the open
+  questions; ADR-0005 fixes only the invariants.
+- **The wire-type generator.** Which tool turns `herdr api schema --json` into Go types is chosen
+  in milestone 1. Only `internal/herdr/gen` is affected.
+- **Specific values:** the default port (distinct from 7317), the reconcile interval, the minimum
+  resync interval, backoff limits and the Profile resolution timeout. Each is a named constant in
+  one place, chosen when first built, and documented with the configuration.
+- **Several herdr servers per Daemon.** v1 observes one server. AgentKey already carries Server.
 - **Profile rules for Codex and Antigravity.** The rule interface is fixed by AD-1; the rules wait
-  on observing a pane of each (PRD open question 3).
-- **The acknowledgement set.** If PRD open question 1 calls for it, it is engine state persisted
-  through `store` beside a server generation marker. Its table waits on that decision.
-- **Authentication and non-loopback binding.** A future ADR; AD-6 and FR-17 refuse it until then.
-- **Multi-Host aggregation.** It reads several Daemons' APIs and needs no change to the core,
-  because AD-3 already keys on Host.
-- **Service unit files and release packaging.** Milestone 5; nothing here constrains them beyond
-  the Deployment note.
-- **Board visual design.** Colours, typography and card layout are UX work; the spine fixes only
-  that the Board renders `AgentView` and computes nothing.
+  on PRD open question 3.
+- **The acknowledgement set.** If PRD open question 1 calls for it, it becomes engine state stored
+  through `store`.
+- **Authentication and non-loopback binding.** A future ADR; AD-6 refuses both until then.
+- **Multi-Host aggregation.** It reads several Daemons' APIs; AD-3 already keys on Host.
+- **Log rotation and database backup.** Writes are tiny. A backup is a copy taken while the Daemon
+  is stopped, documented with the first release.
+- **Service units and release packaging.** Milestone 5.
+- **Board visual design.** UX work; the spine fixes only that the Board renders `AgentView` and
+  orders by its sort key.
