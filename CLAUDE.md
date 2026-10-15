@@ -18,6 +18,7 @@ the product, and the recorder is what makes it trustworthy.
 | [docs/adr/0001-what-herddash-is.md](docs/adr/0001-what-herddash-is.md) | **Accepted, option B.** What this project is, after the prior art took three of its five differentiators. Everything else is scoped by it. |
 | [docs/adr/0003-the-board-is-the-product.md](docs/adr/0003-the-board-is-the-product.md) | Amends one ADR-0001 consequence: the board is what herddash is measured by, and its restraint (read-only, no terminal, no pane control) is the differentiator. |
 | [docs/prd.md](docs/prd.md) | The product definition, **final** as of 2026-10-14. §3 is the vocabulary, used exactly everywhere; §4 holds FR-1 to FR-17 plus FR-2a and FR-9a. Its [addendum](docs/planning/prds/prd-herddash-2026-10-08/addendum.md) holds the protocol constraints, stack and build order. |
+| [docs/planning/architecture/architecture-herddash-2026-10-14/ARCHITECTURE-SPINE.md](docs/planning/architecture/architecture-herddash-2026-10-14/ARCHITECTURE-SPINE.md) | **Final.** The rules every story must obey: package boundaries, the single-writer engine, identity, the record, the event stream. [How herddash works](docs/how-herddash-works.md) is the plain-language version. |
 | [docs/research/herdr-on-this-machine.md](docs/research/herdr-on-this-machine.md) | The setup this project grew out of, none of which is visible from this repository. |
 | [docs/research/herdr-socket-api.md](docs/research/herdr-socket-api.md) | How to talk to herdr. Read before any client code; it contains traps that look like free choices. |
 | [docs/research/herdr-multi-host.md](docs/research/herdr-multi-host.md) | Why several machines means several daemons. |
@@ -30,13 +31,19 @@ them to disagree.
 
 ## What blocks the build
 
-**The PRD is final, but there is no architecture, no epics and no sprint plan yet.** ADR-0002
-fixes the order: architecture with `/bmad-architecture`, then epics and stories, then sprint
+**The PRD and the architecture are final, but there are no epics and no sprint plan yet.**
+ADR-0002 fixes the order: epics and stories with `/bmad-create-epics-and-stories`, then sprint
 planning. Until those exist there is nothing agreed to build from, so do not start code.
+
+The architecture spine at
+`docs/planning/architecture/architecture-herddash-2026-10-14/ARCHITECTURE-SPINE.md` is binding on
+every story: its `AD` rules, its import graph and its conventions. ADR-0004 to ADR-0007 carry the
+structural decisions behind it. Its four open questions are answered in milestone 1 against a
+herdr 0.9.5 binary.
 
 The PRD's remaining open questions (§8) are answered during the build, not before it: whether
 acknowledgement is needed at all after two weeks of dogfooding, one-request-per-connection on a
-0.9.3 binary in milestone 1, and Profile rules and Pane Titles for Codex and Antigravity once one
+0.9.5 binary in milestone 1, and Profile rules and Pane Titles for Codex and Antigravity once one
 pane of each has been observed.
 
 ## Working method
@@ -71,8 +78,8 @@ to the stored event schema, or a new network surface.
 ## Things that will bite you
 
 - **herdr on this machine is 0.8.2 and cannot be upgraded right now**, because its server hosts
-  live agent work. Current stable is 0.9.3. Target 0.9.2 or newer in design, but expect to test
-  against 0.8.2.
+  live agent work. Current stable is 0.9.5, and herddash supports 0.9.5 or newer (ADR-0006).
+  Expect to test against 0.8.2 behind the dogfooding flag.
 - **herdr's configuration is owned by an Ansible repository, not by hand.** Do not edit
   `~/.config/herdr/config.toml`. Changes belong in that repository.
 - **Do not install anything as a herdr plugin on this machine.** The plugin registry is managed and
@@ -132,7 +139,8 @@ is the only chance to get it right, and a published 1.0.0 cannot be withdrawn.
 
 ## Build and test
 
-Requires Go 1.25 or newer. There is no code yet, so these are the intended commands:
+Requires Go 1.26 or newer (the SQLite driver sets that floor; ADR-0004). There is no code yet, so
+these are the intended commands:
 
 ```bash
 go build ./...

@@ -51,7 +51,7 @@ fixes, docs corrections and behaviour-preserving refactors don't need this.
 
 ## Build, test, run
 
-Requires **Go >= 1.25**.
+Requires **Go >= 1.26**.
 
 ```bash
 go build ./...

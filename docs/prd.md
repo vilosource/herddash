@@ -60,8 +60,9 @@ read-only, so any future surface shows the same truth the Board does.
   has web push and a Needs-you grouping. herddash differs by being read-only, by keeping a
   history, and by attributing each Agent to its Profile; it runs beside devswha, not instead.
 - Teams. v1 is one operator, one host, one browser, on loopback.
-- Anyone on herdr older than 0.9.2. herddash targets 0.9.2 or newer and is tested against 0.8.2
-  only because that is what the operator's machine runs today.
+- Anyone on herdr older than 0.9.5. herddash targets 0.9.5 or newer, because earlier releases
+  under-report `blocked` for Codex, Antigravity, and Claude Code in named sessions. It is tested
+  against 0.8.2 only because that is what the operator's machine runs today.
 
 ### 2.3 Key User Journeys
 
@@ -126,8 +127,10 @@ read-only, so any future surface shows the same truth the Board does.
   Status yet). A display concept; Status is the recorded fact.
 - **Waiting Time** — time since the Agent entered its current Attention Class. `done` turning into
   `idle` does not reset it, since both mean awaiting a prompt. When the Daemon did not observe that
-  moment (first start, restart, resync), Waiting Time is a **lower bound** taken from the earliest
-  evidence (a backfilled or recorded Transition, else Daemon start) and is shown with `≥`.
+  moment live (first start, or a change while the Daemon was down or resynchronising), Waiting
+  Time is a **lower bound** taken from the earliest evidence (the last recorded Transition, else
+  Daemon start) and is shown with `≥`. A restart across which the Status did not change keeps
+  the exact time (FR-8).
 - **Daemon** — the herddash process: herdr client, recorder, and HTTP server in one binary. It
   runs on the Host it observes, as the same user as the Agents, because it gathers facts that
   exist only there: the herdr socket and the Agents' process environments. It gathers what the
@@ -290,7 +293,9 @@ Recorded history is intact across Daemon and herdr restarts.
 Transitions older than the configured Retention are deleted. Retention is finite by default.
 
 **Consequences (testable):**
-- With Retention set to N days, no Transition older than N days remains after the next sweep.
+- With Retention set to N days, no Transition older than N days remains after the next sweep,
+  except those an Agent still present needs. Those are the Transitions from the one that began its
+  current Attention Class onward, and its latest `working` Transition (spine AD-4).
 - Default Retention is 90 days.
 
 #### FR-9a: Backfill from the existing plugin's log
@@ -369,7 +374,8 @@ workspace and tab labels, Status, Attention Class, Waiting Time and whether it i
 Pane Title, Context Line, Host and herdr server, already ordered as the Board orders it.
 
 **Consequences (testable):**
-- The Board renders from this response alone on first load.
+- The Board renders from this response, or from the stream's first event, which has the same
+  body, alone on first load.
 - The response includes connection truth: connected or not, and last snapshot time.
 
 #### FR-13: Event stream
@@ -468,7 +474,7 @@ browser never reaches the herdr socket.
 - Attribution: FR-10, FR-11.
 - API: FR-12, FR-13, FR-14.
 - Running it: FR-15, FR-16, FR-17.
-- One Host, one operator, loopback, herdr 0.9.2 or newer with the dogfooding gate for 0.8.2
+- One Host, one operator, loopback, herdr 0.9.5 or newer with the dogfooding gate for 0.8.2
   (FR-16).
 
 ### 6.2 Out of Scope for MVP
@@ -524,8 +530,8 @@ are now FR-9a and §6.2.
    stop showing an Agent as Finished. If it is not, the shape is settled (§6.2), but the precedent
    is thin: devswha's `completions.json` was seen once, empty, and how entries are added and
    removed was not observed. Decide after two weeks of dogfooding.
-2. **One request per connection on 0.9.3.** Empirically true on 0.8.2 and consistent with 0.9.3
-   source, unverified against a 0.9.3 binary. It shapes the whole client; milestone 1
+2. **One request per connection on 0.9.x.** Empirically true on 0.8.2 and consistent with 0.9.3
+   source, unverified against a 0.9.5 binary. It shapes the whole client; milestone 1
    (addendum §J) proves it.
 3. **Profile rules for other harnesses.** Observe one Codex pane and one Antigravity pane on the
    operator's machine, record what signal each exposes (Codex is believed to use `CODEX_HOME`,

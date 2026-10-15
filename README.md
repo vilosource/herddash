@@ -23,8 +23,11 @@ herddash is deliberately narrow: a read-only notification board backed by a reco
 beside them. See [ADR-0001](docs/adr/0001-what-herddash-is.md) and
 [ADR-0003](docs/adr/0003-the-board-is-the-product.md).
 
-- [docs/prd.md](docs/prd.md) is the product definition, final as of 2026-10-14. Architecture
-  and epics come next.
+- [docs/how-herddash-works.md](docs/how-herddash-works.md) explains the design in plain
+  language: what it does, what it stores, and what it will never do.
+- [docs/prd.md](docs/prd.md) is the product definition, and the
+  [architecture spine](docs/planning/architecture/architecture-herddash-2026-10-14/ARCHITECTURE-SPINE.md)
+  the rules the build follows. Epics come next.
 - [docs/research/](docs/research/) holds frozen notes on herdr's socket API, its multi-host
   model, and hands-on evaluations of the two closest existing projects. Read them before
   writing client code.
@@ -34,8 +37,8 @@ beside them. See [ADR-0001](docs/adr/0001-what-herddash-is.md) and
 
 ## Requirements
 
-- herdr 0.9.2 or newer
-- Go 1.25 or newer, to build
+- herdr 0.9.5 or newer
+- Go 1.26 or newer, to build
 
 ## License
 
