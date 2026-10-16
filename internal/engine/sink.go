@@ -30,4 +30,9 @@ type Sink interface {
 	Transition(t Transition)
 	// Removed reports an Agent that is gone, as it last was.
 	Removed(a Agent, observedAt int64)
+	// Reconnected reports that the engine reached herdr again after losing it:
+	// herdr's version, the epoch now in force, and whether it was kept (the
+	// same herdr instance) or incremented (AD-3). It comes before the Agent,
+	// Transition and removal reports the reconnect causes.
+	Reconnected(version string, epoch uint64, kept bool, observedAt int64)
 }

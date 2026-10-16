@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -21,17 +22,23 @@ import (
 
 // fakeHerdr is a minimal herdr on a unix socket: it answers ping and
 // session.snapshot, and holds every subscription open until the client closes
-// it, except that with lifecycleLost it closes the lifecycle subscription right
-// after confirming it. No test here dials a real herdr.
+// it. restart stands in for herdr restarting. No test here dials a real herdr.
 type fakeHerdr struct {
-	path          string
-	lifecycleLost bool
-	openSubs      atomic.Int32 // subscriptions the client has not closed
-	statusSubs    atomic.Int32 // status subscriptions ever started
+	t          *testing.T
+	path       string
+	openSubs   atomic.Int32 // subscriptions the client has not closed
+	statusSubs atomic.Int32 // status subscriptions ever started
 	// push makes every open status subscription send one change to blocked,
 	// which later snapshots then report too.
 	push    chan struct{}
 	blocked atomic.Bool
+	// instance is prefixed to every terminal id; a restart changes it.
+	instance atomic.Int32
+
+	mu    sync.Mutex
+	ln    net.Listener
+	conns []net.Conn
+	wg    sync.WaitGroup
 }
 
 const fakeSnapshot = `{"type":"session_snapshot","snapshot":{"version":"0.9.5","protocol":22,` +
@@ -42,50 +49,77 @@ const fakeSnapshot = `{"type":"session_snapshot","snapshot":{"version":"0.9.5","
 	`"layouts":[],` +
 	`"agents":[{"terminal_id":"t1","agent":"claude","agent_status":"working","workspace_id":"w1","tab_id":"w1:t1","pane_id":"w1:p1","focused":true,"state_change_seq":3,"revision":0}]}}`
 
-func startFakeHerdr(t *testing.T, lifecycleLost bool) *fakeHerdr {
+func startFakeHerdr(t *testing.T) *fakeHerdr {
 	t.Helper()
 	dir, err := os.MkdirTemp("/tmp", "hd")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.RemoveAll(dir) })
-	f := &fakeHerdr{path: filepath.Join(dir, "herdr.sock"), lifecycleLost: lifecycleLost, push: make(chan struct{})}
+	f := &fakeHerdr{t: t, path: filepath.Join(dir, "herdr.sock"), push: make(chan struct{})}
+	f.listen()
+	t.Cleanup(f.shutdown)
+	return f
+}
+
+// listen starts accepting on the socket.
+func (f *fakeHerdr) listen() {
 	ln, err := net.Listen("unix", f.path)
 	if err != nil {
-		t.Fatal(err)
+		f.t.Fatal(err)
 	}
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	var conns []net.Conn
-	t.Cleanup(func() {
-		ln.Close()
-		mu.Lock()
-		for _, c := range conns {
-			c.Close()
-		}
-		mu.Unlock()
-		wg.Wait()
-	})
-	wg.Add(1)
+	f.mu.Lock()
+	f.ln = ln
+	f.mu.Unlock()
+	f.wg.Add(1)
 	go func() {
-		defer wg.Done()
+		defer f.wg.Done()
 		for {
 			conn, err := ln.Accept()
 			if err != nil {
 				return
 			}
-			mu.Lock()
-			conns = append(conns, conn)
-			mu.Unlock()
-			wg.Add(1)
+			f.mu.Lock()
+			if f.ln != ln {
+				// Accepted after shutdown began: shutdown will not see it.
+				f.mu.Unlock()
+				conn.Close()
+				return
+			}
+			f.conns = append(f.conns, conn)
+			f.mu.Unlock()
+			f.wg.Add(1)
 			go func() {
-				defer wg.Done()
+				defer f.wg.Done()
 				defer conn.Close()
-				f.serve(t, conn)
+				f.serve(f.t, conn)
 			}()
 		}
 	}()
-	return f
+}
+
+// shutdown stops listening and drops every connection, as a herdr that exits.
+func (f *fakeHerdr) shutdown() {
+	f.mu.Lock()
+	if f.ln != nil {
+		f.ln.Close()
+		f.ln = nil
+	}
+	for _, c := range f.conns {
+		c.Close()
+	}
+	f.conns = nil
+	f.mu.Unlock()
+	f.wg.Wait()
+	os.Remove(f.path)
+}
+
+// restart is herdr restarting: every connection ends, and the new instance
+// keeps the pane ids but issues new terminal ids.
+func (f *fakeHerdr) restart() {
+	f.shutdown()
+	f.instance.Add(1)
+	f.listen()
 }
 
 func (f *fakeHerdr) serve(t *testing.T, conn net.Conn) {
@@ -109,7 +143,7 @@ func (f *fakeHerdr) serve(t *testing.T, conn net.Conn) {
 	case "ping":
 		reply(`{"type":"pong","version":"0.9.5","protocol":22}`)
 	case "session.snapshot":
-		snap := fakeSnapshot
+		snap := strings.ReplaceAll(fakeSnapshot, `"terminal_id":"t`, fmt.Sprintf(`"terminal_id":"i%d-t`, f.instance.Load()))
 		if f.blocked.Load() {
 			snap = strings.ReplaceAll(snap, `"agent":"claude","agent_status":"working"`, `"agent":"claude","agent_status":"blocked"`)
 		}
@@ -117,9 +151,6 @@ func (f *fakeHerdr) serve(t *testing.T, conn net.Conn) {
 	case "events.subscribe":
 		reply(`{"type":"subscription_started"}`)
 		status := bytes.Contains(req.Params, []byte("pane.agent_status_changed"))
-		if !status && f.lifecycleLost {
-			return
-		}
 		if status {
 			f.statusSubs.Add(1)
 		}
@@ -181,7 +212,7 @@ func serveArgs(f *fakeHerdr, dataDir string) []string {
 // signalContext: serve closes its subscriptions and exits 0.
 func TestServeSignal(t *testing.T) {
 	hermeticEnv(t)
-	f := startFakeHerdr(t, false)
+	f := startFakeHerdr(t)
 	dataDir := filepath.Join(t.TempDir(), "data")
 	ctx, stop := signalContext()
 	defer stop()
@@ -190,12 +221,12 @@ func TestServeSignal(t *testing.T) {
 	done := make(chan int, 1)
 	go func() { done <- run(ctx, serveArgs(f, dataDir), &stdout, &stderr) }()
 
-	want := "agent      host=testhost pane=w1:p1 program=claude status=working"
+	want := "agent      host=testhost epoch=1 pane=w1:p1 program=claude status=working"
 	waitFor(t, "the Agent line", func() bool { return strings.Contains(stdout.String(), want) })
 	waitFor(t, "the status subscription", func() bool { return f.statusSubs.Load() >= 1 })
 	time.Sleep(200 * time.Millisecond) // let the read that follows the subscription finish
 	f.push <- struct{}{}
-	change := "transition host=testhost pane=w1:p1 program=claude status=blocked previous=working provenance=live"
+	change := "transition host=testhost epoch=1 pane=w1:p1 program=claude status=blocked previous=working provenance=live"
 	waitFor(t, "the live transition line", func() bool { return strings.Contains(stdout.String(), change) })
 	if err := syscall.Kill(os.Getpid(), syscall.SIGINT); err != nil {
 		t.Fatal(err)
@@ -237,7 +268,7 @@ func TestServeSignal(t *testing.T) {
 
 func TestServeTightensLogMode(t *testing.T) {
 	hermeticEnv(t)
-	f := startFakeHerdr(t, true)
+	f := startFakeHerdr(t)
 	dataDir := filepath.Join(t.TempDir(), "data")
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		t.Fatal(err)
@@ -250,7 +281,12 @@ func TestServeTightensLogMode(t *testing.T) {
 		t.Fatal(err)
 	}
 	var stdout, stderr syncBuffer
-	run(context.Background(), serveArgs(f, dataDir), &stdout, &stderr)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan int, 1)
+	go func() { done <- run(ctx, serveArgs(f, dataDir), &stdout, &stderr) }()
+	waitFor(t, "the Agent line", func() bool { return strings.Contains(stdout.String(), "pane=w1:p1") })
+	cancel()
+	<-done
 	fi, err := os.Stat(log)
 	if err != nil {
 		t.Fatal(err)
@@ -260,30 +296,78 @@ func TestServeTightensLogMode(t *testing.T) {
 	}
 }
 
-func TestServeLifecycleLost(t *testing.T) {
+// TestServeReconnects restarts the fake herdr under a running serve: serve
+// keeps running, prints the reconnect with the incremented epoch, and goes on
+// watching the new instance.
+func TestServeReconnects(t *testing.T) {
 	hermeticEnv(t)
-	f := startFakeHerdr(t, true)
+	f := startFakeHerdr(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	var stdout, stderr syncBuffer
-	code := run(context.Background(), serveArgs(f, filepath.Join(t.TempDir(), "data")), &stdout, &stderr)
-	if code != 1 {
-		t.Fatalf("exit code %d, want 1", code)
+	done := make(chan int, 1)
+	go func() { done <- run(ctx, serveArgs(f, filepath.Join(t.TempDir(), "data")), &stdout, &stderr) }()
+
+	agent := "agent      host=testhost epoch=1 pane=w1:p1 program=claude status=working"
+	waitFor(t, "the Agent line", func() bool { return strings.Contains(stdout.String(), agent) })
+	waitFor(t, "the status subscription", func() bool { return f.statusSubs.Load() >= 1 })
+	f.restart()
+
+	waitFor(t, "the reconnected line", func() bool {
+		return strings.Contains(stdout.String(), "reconnect  herdr=0.9.5 epoch=2 epoch_change=incremented")
+	})
+	again := "agent      host=testhost epoch=2 pane=w1:p1 program=claude status=working"
+	waitFor(t, "the Agent seen again under epoch 2", func() bool { return strings.Contains(stdout.String(), again) })
+	waitFor(t, "a status subscription to the new instance", func() bool { return f.statusSubs.Load() >= 2 })
+	select {
+	case code := <-done:
+		t.Fatalf("serve exited %d during the restart, stderr %q", code, stderr.String())
+	default:
 	}
-	if s := stderr.String(); !strings.Contains(s, "lifecycle") || !strings.Contains(s, "closed") {
-		t.Errorf("stderr %q does not name the lost lifecycle stream", s)
+	out := stdout.String()
+	r := strings.Index(out, "reconnect  ")
+	rm := strings.Index(out, "removed    host=testhost epoch=1 pane=w1:p1")
+	ag := strings.Index(out, again)
+	if r < 0 || rm < r || ag < rm {
+		t.Errorf("want the reconnect line, the removal under epoch 1, then the Agent under epoch 2:\n%s", out)
+	}
+	cancel()
+	if code := <-done; code != 0 {
+		t.Fatalf("exit code %d, stderr %q", code, stderr.String())
 	}
 }
 
 // TestNoArgumentsServes checks that "herddash" alone is serve: with no herdr
-// to reach, it fails to start, exit 1, naming the cause.
+// to reach, it sets up its data directory and log and keeps trying, until
+// stopped, exit 0.
 func TestNoArgumentsServes(t *testing.T) {
 	home := hermeticEnv(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
 	var stdout, stderr syncBuffer
-	code := run(context.Background(), nil, &stdout, &stderr)
-	if code != 1 || !strings.Contains(stderr.String(), "ping herdr") {
-		t.Fatalf("exit code %d, stderr %q; want 1 naming the failed ping", code, stderr.String())
+	code := run(ctx, nil, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code %d, stderr %q; want 0 after waiting for herdr", code, stderr.String())
 	}
-	if _, err := os.Stat(filepath.Join(home, ".local", "share", "herddash", logFileName)); err != nil {
-		t.Errorf("serve did not set up its data directory and log: %v", err)
+	b, err := os.ReadFile(filepath.Join(home, ".local", "share", "herddash", logFileName))
+	if err != nil {
+		t.Fatalf("serve did not set up its data directory and log: %v", err)
+	}
+	found := false
+	for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+		var entry map[string]any
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			t.Fatalf("log line %q is not JSON: %v", line, err)
+		}
+		if msg, _ := entry["msg"].(string); strings.Contains(msg, "herdr not reachable") {
+			found = true
+			if entry["level"] != "INFO" {
+				t.Errorf("failed attempt logged at %v, want INFO: %s", entry["level"], line)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("log does not record a failed attempt:\n%s", b)
 	}
 }
 
@@ -301,9 +385,13 @@ func TestPrinter(t *testing.T) {
 	p.Agent(engine.Agent{Key: key, AgentProgram: "claude", Status: core.StatusWorking}, at)
 	p.Transition(tr)
 	p.Removed(engine.Agent{Key: key, Status: core.StatusBlocked}, at+3000)
-	want := "2026-10-16T12:00:00.000Z agent      host=mac pane=w1:p1 program=claude status=working\n" +
-		"2026-10-16T12:00:01.500Z transition host=mac pane=w1:p1 program=claude status=blocked previous=working provenance=live\n" +
-		"2026-10-16T12:00:03.000Z removed    host=mac pane=w1:p1 program=- status=blocked\n"
+	p.Reconnected("0.9.5", 1, true, at+4000)
+	p.Reconnected("0.9.5", 2, false, at+5000)
+	want := "2026-10-16T12:00:00.000Z agent      host=mac epoch=1 pane=w1:p1 program=claude status=working\n" +
+		"2026-10-16T12:00:01.500Z transition host=mac epoch=1 pane=w1:p1 program=claude status=blocked previous=working provenance=live\n" +
+		"2026-10-16T12:00:03.000Z removed    host=mac epoch=1 pane=w1:p1 program=- status=blocked\n" +
+		"2026-10-16T12:00:04.000Z reconnect  herdr=0.9.5 epoch=1 epoch_change=kept\n" +
+		"2026-10-16T12:00:05.000Z reconnect  herdr=0.9.5 epoch=2 epoch_change=incremented\n"
 	if b.String() != want {
 		t.Errorf("printed\n%s\nwant\n%s", b.String(), want)
 	}

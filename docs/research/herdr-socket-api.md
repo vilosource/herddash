@@ -352,8 +352,9 @@ $ herdr server
   `state_change_seq` restarting from 1.
 - Agents do not survive: the restored panes run fresh shells, so the snapshot's `agents` is empty
   until herdr detects or is told about an agent again.
-- Not tested: `server.live_handoff`. Whether a handoff keeps `terminal_id`s is unknown. Story 1.6,
-  which owns epoch detection, must account for it.
+- Not tested: `server.live_handoff`. Whether a handoff keeps `terminal_id`s is unknown. Under the
+  spine's AD-3 rule (Story 1.6), a handoff that reissues `terminal_id`s starts a new epoch: it
+  splits Agents but never joins them. Untested.
 
 ### Q2. Foreground process: `pane.process_info`; only agent detection produced an event
 

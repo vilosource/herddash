@@ -20,9 +20,10 @@ const logFileName = "herddash.log"
 
 // runServe is "herddash serve [flags]", also run by "herddash" alone. It loads
 // configuration as "herddash config" does, ensures the data directory, logs
-// JSON to herddash.log there, and prints every Agent, Transition and removal to
-// stdout until ctx ends (exit 0) or the engine cannot go on (exit 1, naming the
-// cause on stderr).
+// JSON to herddash.log there, and prints every Agent, Transition, removal and
+// reconnect to stdout until ctx ends (exit 0). herdr being absent, gone or
+// restarting never ends it: the engine reconnects. Exit 1 is left for
+// configuration and data directory errors before the engine starts.
 func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("herddash serve", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -75,22 +76,18 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 		Clock:  time.Now,
 		Logger: logger,
 	})
-	if err := e.Run(ctx); err != nil {
-		logger.Error("herddash stopped", "error", err)
-		fmt.Fprintf(stderr, "herddash: %v\n", err)
-		return 1
-	}
+	e.Run(ctx)
 	logger.Info("herddash stopped")
 	return 0
 }
 
 // printer is the engine Sink that prints one line per Agent first seen, per
-// Transition and per removal. The engine calls it from one goroutine.
+// Transition, per removal and per reconnect. The engine calls it from one goroutine.
 type printer struct{ w io.Writer }
 
 func (p printer) Agent(a engine.Agent, observedAt int64) {
-	fmt.Fprintf(p.w, "%s agent      host=%s pane=%s program=%s status=%s\n",
-		stamp(observedAt), a.Key.Host, a.Key.PaneID, orDash(string(a.AgentProgram)), a.Status)
+	fmt.Fprintf(p.w, "%s agent      host=%s epoch=%d pane=%s program=%s status=%s\n",
+		stamp(observedAt), a.Key.Host, a.Key.Epoch, a.Key.PaneID, orDash(string(a.AgentProgram)), a.Status)
 }
 
 func (p printer) Transition(t engine.Transition) {
@@ -98,13 +95,21 @@ func (p printer) Transition(t engine.Transition) {
 	if !ok {
 		prev = "-"
 	}
-	fmt.Fprintf(p.w, "%s transition host=%s pane=%s program=%s status=%s previous=%s provenance=%s\n",
-		stamp(t.ObservedAt()), t.Key().Host, t.Key().PaneID, orDash(string(t.AgentProgram())), t.New(), prev, t.Provenance())
+	fmt.Fprintf(p.w, "%s transition host=%s epoch=%d pane=%s program=%s status=%s previous=%s provenance=%s\n",
+		stamp(t.ObservedAt()), t.Key().Host, t.Key().Epoch, t.Key().PaneID, orDash(string(t.AgentProgram())), t.New(), prev, t.Provenance())
 }
 
 func (p printer) Removed(a engine.Agent, observedAt int64) {
-	fmt.Fprintf(p.w, "%s removed    host=%s pane=%s program=%s status=%s\n",
-		stamp(observedAt), a.Key.Host, a.Key.PaneID, orDash(string(a.AgentProgram)), a.Status)
+	fmt.Fprintf(p.w, "%s removed    host=%s epoch=%d pane=%s program=%s status=%s\n",
+		stamp(observedAt), a.Key.Host, a.Key.Epoch, a.Key.PaneID, orDash(string(a.AgentProgram)), a.Status)
+}
+
+func (p printer) Reconnected(herdrVersion string, epoch uint64, kept bool, observedAt int64) {
+	change := "incremented"
+	if kept {
+		change = "kept"
+	}
+	fmt.Fprintf(p.w, "%s reconnect  herdr=%s epoch=%d epoch_change=%s\n", stamp(observedAt), herdrVersion, epoch, change)
 }
 
 // stamp formats UTC Unix milliseconds for a line.

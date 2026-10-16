@@ -25,3 +25,6 @@
 - source_spec: `docs/implementation/spec-1-5-watch-every-agent-s-status-live.md`
   summary: Decide whether a pane that herdr moves (new pane id, previous_pane_id) keeps its Agent identity and history, or is a removal plus a new Agent.
   evidence: AD-3 keys identity on pane id; Story 1.5 prints a move as removal plus new Agent; ids are workspace-scoped, so a cross-workspace move changes the id (socket API record).
+- source_spec: `docs/implementation/spec-1-6-reconnect-forever-and-know-when-herdr-restarted.md`
+  summary: Tell consumers when herdr is lost: serve prints nothing until it reconnects, and Engine.Agents() keeps returning the last Statuses as if current.
+  evidence: Only Sink.Reconnected exists; the spine's ConnectionTruth (connected, last_snapshot_at, gate) is the Epic 3 vehicle for this.
