@@ -118,14 +118,34 @@ Arrows are the only permitted import directions. `core` imports only the standar
   next-number counters. A server without a saved session starts empty and issues ids from `w1:p1`
   again.
 
-  **The detection rule is decided and tested in Story 1.6**, which owns epoch detection. It must
-  handle three hazards, and it must never keep an epoch on a pane-id match alone:
-  - **A fresh server reissues the same ids.** It starts at `w1:p1`, and once the operator recreates
-    as many panes, the ids match the old set. Keeping the epoch would join unrelated histories.
-  - **A pane can close while herddash is disconnected.** Treating one missing id as a fresh server
-    would increment the epoch and split every Agent, against FR-8.
-  - **Nothing persists the evidence yet.** Until milestone 2 stores it, the engine has no
-    pane-to-`terminal_id` map from before a Daemon restart to compare against.
+  The recorded `terminal_id`s are long, increasing hex values, not small counters that a new
+  instance could reissue: `term_65df2e06a79ca1` for `w1:p1` before a restart and
+  `term_65df2e18d44a41` after it. That was observed in one restart.
+
+  **The detection rule (Story 1.6).** The engine holds the epoch, starting at 1, the `terminal_id`
+  of every pane (Agent or not) in the latest snapshot it applied, and for each tracked Agent the
+  `terminal_id` it last saw. Only the first snapshot after a reconnect decides the epoch:
+  - **Same instance** when at least one pane in it has the same, non-empty `terminal_id` as last
+    seen: the epoch is kept. Tracked panes missing from it are removed as any snapshot removes
+    them, and Agents whose Status is unchanged produce nothing.
+  - **Otherwise** (no pane kept its `terminal_id`, including when none was seen): the
+    epoch increments. Every previously tracked Agent is removed under the old epoch, and the
+    snapshot's Agents are new Agents under the new one.
+
+  **Per pane, in every snapshot:** a tracked Agent whose pane id is present but whose recorded,
+  non-empty `terminal_id` differs is another Agent. It is removed (reason `terminal replaced`) and
+  the pane is reported as a new Agent, under whatever epoch is in force; the two are never joined.
+
+  How each hazard is handled; a pane-id match alone never keeps the epoch:
+  - **A fresh server reissues the same ids.** Handled: a fresh server issues new `terminal_id`s, so
+    no pane keeps its own and the epoch increments however well the ids match.
+  - **A pane can close while herddash is disconnected.** Handled: one surviving `terminal_id`, of
+    any pane including a shell, is enough to keep the epoch, so the closed pane is removed alone
+    and no other Agent is split.
+  - **Nothing persists the evidence yet.** Open: the epoch and the pane-to-`terminal_id` map live
+    only in memory, so a Daemon restart starts at epoch 1 again with nothing to compare against.
+    Milestone 2 persists both. `server.live_handoff`'s effect on `terminal_id` is untested; if it
+    reissues them, a handoff increments the epoch, which splits Agents but never joins them.
 
 ### AD-4 — The record is append-only — ADR-0005
 
@@ -369,7 +389,7 @@ The evidence is in the socket API record's "Findings against herdr 0.9.5".
 
 1. **Pane ids across a herdr restart.** They survive when herdr restores its saved session, and
    nothing names a server instance; a new one shows as new `terminal_id`s for the same pane ids.
-   AD-3 records the signals and hazards; Story 1.6 decides and tests the epoch rule.
+   AD-3 records the signals, the hazards and the epoch rule Story 1.6 decided and tested.
 2. **Foreground process.** `pane.process_info` yields it. Of the changes observed, only a
    recognised agent program produced an event, `pane.agent_detected`. AD-14 now says so.
 3. **Herdr's ordering field.** `state_change_seq`: one counter per server, on snapshot agent records

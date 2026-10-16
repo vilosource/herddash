@@ -24,16 +24,21 @@ const (
 )
 
 // fakeSub is a scripted subscription. The test pushes deliveries; Close ends
-// it and closes the delivery channel, as herdr.Subscription does.
+// it and closes the delivery channel, as herdr.Subscription does. A leaky one
+// records Close but goes on delivering until end, which stands in for a
+// message already on its way when the subscription was closed.
 type fakeSub[T any] struct {
-	in     chan herdr.Delivery[T]
-	out    chan herdr.Delivery[T]
-	closed chan struct{}
-	once   sync.Once
+	in        chan herdr.Delivery[T]
+	out       chan herdr.Delivery[T]
+	closed    chan struct{} // ends delivery
+	once      sync.Once
+	leaky     bool
+	closeSeen atomic.Bool
+	delivered atomic.Int32 // deliveries the reader has taken
 }
 
-func newFakeSub[T any]() *fakeSub[T] {
-	s := &fakeSub[T]{in: make(chan herdr.Delivery[T], 16), out: make(chan herdr.Delivery[T]), closed: make(chan struct{})}
+func newFakeSub[T any](leaky bool) *fakeSub[T] {
+	s := &fakeSub[T]{in: make(chan herdr.Delivery[T], 16), out: make(chan herdr.Delivery[T]), closed: make(chan struct{}), leaky: leaky}
 	go func() {
 		defer close(s.out)
 		for {
@@ -41,10 +46,11 @@ func newFakeSub[T any]() *fakeSub[T] {
 			case d := <-s.in:
 				select {
 				case s.out <- d:
+					s.delivered.Add(1)
 				case <-s.closed:
 					return
 				}
-				if d.Health != nil {
+				if d.Health != nil && !s.leaky {
 					return
 				}
 			case <-s.closed:
@@ -58,16 +64,27 @@ func newFakeSub[T any]() *fakeSub[T] {
 func (s *fakeSub[T]) Deliveries() <-chan herdr.Delivery[T] { return s.out }
 
 func (s *fakeSub[T]) Close() error {
-	s.once.Do(func() { close(s.closed) })
+	s.closeSeen.Store(true)
+	if !s.leaky {
+		s.end()
+	}
 	return nil
 }
 
-func (s *fakeSub[T]) isClosed() bool {
-	select {
-	case <-s.closed:
-		return true
-	default:
-		return false
+// end stops delivery, for a leaky subscription too.
+func (s *fakeSub[T]) end() { s.once.Do(func() { close(s.closed) }) }
+
+func (s *fakeSub[T]) isClosed() bool { return s.closeSeen.Load() }
+
+// awaitDelivered waits until the reader has taken n deliveries in all.
+func (s *fakeSub[T]) awaitDelivered(t *testing.T, n int32) {
+	t.Helper()
+	deadline := time.Now().Add(wait)
+	for s.delivered.Load() < n {
+		if time.Now().After(deadline) {
+			t.Fatal("delivery not taken")
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 
@@ -91,6 +108,19 @@ type fakeClient struct {
 	gated     bool
 	lifecycle *fakeSub[core.LifecycleEvent]
 	status    map[string][]*fakeSub[core.StatusEvent]
+	// fails makes the next n calls of a kind ("ping", "lifecycle",
+	// "snapshot") fail with errBoom.
+	fails map[string]int
+	// leaky makes every subscription from now on leaky.
+	leaky bool
+	// hold, when set, holds the next snapshot read, whatever its context,
+	// until the channel closes; it then returns the snapshot of that moment.
+	hold      chan struct{}
+	pingTimes []time.Time
+	ends      []func() // every subscription's end
+	// holdSub holds the next status subscribe for a pane, whatever its
+	// context, until its channel closes.
+	holdSub map[string]chan struct{}
 
 	release   chan struct{}
 	snapCalls chan struct{}
@@ -105,6 +135,7 @@ func newFakeClient(t *testing.T, snap core.Snapshot) *fakeClient {
 		snap:      snap,
 		rejected:  map[string]bool{},
 		status:    map[string][]*fakeSub[core.StatusEvent]{},
+		fails:     map[string]int{},
 		release:   make(chan struct{}),
 		snapCalls: make(chan struct{}, 1024),
 		awaited:   map[string]int{},
@@ -117,10 +148,23 @@ func (f *fakeClient) record(call string) {
 	f.mu.Unlock()
 }
 
+// failing consumes one scripted failure of kind; f.mu must be held.
+func (f *fakeClient) failing(kind string) bool {
+	if f.fails[kind] > 0 {
+		f.fails[kind]--
+		return true
+	}
+	return false
+}
+
 func (f *fakeClient) Ping(ctx context.Context) (string, error) {
 	f.record("ping")
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.pingTimes = append(f.pingTimes, time.Now())
+	if f.failing("ping") {
+		return "", errBoom
+	}
 	return "0.9.5", f.pingErr
 }
 
@@ -135,9 +179,12 @@ func (f *fakeClient) Snapshot(ctx context.Context) (core.Snapshot, error) {
 	default:
 	}
 	f.mu.Lock()
-	gated := f.gated
+	gated, hold := f.gated, f.hold
+	f.hold = nil
 	f.mu.Unlock()
-	if gated {
+	if hold != nil {
+		<-hold
+	} else if gated {
 		select {
 		case <-f.release:
 		case <-ctx.Done():
@@ -146,6 +193,9 @@ func (f *fakeClient) Snapshot(ctx context.Context) (core.Snapshot, error) {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.failing("snapshot") {
+		return core.Snapshot{}, errBoom
+	}
 	return f.snap, f.snapErr
 }
 
@@ -156,18 +206,30 @@ func (f *fakeClient) SubscribeLifecycle(ctx context.Context) (Subscription[core.
 	if f.lifeErr != nil {
 		return nil, f.lifeErr
 	}
-	f.lifecycle = newFakeSub[core.LifecycleEvent]()
+	if f.failing("lifecycle") {
+		return nil, errBoom
+	}
+	f.lifecycle = newFakeSub[core.LifecycleEvent](f.leaky)
+	f.ends = append(f.ends, f.lifecycle.end)
 	return f.lifecycle, nil
 }
 
 func (f *fakeClient) SubscribeStatus(ctx context.Context, paneID string) (Subscription[core.StatusEvent], error) {
 	f.record("status " + paneID)
 	f.mu.Lock()
+	hold := f.holdSub[paneID]
+	delete(f.holdSub, paneID)
+	f.mu.Unlock()
+	if hold != nil {
+		<-hold
+	}
+	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.rejected[paneID] {
 		return nil, fmt.Errorf("herdr: subscribe: %w", &herdr.Health{Kind: herdr.HealthRejected, Code: "pane_not_found", Message: "pane " + paneID + " not found"})
 	}
-	s := newFakeSub[core.StatusEvent]()
+	s := newFakeSub[core.StatusEvent](f.leaky)
+	f.ends = append(f.ends, s.end)
 	f.status[paneID] = append(f.status[paneID], s)
 	return s, nil
 }
@@ -177,6 +239,50 @@ func (f *fakeClient) setSnapshot(s core.Snapshot) {
 	f.mu.Lock()
 	f.snap = s
 	f.mu.Unlock()
+}
+
+// endAll stops delivery on every subscription ever made, leaky ones too.
+func (f *fakeClient) endAll() {
+	f.mu.Lock()
+	ends := slices.Clone(f.ends)
+	f.mu.Unlock()
+	for _, end := range ends {
+		end()
+	}
+}
+
+// fail makes the next n calls of kind fail.
+func (f *fakeClient) fail(kind string, n int) {
+	f.mu.Lock()
+	f.fails[kind] = n
+	f.mu.Unlock()
+}
+
+// holdNext holds the next snapshot read until the returned channel closes.
+func (f *fakeClient) holdNext() chan struct{} {
+	c := make(chan struct{})
+	f.mu.Lock()
+	f.hold = c
+	f.mu.Unlock()
+	return c
+}
+
+func (f *fakeClient) pings() []time.Time {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.pingTimes)
+}
+
+// awaitPings waits until herdr has been pinged n times in all.
+func (f *fakeClient) awaitPings(n int) {
+	f.t.Helper()
+	deadline := time.Now().Add(wait)
+	for len(f.pings()) < n {
+		if time.Now().After(deadline) {
+			f.t.Fatalf("%d pings, want %d", len(f.pings()), n)
+		}
+		time.Sleep(time.Millisecond)
+	}
 }
 
 func (f *fakeClient) setGated(g bool) {
@@ -276,23 +382,39 @@ func (f *fakeClient) awaitSubscribe(paneID string) {
 type recorder struct {
 	mu          sync.Mutex
 	lines       []string
-	times       []int64 // observed_at of each line
+	times       []int64  // observed_at of each line
+	epochs      []uint64 // the epoch of each line's key, or of a reconnect
 	transitions []core.Transition
 	notify      chan struct{}
 }
 
 func newRecorder() *recorder { return &recorder{notify: make(chan struct{}, 256)} }
 
-func (r *recorder) add(line string, observedAt int64) {
+func (r *recorder) add(line string, observedAt int64, epoch uint64) {
 	r.mu.Lock()
 	r.lines = append(r.lines, line)
 	r.times = append(r.times, observedAt)
+	r.epochs = append(r.epochs, epoch)
 	r.mu.Unlock()
 	r.notify <- struct{}{}
 }
 
 func (r *recorder) Agent(a Agent, observedAt int64) {
-	r.add(fmt.Sprintf("agent %s %s %s", a.Key.PaneID, a.AgentProgram, a.Status), observedAt)
+	r.add(fmt.Sprintf("agent %s %s %s", a.Key.PaneID, a.AgentProgram, a.Status), observedAt, a.Key.Epoch)
+}
+
+func (r *recorder) Reconnected(version string, epoch uint64, kept bool, observedAt int64) {
+	change := "incremented"
+	if kept {
+		change = "kept"
+	}
+	r.add(fmt.Sprintf("reconnected %s epoch %d %s", version, epoch, change), observedAt, epoch)
+}
+
+func (r *recorder) lineEpochs() []uint64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.epochs)
 }
 
 func (r *recorder) Transition(t core.Transition) {
@@ -300,11 +422,11 @@ func (r *recorder) Transition(t core.Transition) {
 	r.mu.Lock()
 	r.transitions = append(r.transitions, t)
 	r.mu.Unlock()
-	r.add(fmt.Sprintf("transition %s %s %s->%s %s", t.Key().PaneID, t.AgentProgram(), prev, t.New(), t.Provenance()), t.ObservedAt())
+	r.add(fmt.Sprintf("transition %s %s %s->%s %s", t.Key().PaneID, t.AgentProgram(), prev, t.New(), t.Provenance()), t.ObservedAt(), t.Key().Epoch)
 }
 
 func (r *recorder) Removed(a Agent, observedAt int64) {
-	r.add(fmt.Sprintf("removed %s", a.Key.PaneID), observedAt)
+	r.add(fmt.Sprintf("removed %s", a.Key.PaneID), observedAt, a.Key.Epoch)
 }
 
 func (r *recorder) all() []string {
@@ -365,7 +487,8 @@ type harness struct {
 	rec    *recorder
 	engine *Engine
 	cancel context.CancelFunc
-	done   chan error
+	// done closes when Run returns.
+	done chan struct{}
 }
 
 func startEngine(t *testing.T, fake *fakeClient) *harness {
@@ -373,8 +496,11 @@ func startEngine(t *testing.T, fake *fakeClient) *harness {
 	rec := newRecorder()
 	e := New(Options{Host: "mac", Server: "default", Client: fake, Sink: rec, Clock: testClock()})
 	ctx, cancel := context.WithCancel(context.Background())
-	h := &harness{t: t, fake: fake, rec: rec, engine: e, cancel: cancel, done: make(chan error, 1)}
-	go func() { h.done <- e.Run(ctx) }()
+	h := &harness{t: t, fake: fake, rec: rec, engine: e, cancel: cancel, done: make(chan struct{})}
+	go func() {
+		e.Run(ctx)
+		close(h.done)
+	}()
 	t.Cleanup(func() {
 		cancel()
 		select {
@@ -386,23 +512,24 @@ func startEngine(t *testing.T, fake *fakeClient) *harness {
 	return h
 }
 
-// stop cancels the engine and returns Run's result.
-func (h *harness) stop() error {
+// stop cancels the engine and waits for Run to return.
+func (h *harness) stop() {
 	h.t.Helper()
 	h.cancel()
-	return h.result()
-}
-
-// result waits for Run to return.
-func (h *harness) result() error {
-	h.t.Helper()
 	select {
-	case err := <-h.done:
-		h.done <- err // for Cleanup
-		return err
+	case <-h.done:
 	case <-time.After(wait):
 		h.t.Fatal("engine did not stop")
-		return nil
+	}
+}
+
+// running fails the test if Run has returned.
+func (h *harness) running() {
+	h.t.Helper()
+	select {
+	case <-h.done:
+		h.t.Fatal("engine stopped")
+	default:
 	}
 }
 
@@ -449,10 +576,13 @@ func (h *harness) lifecycle(ev core.LifecycleEvent) {
 
 var errBoom = errors.New("boom")
 
-// TestMain removes the snapshot floor and shortens the retry delay, so tests
-// run fast; tests of either set their own value before starting an engine.
+// TestMain removes the snapshot floor and shortens the retry and reconnect
+// delays, so tests run fast; tests of any set their own value before starting
+// an engine.
 func TestMain(m *testing.M) {
 	snapshotMinInterval = 0
 	snapshotRetryDelay = 10 * time.Millisecond
+	reconnectInitialDelay = 5 * time.Millisecond
+	reconnectMaxDelay = 50 * time.Millisecond
 	os.Exit(m.Run())
 }
