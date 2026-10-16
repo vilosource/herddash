@@ -3,7 +3,7 @@
 A dashboard for [herdr](https://herdr.dev), the terminal workspace manager for AI coding agents.
 The question it answers: what is every agent doing, and which ones are waiting on me?
 
-**Nothing is built yet. Do not start writing code — see "What blocks the build" below.**
+**Planning is complete; the build runs story by story. See "How the build runs" below.**
 
 herddash is a **notification board backed by a recorder**: one read-only page with one box per
 agent, longest-waiting first, plus a daemon that persists every agent status transition with the
@@ -29,11 +29,18 @@ The `docs/research/` files are **frozen records**, dated and written against spe
 one turns out to be wrong, fix the code and amend the record in the same change rather than leaving
 them to disagree.
 
-## What blocks the build
+## How the build runs
 
-**The PRD and the architecture are final, but there are no epics and no sprint plan yet.**
-ADR-0002 fixes the order: epics and stories with `/bmad-create-epics-and-stories`, then sprint
-planning. Until those exist there is nothing agreed to build from, so do not start code.
+**Planning is complete.** The PRD, the architecture and the 27 stories in
+`docs/planning/epics.md` are final, and `docs/implementation/sprint-status.yaml` tracks them.
+Build one story at a time with `/bmad-build`, in the order the tracking file lists, starting with
+Story 1.1. Do not write code that no story asks for.
+
+The tracking file's `action_items` name the operator checkpoints:
+- **Story 1.3** needs an isolated herdr 0.9.5, never the live 0.8.2 server.
+- **Story 2.6** needs a sample of the plugin log.
+- **Story 3.6's design** needs approval before Story 3.7.
+- **Story 4.3** needs a day of dogfooding before release-please PR #2 is merged.
 
 The architecture spine at
 `docs/planning/architecture/architecture-herddash-2026-10-14/ARCHITECTURE-SPINE.md` is binding on
