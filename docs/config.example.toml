@@ -1,0 +1,98 @@
+# herddash configuration example.
+#
+# herddash reads one TOML file at start and never reloads it; restart to apply a
+# change. The default location is ~/.config/herddash/config.toml, and running
+# without that file is fine. Every key below has a default except session,
+# socket_path and server, which are optional (the socket and Server are then
+# derived as described below), and the Profile Map, which is empty unless
+# configured. A path given with --config must exist.
+#
+# Command-line flags beat this file, and this file beats the defaults. Unknown
+# keys and invalid values are errors that name the key, and herddash exits
+# before doing anything else. `herddash config` prints the effective
+# configuration as JSON.
+#
+# Paths may start with ~/ for the home directory. Otherwise they must be
+# absolute, because herddash runs under launchd or systemd.
+
+# This Host's name, used in every Agent's identity and in API paths.
+# Default: the OS hostname, up to its first dot.        Flag: --host
+# host = "workstation"
+
+# --- Which herdr server to observe ------------------------------------------
+#
+# The socket is found in this order, as herdr itself does:
+#   1. socket_path (or --socket)
+#   2. session (or --session): ~/.config/herdr/sessions/<name>/herdr.sock
+#   3. the HERDR_SOCKET_PATH environment variable
+#   4. the HERDR_SESSION environment variable, as for session
+#   5. ~/.config/herdr/herdr.sock
+#
+# The first that is set wins, so socket_path beats session even when session
+# comes from a flag. A service unit should set neither environment variable.
+
+# A named herdr session.                                Flag: --session
+# session = "work"
+
+# An explicit socket path.                              Flag: --socket
+# socket_path = "~/.config/herdr/sessions/work/herdr.sock"
+
+# This herdr server's name, part of every Agent's identity. It is derived from
+# the socket: "default" for ~/.config/herdr/herdr.sock and <name> for
+# ~/.config/herdr/sessions/<name>/herdr.sock. Any other socket path needs it
+# set. When set, it always wins.                        Flag: --server
+# server = "default"
+
+# --- Serving -----------------------------------------------------------------
+
+# Address for the Board and the read-only API. Only loopback addresses
+# (127.0.0.0/8, ::1, localhost) are accepted, because authentication does not
+# exist yet.                                            Flag: --bind
+# bind = "127.0.0.1:7318"
+
+# --- Storage -----------------------------------------------------------------
+
+# Data directory, created owner-only (0700).
+# Default: $XDG_DATA_HOME/herddash, else ~/.local/share/herddash.
+#                                                       Flag: --data-dir
+# data_dir = "~/.local/share/herddash"
+
+# Database file. Default: <data_dir>/herddash.db.       Flag: --database
+# database = "~/.local/share/herddash/herddash.db"
+
+# Days of history kept. Must be at least 1. Default: 90.
+#                                                       Flag: --retention-days
+# retention_days = 90
+
+# --- herdr version gate ------------------------------------------------------
+
+# herdr older than the supported minimum is refused: nothing is recorded. Set
+# this to record anyway, with a warning, while dogfooding against an older
+# herdr. Default: false.                                Flag: --allow-unsupported-herdr
+# allow_unsupported_herdr = false
+
+# --- Profile Map -------------------------------------------------------------
+#
+# One table per Agent Program, as herdr names it, saying how to tell which
+# Profile (account) an Agent runs under. The only rule type is "env": read one
+# environment variable from the Agent's process.
+#
+#   rule      "env"
+#   variable  the environment variable to read
+#   absent    the Profile when the variable is unset
+#   values    variable value -> Profile name; a leading ~/ is expanded
+#
+# A variable that is set but matches no value resolves to "unresolved". An
+# Agent Program with no table here is shown by its program name.
+
+# Claude Code: the account is chosen by CLAUDE_CONFIG_DIR. Unset means the
+# default ~/.claude account.
+[profiles.claude]
+rule = "env"
+variable = "CLAUDE_CONFIG_DIR"
+absent = "claude"
+
+[profiles.claude.values]
+# Uncomment and adapt, one line per wrapper that sets CLAUDE_CONFIG_DIR:
+# "~/.claude-cldp" = "cldp"
+# "~/.claude-cldw" = "cldw"
