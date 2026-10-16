@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -21,13 +22,14 @@ func TestRun(t *testing.T) {
 		{name: "version", args: []string{"version"}, wantCode: 0, wantStdout: "herddash dev ("},
 		{name: "version with extra argument", args: []string{"version", "extra"}, wantCode: 2, wantStderr: "usage: herddash"},
 		{name: "unknown command", args: []string{"frobnicate"}, wantCode: 2, wantStderr: "usage: herddash"},
-		{name: "no command", args: nil, wantCode: 2, wantStderr: "usage: herddash"},
+		{name: "unknown serve flag", args: []string{"serve", "--colour"}, wantCode: 2, wantStderr: "colour"},
+		{name: "serve with extra argument", args: []string{"serve", "extra"}, wantCode: 2, wantStderr: "no arguments"},
 		{name: "help", args: []string{"--help"}, wantCode: 0, wantStdout: "usage: herddash"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
-			code := run(tc.args, &stdout, &stderr)
+			code := run(context.Background(), tc.args, &stdout, &stderr)
 			if code != tc.wantCode {
 				t.Fatalf("exit code = %d, want %d", code, tc.wantCode)
 			}
@@ -98,7 +100,7 @@ func TestConfigExampleAcceptance(t *testing.T) {
 		t.Fatal(err)
 	}
 	var stdout, stderr bytes.Buffer
-	if code := run([]string{"config", "--config", path}, &stdout, &stderr); code != 0 {
+	if code := run(context.Background(), []string{"config", "--config", path}, &stdout, &stderr); code != 0 {
 		t.Fatalf("exit code = %d, stderr = %q", code, stderr.String())
 	}
 	var got struct {
@@ -163,7 +165,7 @@ func TestConfigSubcommand(t *testing.T) {
 			}
 			args = append(args, tc.args...)
 			var stdout, stderr bytes.Buffer
-			code := run(args, &stdout, &stderr)
+			code := run(context.Background(), args, &stdout, &stderr)
 			if code != tc.wantCode {
 				t.Fatalf("exit code = %d, want %d; stderr = %q", code, tc.wantCode, stderr.String())
 			}
@@ -185,7 +187,7 @@ func TestConfigFlagsReachJSON(t *testing.T) {
 	dataDir := filepath.Join(t.TempDir(), "data")
 	database := filepath.Join(t.TempDir(), "h.db")
 	var stdout, stderr bytes.Buffer
-	code := run([]string{"config",
+	code := run(context.Background(), []string{"config",
 		"--host", "flaghost",
 		"--server", "flagserver",
 		"--data-dir", dataDir,

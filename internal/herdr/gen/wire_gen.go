@@ -440,6 +440,21 @@ type SubscriptionPaneMoved struct {
 	Type SubscriptionType `json:"type"`
 }
 
+// SubscriptionPaneUpdated is the variant of Subscription whose type is "pane.updated".
+type SubscriptionPaneUpdated struct {
+	Type SubscriptionType `json:"type"`
+}
+
+// SubscriptionTabMoved is the variant of Subscription whose type is "tab.moved".
+type SubscriptionTabMoved struct {
+	Type SubscriptionType `json:"type"`
+}
+
+// SubscriptionTabRenamed is the variant of Subscription whose type is "tab.renamed".
+type SubscriptionTabRenamed struct {
+	Type SubscriptionType `json:"type"`
+}
+
 // SubscriptionType is the "type" discriminator of Subscription. Only the values herddash generates are listed.
 type SubscriptionType string
 
@@ -451,7 +466,28 @@ const (
 	SubscriptionTypePaneCreated            SubscriptionType = "pane.created"
 	SubscriptionTypePaneExited             SubscriptionType = "pane.exited"
 	SubscriptionTypePaneMoved              SubscriptionType = "pane.moved"
+	SubscriptionTypePaneUpdated            SubscriptionType = "pane.updated"
+	SubscriptionTypeTabMoved               SubscriptionType = "tab.moved"
+	SubscriptionTypeTabRenamed             SubscriptionType = "tab.renamed"
+	SubscriptionTypeWorkspaceMoved         SubscriptionType = "workspace.moved"
+	SubscriptionTypeWorkspaceRenamed       SubscriptionType = "workspace.renamed"
+	SubscriptionTypeWorkspaceReordered     SubscriptionType = "workspace.reordered"
 )
+
+// SubscriptionWorkspaceMoved is the variant of Subscription whose type is "workspace.moved".
+type SubscriptionWorkspaceMoved struct {
+	Type SubscriptionType `json:"type"`
+}
+
+// SubscriptionWorkspaceRenamed is the variant of Subscription whose type is "workspace.renamed".
+type SubscriptionWorkspaceRenamed struct {
+	Type SubscriptionType `json:"type"`
+}
+
+// SubscriptionWorkspaceReordered is the variant of Subscription whose type is "workspace.reordered".
+type SubscriptionWorkspaceReordered struct {
+	Type SubscriptionType `json:"type"`
+}
 
 // SuccessResponse is generated from herdr's API schema.
 type SuccessResponse struct {

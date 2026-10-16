@@ -33,8 +33,30 @@ type PaneObservation struct {
 	TerminalID  string
 	WorkspaceID string
 	TabID       string
+	// Context is what the snapshot said about where the pane lives and what it
+	// is titled. The engine tracks it and refreshes it with every snapshot.
+	Context PaneContext
 	// Agent is set only when herdr reports an agent in this pane.
 	Agent *AgentObservation
+}
+
+// PaneContext is a pane's tracked context: the facts a Box shows beside the
+// Status, and the workspace order the Board sorts by. Every field is "" or 0
+// when herdr did not report it.
+type PaneContext struct {
+	// ProjectDir is the pane's foreground process's working directory, else the
+	// pane's own.
+	ProjectDir string
+	// WorkspaceLabel and TabLabel are the labels of the workspace and tab the
+	// pane lives in.
+	WorkspaceLabel string
+	TabLabel       string
+	// WorkspacePosition is the 1-based position of the pane's workspace in
+	// herdr's workspace order; 0 when the snapshot did not list the workspace.
+	WorkspacePosition int
+	// PaneTitle is the one-line label the Agent Program set on its pane, which
+	// herdr reports as the pane's terminal title. Log it only at debug level.
+	PaneTitle string
 }
 
 // AgentObservation is the agent herdr reports in a pane.
@@ -62,12 +84,17 @@ const (
 	// LifecycleAgentReleased is herdr reporting that the agent in a pane is gone
 	// (an agent-detected event marked released).
 	LifecycleAgentReleased LifecycleKind = "agent_released"
+	// LifecycleContextChanged is herdr reporting that a workspace or tab was
+	// renamed, moved or reordered, or that a pane was updated. It carries no
+	// detail: it is only a signal that tracked context may be stale.
+	LifecycleContextChanged LifecycleKind = "context_changed"
 )
 
 // Valid reports whether k is one of the lifecycle kinds.
 func (k LifecycleKind) Valid() bool {
 	switch k {
-	case LifecycleCreated, LifecycleClosed, LifecycleMoved, LifecycleExited, LifecycleAgentDetected, LifecycleAgentReleased:
+	case LifecycleCreated, LifecycleClosed, LifecycleMoved, LifecycleExited, LifecycleAgentDetected, LifecycleAgentReleased,
+		LifecycleContextChanged:
 		return true
 	}
 	return false
@@ -75,7 +102,9 @@ func (k LifecycleKind) Valid() bool {
 
 // LifecycleEvent is one pane lifecycle event, as herdr delivered it live.
 type LifecycleEvent struct {
-	Kind   LifecycleKind
+	Kind LifecycleKind
+	// PaneID is the pane the event is about; "" for a context change, which is
+	// not about one pane.
 	PaneID string
 	// PreviousPaneID is the pane's id before a move; "" for every other kind.
 	PreviousPaneID string

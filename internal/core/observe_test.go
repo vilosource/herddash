@@ -13,6 +13,8 @@ func TestLifecycleKindValid(t *testing.T) {
 		{LifecycleExited, true},
 		{LifecycleAgentDetected, true},
 		{LifecycleAgentReleased, true},
+		{LifecycleContextChanged, true},
+		{"workspace_renamed", false},
 		{"", false},
 		{"pane_created", false},
 		{"focused", false},
@@ -29,7 +31,7 @@ func TestSnapshotPane(t *testing.T) {
 	s := Snapshot{
 		HerdrVersion: "0.9.5",
 		Panes: []PaneObservation{
-			{PaneID: "w1:p1", TerminalID: "term_a", Agent: &AgentObservation{AgentProgram: "claude", Status: StatusWorking, StateChangeSeq: &seq}},
+			{PaneID: "w1:p1", TerminalID: "term_a", Context: PaneContext{ProjectDir: "/src/x", WorkspaceLabel: "probe", TabLabel: "1", WorkspacePosition: 1, PaneTitle: "fix-tests"}, Agent: &AgentObservation{AgentProgram: "claude", Status: StatusWorking, StateChangeSeq: &seq}},
 			{PaneID: "w1:p3", TerminalID: "term_b"},
 		},
 	}
@@ -46,7 +48,7 @@ func TestSnapshotPane(t *testing.T) {
 	}
 	for _, tt := range tests {
 		p, ok := s.Pane(tt.id)
-		if ok != tt.found || p.TerminalID != tt.terminal || (p.Agent != nil) != tt.agent {
+		if ok != tt.found || p.TerminalID != tt.terminal || (p.Agent != nil) != tt.agent || (tt.agent && p.Context.PaneTitle != "fix-tests") {
 			t.Errorf("Pane(%q) = %+v, %v", tt.id, p, ok)
 		}
 	}

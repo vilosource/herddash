@@ -98,7 +98,16 @@ func TestSubscribeLifecycle(t *testing.T) {
 	detectedFinal := `{"event":"pane_agent_detected","data":{"type":"pane_agent_detected","pane_id":"w1:p1","workspace_id":"w1","agent":"claude","released":false,"final_status":"working"}}`
 	released := `{"event":"pane_agent_detected","data":{"type":"pane_agent_detected","pane_id":"w1:p1","workspace_id":"w1","agent":"claude","released":true,"final_status":"idle"}}`
 
-	s, requests := streamFake(t, false, created, moved, detected, closed, exited, detectedFinal, released)
+	contextLines := []string{
+		`{"event":"workspace_renamed","data":{"type":"workspace_renamed","workspace_id":"w1","label":"renamed"}}`,
+		`{"event":"workspace_moved","data":{"type":"workspace_moved","workspace_id":"w1","insert_index":1,"workspaces":[]}}`,
+		`{"event":"workspace_reordered","data":{"type":"workspace_reordered","workspace_ids":["w2","w1"],"workspaces":[]}}`,
+		`{"event":"tab_renamed","data":{"type":"tab_renamed","tab_id":"w1:t1","workspace_id":"w1","label":"main"}}`,
+		`{"event":"tab_moved","data":{"type":"tab_moved","tab_id":"w1:t1","workspace_id":"w1","insert_index":0,"tabs":[]}}`,
+		`{"event":"pane_updated","data":{"type":"pane_updated","pane":{"pane_id":"w1:p1","terminal_id":"term_x","workspace_id":"w1","tab_id":"w1:t1","focused":false,"agent_status":"idle","revision":1}}}`,
+	}
+	lines := append([]string{created, moved, detected, closed, exited, detectedFinal, released}, contextLines...)
+	s, requests := streamFake(t, false, lines...)
 	sub, err := s.client().SubscribeLifecycle(testContext(t))
 	if err != nil {
 		t.Fatal(err)
@@ -113,7 +122,8 @@ func TestSubscribeLifecycle(t *testing.T) {
 		}
 		types = append(types, r.Type)
 	}
-	wantTypes := []string{"pane.created", "pane.closed", "pane.moved", "pane.exited", "pane.agent_detected"}
+	wantTypes := []string{"pane.created", "pane.closed", "pane.moved", "pane.exited", "pane.agent_detected",
+		"workspace.renamed", "workspace.moved", "workspace.reordered", "tab.renamed", "tab.moved", "pane.updated"}
 	if !reflect.DeepEqual(types, wantTypes) {
 		t.Errorf("subscribed %v, want %v", types, wantTypes)
 	}
@@ -127,6 +137,9 @@ func TestSubscribeLifecycle(t *testing.T) {
 		{Kind: core.LifecycleExited, PaneID: "w1:p1"},
 		{Kind: core.LifecycleAgentDetected, PaneID: "w1:p1", AgentProgram: "claude", FinalStatus: core.StatusWorking},
 		{Kind: core.LifecycleAgentReleased, PaneID: "w1:p1", AgentProgram: "claude", FinalStatus: core.StatusIdle},
+	}
+	for range contextLines {
+		want = append(want, core.LifecycleEvent{Kind: core.LifecycleContextChanged})
 	}
 	if !reflect.DeepEqual(events, want) {
 		t.Errorf("events\n got %+v\nwant %+v", events, want)
