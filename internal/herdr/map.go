@@ -18,9 +18,37 @@ import (
 // to the pane record's agent and Status, with no state_change_seq. An agent
 // record whose pane is missing from the pane list is kept as a pane of its own
 // rather than dropped.
+//
+// Each pane's context comes from its pane record, falling back to its agent
+// record field by field, plus the labels of its workspace and tab and the
+// workspace's position in the snapshot's workspace list, which is herdr's order.
 func mapSnapshot(s gen.SessionSnapshot) core.Snapshot {
+	type workspace struct {
+		label    string
+		position int
+	}
+	workspaces := make(map[string]workspace, len(s.Workspaces))
+	for i, w := range s.Workspaces {
+		workspaces[w.WorkspaceID] = workspace{label: w.Label, position: i + 1}
+	}
+	tabs := make(map[string]string, len(s.Tabs))
+	for _, t := range s.Tabs {
+		tabs[t.TabID] = t.Label
+	}
+	paneContext := func(workspaceID, tabID, projectDir, paneTitle string) core.PaneContext {
+		w := workspaces[workspaceID]
+		return core.PaneContext{
+			ProjectDir:        projectDir,
+			WorkspaceLabel:    w.label,
+			TabLabel:          tabs[tabID],
+			WorkspacePosition: w.position,
+			PaneTitle:         paneTitle,
+		}
+	}
+	agentRecords := make(map[string]gen.AgentInfo, len(s.Agents))
 	agents := make(map[string]*core.AgentObservation, len(s.Agents))
 	for _, a := range s.Agents {
+		agentRecords[a.PaneID] = a
 		agents[a.PaneID] = &core.AgentObservation{
 			AgentProgram:   program(a.Agent),
 			Status:         core.Status(a.AgentStatus),
@@ -35,12 +63,16 @@ func mapSnapshot(s gen.SessionSnapshot) core.Snapshot {
 		if agent == nil && p.Agent != nil {
 			agent = &core.AgentObservation{AgentProgram: program(p.Agent), Status: core.Status(p.AgentStatus)}
 		}
+		a := agentRecords[p.PaneID] // the zero value when there is none
 		out.Panes = append(out.Panes, core.PaneObservation{
 			PaneID:      p.PaneID,
 			TerminalID:  p.TerminalID,
 			WorkspaceID: p.WorkspaceID,
 			TabID:       p.TabID,
-			Agent:       agent,
+			Context: paneContext(p.WorkspaceID, p.TabID,
+				first(p.ForegroundCWD, a.ForegroundCWD, p.CWD, a.CWD),
+				first(p.TerminalTitleStripped, a.TerminalTitleStripped, p.TerminalTitle, a.TerminalTitle)),
+			Agent: agent,
 		})
 	}
 	for _, a := range s.Agents {
@@ -53,7 +85,9 @@ func mapSnapshot(s gen.SessionSnapshot) core.Snapshot {
 			TerminalID:  a.TerminalID,
 			WorkspaceID: a.WorkspaceID,
 			TabID:       a.TabID,
-			Agent:       agents[a.PaneID],
+			Context: paneContext(a.WorkspaceID, a.TabID,
+				first(a.ForegroundCWD, a.CWD), first(a.TerminalTitleStripped, a.TerminalTitle)),
+			Agent: agents[a.PaneID],
 		})
 	}
 	return out
@@ -135,6 +169,11 @@ func decodeLifecycle(line []byte) (core.LifecycleEvent, error) {
 			e.FinalStatus = core.Status(*d.FinalStatus)
 		}
 		return lifecycle(e)
+	case gen.EventKindWorkspaceRenamed, gen.EventKindWorkspaceMoved, gen.EventKindWorkspaceReordered,
+		gen.EventKindTabRenamed, gen.EventKindTabMoved, gen.EventKindPaneUpdated:
+		// Only a signal to read again: the snapshot is the truth for context, so
+		// the payload is not decoded.
+		return core.LifecycleEvent{Kind: core.LifecycleContextChanged}, nil
 	}
 	return core.LifecycleEvent{}, fmt.Errorf("%w: lifecycle event %q", errUnexpectedEvent, env.Event)
 }
@@ -172,6 +211,16 @@ func decodeStatus(line []byte) (core.StatusEvent, error) {
 		return core.StatusEvent{}, fmt.Errorf("%w: status event has no pane id", errUnexpectedEvent)
 	}
 	return core.StatusEvent{PaneID: d.PaneID, Status: core.Status(d.AgentStatus), AgentProgram: program(d.Agent)}, nil
+}
+
+// first returns the first non-empty string among ps, or "".
+func first(ps ...*string) string {
+	for _, p := range ps {
+		if p != nil && *p != "" {
+			return *p
+		}
+	}
+	return ""
 }
 
 func program(p *string) core.AgentProgram {

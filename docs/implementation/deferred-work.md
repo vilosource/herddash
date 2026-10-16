@@ -19,3 +19,9 @@
 - source_spec: `docs/implementation/spec-1-3-milestone-1-findings-against-a-herdr-0-9-5-binary.md`
   summary: Story 1.5 should decide whether core.NewTransition rejects a HerdrOrder on a live or backfill Transition.
   evidence: Finding Q3 makes state_change_seq snapshot-only and per server instance; the field comment says nil for live but nothing enforces it, and enforcing adds a public sentinel to core.
+- source_spec: `docs/implementation/spec-1-5-watch-every-agent-s-status-live.md`
+  summary: Bound the snapshot → subscribe → reject loop when herdr keeps listing a pane it refuses to subscribe (Story 1.7's minimum resync interval).
+  evidence: onSubscribed on a known pane requests a snapshot and apply resubscribes at once; nothing limits the rate if the rejection persists.
+- source_spec: `docs/implementation/spec-1-5-watch-every-agent-s-status-live.md`
+  summary: Decide whether a pane that herdr moves (new pane id, previous_pane_id) keeps its Agent identity and history, or is a removal plus a new Agent.
+  evidence: AD-3 keys identity on pane id; Story 1.5 prints a move as removal plus new Agent; ids are workspace-scoped, so a cross-workspace move changes the id (socket API record).

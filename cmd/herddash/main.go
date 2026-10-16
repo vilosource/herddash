@@ -1,14 +1,17 @@
 // Command herddash records every herdr agent status transition and serves a
-// read-only view of them. So far it has the version and config subcommands.
+// read-only view of them. So far it has the serve, config and version
+// subcommands; serve prints every Agent and Status change to stdout.
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"runtime/debug"
 	"syscall"
 
@@ -21,13 +24,14 @@ var (
 	commit  = ""
 )
 
-const usage = `usage: herddash <command>
+const usage = `usage: herddash [command]
 
 commands:
+  serve     watch every agent's status and print each change (the default)
   config    print the effective configuration as JSON
   version   print the version and commit
 
-Run "herddash config -h" for the configuration flags.
+Run "herddash serve -h" or "herddash config -h" for the configuration flags.
 `
 
 func main() {
@@ -35,15 +39,29 @@ func main() {
 	// and the database, its WAL and SHM files, the lock and the log are 0600.
 	// Set here rather than in run, so tests do not change the test process.
 	syscall.Umask(0o077)
-	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+	ctx, stop := signalContext()
+	code := run(ctx, os.Args[1:], os.Stdout, os.Stderr)
+	stop()
+	os.Exit(code)
 }
 
-func run(args []string, stdout, stderr io.Writer) int {
+// signalContext returns a context that ends on SIGINT or SIGTERM, which is how
+// serve is asked to stop cleanly. Once it has ended, default signal handling
+// is restored, so a second Ctrl-C force-quits a shutdown that hangs.
+func signalContext() (context.Context, context.CancelFunc) {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	context.AfterFunc(ctx, stop)
+	return ctx, stop
+}
+
+// run dispatches a command line. ctx ending asks a running serve to stop.
+func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprint(stderr, usage)
-		return 2
+		return runServe(ctx, nil, stdout, stderr)
 	}
 	switch args[0] {
+	case "serve":
+		return runServe(ctx, args[1:], stdout, stderr)
 	case "version":
 		if len(args) > 1 {
 			fmt.Fprintf(stderr, "herddash: version takes no arguments\n\n%s", usage)

@@ -115,6 +115,16 @@ func TestSnapshot(t *testing.T) {
 			t.Errorf("%s has agent %+v, want none", p.PaneID, p.Agent)
 		}
 	}
+	wantContext := []core.PaneContext{
+		{ProjectDir: "/private/tmp/hd13", WorkspaceLabel: "probe", TabLabel: "1", WorkspacePosition: 1},
+		{ProjectDir: "/private/tmp/hd13", WorkspaceLabel: "probe", TabLabel: "1", WorkspacePosition: 1},
+		{ProjectDir: "/private/tmp", WorkspaceLabel: "second", TabLabel: "1", WorkspacePosition: 2},
+	}
+	for i, w := range wantContext {
+		if got := snap.Panes[i].Context; got != w {
+			t.Errorf("pane %d context = %+v, want %+v", i, got, w)
+		}
+	}
 }
 
 func TestForegroundProcess(t *testing.T) {
@@ -366,6 +376,42 @@ func TestMapSnapshot(t *testing.T) {
 			},
 		},
 	}
+	tests = append(tests, struct {
+		name string
+		in   gen.SessionSnapshot
+		want []core.PaneObservation
+	}{
+		name: "tracked context",
+		in: gen.SessionSnapshot{
+			// herdr's order is the list's order, not the workspace number.
+			Workspaces: []gen.WorkspaceInfo{{WorkspaceID: "w2", Label: "second", Number: 2}, {WorkspaceID: "w1", Label: "first", Number: 1}},
+			Tabs:       []gen.TabInfo{{TabID: "w1:t1", WorkspaceID: "w1", Label: "main"}, {TabID: "w2:t1", WorkspaceID: "w2", Label: "aux"}},
+			Panes: []gen.PaneInfo{
+				// foreground_cwd wins over cwd; the stripped terminal title wins.
+				{PaneID: "w1:p1", WorkspaceID: "w1", TabID: "w1:t1", CWD: str("/home/a"), ForegroundCWD: str("/src/a"),
+					TerminalTitle: str("\x1b[1mfix\x1b[0m"), TerminalTitleStripped: str("fix"), Title: str("not this")},
+				// no foreground_cwd: cwd; the pane record has no title, the agent record does.
+				{PaneID: "w2:p1", WorkspaceID: "w2", TabID: "w2:t1", CWD: str("/home/b"), Agent: str("claude"), AgentStatus: "idle"},
+				// unknown workspace and tab, empty strings ignored.
+				{PaneID: "w9:p1", WorkspaceID: "w9", TabID: "w9:t1", ForegroundCWD: str(""), CWD: str("/c")},
+			},
+			Agents: []gen.AgentInfo{
+				{PaneID: "w2:p1", WorkspaceID: "w2", TabID: "w2:t1", Agent: str("claude"), AgentStatus: "idle", TerminalTitle: str("session")},
+				{PaneID: "w3:p1", WorkspaceID: "w2", TabID: "w2:t1", Agent: str("codex"), AgentStatus: "working", ForegroundCWD: str("/d")},
+			},
+		},
+		want: []core.PaneObservation{
+			{PaneID: "w1:p1", WorkspaceID: "w1", TabID: "w1:t1",
+				Context: core.PaneContext{ProjectDir: "/src/a", WorkspaceLabel: "first", TabLabel: "main", WorkspacePosition: 2, PaneTitle: "fix"}},
+			{PaneID: "w2:p1", WorkspaceID: "w2", TabID: "w2:t1",
+				Context: core.PaneContext{ProjectDir: "/home/b", WorkspaceLabel: "second", TabLabel: "aux", WorkspacePosition: 1, PaneTitle: "session"},
+				Agent:   &core.AgentObservation{AgentProgram: "claude", Status: core.StatusIdle}},
+			{PaneID: "w9:p1", WorkspaceID: "w9", TabID: "w9:t1", Context: core.PaneContext{ProjectDir: "/c"}},
+			{PaneID: "w3:p1", WorkspaceID: "w2", TabID: "w2:t1",
+				Context: core.PaneContext{ProjectDir: "/d", WorkspaceLabel: "second", TabLabel: "aux", WorkspacePosition: 1},
+				Agent:   &core.AgentObservation{AgentProgram: "codex", Status: core.StatusWorking}},
+		},
+	})
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := mapSnapshot(tt.in).Panes

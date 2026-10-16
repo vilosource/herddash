@@ -48,7 +48,8 @@ type root struct {
 // method and no pane-output method or subscription (AD-5); forbidden enforces it.
 var roots = []root{
 	{section: "request", variants: []string{"ping", "session.snapshot", "events.subscribe", "pane.process_info"}},
-	{section: "request", def: "Subscription", variants: []string{"pane.created", "pane.closed", "pane.moved", "pane.exited", "pane.agent_detected", "pane.agent_status_changed"}},
+	{section: "request", def: "Subscription", variants: []string{"pane.created", "pane.closed", "pane.moved", "pane.exited", "pane.agent_detected", "pane.agent_status_changed",
+		"workspace.renamed", "workspace.moved", "workspace.reordered", "tab.renamed", "tab.moved", "pane.updated"}},
 	{section: "success_response"},
 	{section: "success_response", def: "ResponseResult", variants: []string{"pong", "session_snapshot", "subscription_started", "pane_process_info"}},
 	{section: "error_response"},

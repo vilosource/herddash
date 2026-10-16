@@ -103,19 +103,28 @@ func (s *Subscription[T]) Close() error {
 	return err
 }
 
-// lifecycleSubscriptions are the global pane lifecycle kinds herddash follows,
-// each as its own generated variant.
+// lifecycleSubscriptions are the global kinds herddash follows, each as its own
+// generated variant: the pane lifecycle kinds, then the six kinds that only
+// signal that tracked context may be stale.
 var lifecycleSubscriptions = []any{
 	gen.SubscriptionPaneCreated{Type: gen.SubscriptionTypePaneCreated},
 	gen.SubscriptionPaneClosed{Type: gen.SubscriptionTypePaneClosed},
 	gen.SubscriptionPaneMoved{Type: gen.SubscriptionTypePaneMoved},
 	gen.SubscriptionPaneExited{Type: gen.SubscriptionTypePaneExited},
 	gen.SubscriptionPaneAgentDetected{Type: gen.SubscriptionTypePaneAgentDetected},
+	gen.SubscriptionWorkspaceRenamed{Type: gen.SubscriptionTypeWorkspaceRenamed},
+	gen.SubscriptionWorkspaceMoved{Type: gen.SubscriptionTypeWorkspaceMoved},
+	gen.SubscriptionWorkspaceReordered{Type: gen.SubscriptionTypeWorkspaceReordered},
+	gen.SubscriptionTabRenamed{Type: gen.SubscriptionTypeTabRenamed},
+	gen.SubscriptionTabMoved{Type: gen.SubscriptionTypeTabMoved},
+	gen.SubscriptionPaneUpdated{Type: gen.SubscriptionTypePaneUpdated},
 }
 
 // SubscribeLifecycle subscribes to pane created, closed, moved, exited and
-// agent-detected events on one connection, and returns once herdr has confirmed
-// the subscription started. The context, or defaultCallTimeout when it has no
+// agent-detected events, and to workspace renamed, moved and reordered, tab
+// renamed and moved, and pane updated events, on one connection. The last six
+// are delivered as core.LifecycleContextChanged with no detail. It returns once
+// herdr has confirmed the subscription started. The context, or defaultCallTimeout when it has no
 // deadline, bounds only that setup; the subscription lives until Close or until
 // the stream ends.
 func (c *Client) SubscribeLifecycle(ctx context.Context) (*Subscription[core.LifecycleEvent], error) {
