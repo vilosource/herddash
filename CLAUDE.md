@@ -45,12 +45,12 @@ The tracking file's `action_items` name the operator checkpoints:
 The architecture spine at
 `docs/planning/architecture/architecture-herddash-2026-10-14/ARCHITECTURE-SPINE.md` is binding on
 every story: its `AD` rules, its import graph and its conventions. ADR-0004 to ADR-0007 carry the
-structural decisions behind it. Its four open questions are answered in milestone 1 against a
-herdr 0.9.5 binary.
+structural decisions behind it. Its four open questions were answered by Story 1.3 against an
+isolated herdr 0.9.5 binary; the evidence is in the socket API record's "Findings against herdr
+0.9.5".
 
 The PRD's remaining open questions (§8) are answered during the build, not before it: whether
-acknowledgement is needed at all after two weeks of dogfooding, one-request-per-connection on a
-0.9.5 binary in milestone 1, and Profile rules and Pane Titles for Codex and Antigravity once one
+acknowledgement is needed at all after two weeks of dogfooding, and Profile rules and Pane Titles for Codex and Antigravity once one
 pane of each has been observed.
 
 ## Working method
@@ -84,9 +84,13 @@ to the stored event schema, or a new network surface.
 
 ## Things that will bite you
 
-- **herdr on this machine is 0.8.2 and cannot be upgraded right now**, because its server hosts
-  live agent work. Current stable is 0.9.5, and herddash supports 0.9.5 or newer (ADR-0006).
-  Expect to test against 0.8.2 behind the dogfooding flag.
+- **The herdr binary on this machine is 0.9.5, but the live server still runs 0.8.2** until it is
+  restarted, which it cannot be right now because it hosts live agent work. Homebrew has replaced
+  `/opt/homebrew/bin/herdr` with 0.9.5; the server process (`herdr server`, started before the
+  upgrade) is still the 0.8.2 it was launched as. herddash supports 0.9.5 or newer (ADR-0006), so
+  expect to test against the live server behind the dogfooding flag. Run 0.9.5 experiments only
+  in isolation, as `docs/research/herdr-0.9.5-probe.sh` does: `env -i` with its own `HOME`, so
+  the inherited `HERDR_SOCKET_PATH` never reaches it.
 - **herdr's configuration is owned by an Ansible repository, not by hand.** Do not edit
   `~/.config/herdr/config.toml`. Changes belong in that repository.
 - **Do not install anything as a herdr plugin on this machine.** The plugin registry is managed and
@@ -178,7 +182,9 @@ dependencies, `cmd/herddash` with only the `version` subcommand, and the eight
 `internal/{core,engine,herdr,procenv,store,httpapi,importer,config}` packages. Only `internal/core`
 has content, the shared domain types (`AgentKey`, `Status`, `AgentProgram`, `Provenance`, and
 `Transition`, built only through `core.NewTransition`); the rest are package docs naming their
-spine role. There is no herdr client, store or HTTP yet. `main` and `develop` are kept level; if
+spine role. `internal/herdr/gen` holds the herdr 0.9.5 wire types, generated from the committed
+schema dump by `go generate ./internal/herdr/gen` (Story 1.3); a test fails if they drift. There
+is no herdr client, store or HTTP yet. `main` and `develop` are kept level; if
 they are not, a `develop` into `main` pull request is open or overdue.
 
 The remote is `git@github.com:vilosource/herddash.git`, public, MIT. This repository's git identity

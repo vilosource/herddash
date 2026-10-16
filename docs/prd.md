@@ -532,7 +532,8 @@ are now FR-9a and §6.2.
    removed was not observed. Decide after two weeks of dogfooding.
 2. **One request per connection on 0.9.x.** Empirically true on 0.8.2 and consistent with 0.9.3
    source, unverified against a 0.9.5 binary. It shapes the whole client; milestone 1
-   (addendum §J) proves it.
+   (addendum §J) proves it. *Answered 2026-10-16: it holds on 0.9.5 (socket API record, finding
+   Q4).*
 3. **Profile rules for other harnesses.** Observe one Codex pane and one Antigravity pane on the
    operator's machine, record what signal each exposes (Codex is believed to use `CODEX_HOME`,
    UNVERIFIED), and pick or write the rule. Until then FR-10's program-name default applies.

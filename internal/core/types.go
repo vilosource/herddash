@@ -105,7 +105,10 @@ type TransitionInput struct {
 	// It is never set to StatusUnknown to mean "not known".
 	Previous *Status
 	New      Status
-	// HerdrOrder is herdr's ordering information for this change, when known.
+	// HerdrOrder is herdr's ordering information for this change, when known:
+	// its per-server state-change counter, which only a snapshot reports. It is
+	// nil for a live Transition, and since it restarts with herdr it orders
+	// Transitions only within one herdr server instance.
 	HerdrOrder *uint64
 	// HerdrVersion is the version of the herdr server observed, when known.
 	HerdrVersion string
