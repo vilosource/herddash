@@ -1,0 +1,103 @@
+# STATUS DEFINITIONS:
+# ==================
+# Epic Status:
+#   - backlog: Epic not yet started
+#   - in-progress: Epic actively being worked on
+#   - done: All stories in epic completed
+
+# Story Status:
+#   - backlog: Story only exists in epic file
+#   - ready-for-dev: Story file created, ready for development
+#   - in-progress: Developer actively working on implementation
+#   - review: Implementation complete, ready for review
+#   - done: Story completed
+
+# Retrospective Status:
+#   - optional: Can be completed but not required
+#   - done: Retrospective has been completed
+
+# Action Item Status:
+#   - open: Committed during a retrospective, not yet addressed
+#   - in-progress: Actively being worked on
+#   - done: Completed
+
+# WORKFLOW NOTES:
+# ===============
+# - Epic transitions to 'in-progress' automatically when its first story starts (via build's sprint sync)
+# - Stories can be worked in parallel if team capacity allows
+# - Developer typically creates the next story after the previous one is 'done' to incorporate learnings
+# - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
+# - Retrospective appends its action items to action_items; the status view surfaces open ones
+generated: 10-16-2026 09:40
+last_updated: 10-16-2026 09:40
+project: herddash
+project_key: NOKEY
+tracking_system: file-system
+story_location: docs/implementation
+development_status:
+  epic-1: backlog
+  1-1-project-skeleton-import-rules-and-ci: backlog
+  1-2-configuration-data-directory-and-socket-discovery: backlog
+  1-3-milestone-1-findings-against-a-herdr-0-9-5-binary: backlog
+  1-4-herdr-socket-client-mechanics: backlog
+  1-5-watch-every-agent-s-status-live: backlog
+  1-6-reconnect-forever-and-know-when-herdr-restarted: backlog
+  1-7-resync-when-the-stream-cannot-be-trusted: backlog
+  1-8-refuse-unsupported-herdr-with-a-dogfooding-override: backlog
+  1-9-know-which-profile-each-agent-runs-under: backlog
+  epic-1-retrospective: optional
+
+  epic-2: backlog
+  2-1-a-local-database-herddash-owns: backlog
+  2-2-record-every-transition: backlog
+  2-3-gaps-are-recorded-not-hidden: backlog
+  2-4-waiting-time-that-survives-restarts: backlog
+  2-5-retention-keeps-the-database-bounded: backlog
+  2-6-import-the-plugin-s-log-as-history: backlog
+  epic-2-retrospective: optional
+
+  epic-3: backlog
+  3-1-each-agent-s-view-context-line-and-order: backlog
+  3-2-the-engine-publishes-views-and-change-lists: backlog
+  3-3-read-only-api-on-loopback-with-current-state: backlog
+  3-4-live-event-stream: backlog
+  3-5-history-per-agent: backlog
+  3-6-board-visual-design: backlog
+  3-7-the-board-renders-every-agent: backlog
+  3-8-the-board-stays-live: backlog
+  3-9-connection-and-version-strips: backlog
+  epic-3-retrospective: optional
+
+  epic-4: backlog
+  4-1-clean-shutdown: backlog
+  4-2-start-with-my-session-on-macos-and-linux: backlog
+  4-3-release-binaries-for-every-host: backlog
+  epic-4-retrospective: optional
+
+# Operator checkpoints and story-size notes carried from epics validation
+# (docs/planning/epics-validation.md, T-2..T-4 and S-4..S-7).
+action_items:
+  - epic: 1
+    action: "Story 1.3: run herdr 0.9.5 in isolation (separate HOME or another machine), never against the live 0.8.2 server"
+    owner: "operator"
+    status: open
+  - epic: 1
+    action: "Stories 1.3, 1.4, 1.9 may be split at story creation if one session is too small (S-4..S-6)"
+    owner: "dev"
+    status: open
+  - epic: 2
+    action: "Story 2.6: operator supplies a plugin-log sample and the date the Host reached herdr 0.9.2"
+    owner: "operator"
+    status: open
+  - epic: 2
+    action: "Story 2.4 may be split at story creation (S-7)"
+    owner: "dev"
+    status: open
+  - epic: 3
+    action: "Story 3.6: operator approves the Board design before Story 3.7 starts"
+    owner: "operator"
+    status: open
+  - epic: 4
+    action: "Story 4.3: operator confirms a day of dogfooding and approves merging release-please PR #2 at 0.x"
+    owner: "operator"
+    status: open
