@@ -7,7 +7,7 @@ paradigm: 'hexagonal (ports and adapters) around a pure core, with a single-writ
 scope: 'herddash v1: one Daemon per Host observing one herdr server - herdr client, recorder, attribution, read-only HTTP API and SSE, embedded Board, plugin-log import'
 status: final
 created: '2026-10-14'
-updated: '2026-10-15'
+updated: '2026-10-16'
 binds: [FR-1, FR-2, FR-2a, FR-3, FR-4, FR-5, FR-6, FR-7, FR-8, FR-9, FR-9a, FR-10, FR-11, FR-12, FR-13, FR-14, FR-15, FR-16, FR-17]
 sources:
   - docs/prd.md
@@ -257,8 +257,8 @@ Arrows are the only permitted import directions. `core` imports only the standar
 | Naming | PRD §3 terms become Go identifiers verbatim: `Agent`, `Transition`, `Profile`, `AttentionClass`, `WaitingTime`, `ContextLine`, `AgentKey`, `AgentView`, `ConnectionTruth`. herdr wire names stay inside `internal/herdr`. |
 | Time | UTC Unix milliseconds in storage and on the wire. `observed_at` is the Daemon's clock. Order within an Agent is herdr's sequence when known, else `observed_at`. |
 | Status and class values | herdr's strings verbatim: `working`, `blocked`, `done`, `idle`, `unknown`. Attention Class values are `needs_you`, `finished`, `working` and `unknown`. Provenance is one of `live`, `snapshot` or `backfill`. |
-| ConnectionTruth | `{connected, last_snapshot_at, herdr_version, gate: ok\|advisory\|refused, resync_guaranteed}`. |
-| JSON | `snake_case` fields. Errors are `{"error":{"code":"...","message":"..."}}` with a matching status. Absent values are omitted, except an empty Context Line, which is `""`. Each AgentView carries `waiting_since` and `waiting_exact`. |
+| ConnectionTruth | `{connected, last_snapshot_at, herdr_version, herdr_minimum, gate: ok\|advisory\|refused, resync_guaranteed}`. |
+| JSON | `snake_case` fields. Errors are `{"error":{"code":"...","message":"..."}}` with a matching status. Absent values are omitted, except an empty Context Line, which is `""`. Each AgentView carries `heading`, `waiting_since` and `waiting_exact`. |
 | SSE | Event names `state`, `agent`, `removed`, `transition`, `resync` and `connection`. `id:` is the view sequence. `data:` is one JSON object. The write deadline is cleared per stream. |
 | Errors | Adapters wrap with `%w`. herdr error codes are an open set: an unknown code on a subscription is a resync, never a crash. |
 | Logging | `log/slog`, JSON, to `herddash.log` in the data directory. Never log environment values except a matched `CLAUDE_CONFIG_DIR`; Pane Titles only at debug. |
