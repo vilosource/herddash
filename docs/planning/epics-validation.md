@@ -311,6 +311,9 @@ never be exercised. Reword as a task checklist item.
   - S-2: 3.6 split into 3.7 and 3.8.
   - S-3: 1.6 split into 1.6 and 1.7.
   - T-1: `node --test` with no npm packages, plus a Go timing test.
-- **Medium, fixed:** C1-2 to C1-7, F-4 to F-7, A-1 to A-4. A-1 also amended the spine: ConnectionTruth gains `herdr_minimum`, and AgentView gains `heading`.
-- **Medium, deferred to sprint planning:** S-4 to S-6, the size notes on 1.9 (was 1.8), 1.3 and 1.4. Sprint planning may split them if a single session proves too small.
+- A-1 also amended the spine: ConnectionTruth gains `herdr_minimum`, and AgentView gains `heading`.
+- **Medium, 14 of 21 fixed** (C1-2 to C1-7, F-4 to F-7, A-1 to A-4).
+- **Medium, 7 deferred to sprint planning:**
+  - S-4 to S-7, the size notes on 1.9 (was 1.8), 1.3, 1.4 and 2.4 (was 2.3). Sprint planning may split them.
+  - T-2 to T-4, ACs that a human must judge: the design approval, the plugin-log sample, and the day of dogfooding before release. They stay as operator checkpoints.
 - **Low:** left as polish.
