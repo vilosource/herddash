@@ -103,12 +103,29 @@ Arrows are the only permitted import directions. `core` imports only the standar
   and API paths (`/api/agents/{host}/{server}/{epoch}/{pane}/history`). Host is the configured
   name, defaulting to the OS hostname. Server is the herdr session name: `default` for
   `~/.config/herdr/herdr.sock`, `<name>` for `sessions/<name>/herdr.sock`. `internal/config`
-  resolves both in one function used by serve and import alike. Epoch changes when the engine
-  detects a new herdr server instance. How it detects one, and whether herdr pane ids survive a
-  restart, is UNVERIFIED and is milestone 1's finding. The epoch changes only on evidence that
-  herdr reassigned pane ids, so a herdr restart that keeps ids keeps every Agent (FR-8). Epoch 0 is
-  reserved for backfilled rows, which therefore never join a live Agent (AD-13). Nothing is keyed
-  by pane id alone.
+  resolves both in one function used by serve and import alike. The epoch changes only on
+  evidence that herdr reassigned pane ids, so a herdr restart that keeps ids keeps every Agent
+  (FR-8). Epoch 0 is reserved for backfilled rows, which therefore never join a live Agent (AD-13).
+  Nothing is keyed by pane id alone.
+
+  Milestone 1 recorded these signals on herdr 0.9.5 (socket API record, finding Q1, 2026-10-16).
+  herdr names no server instance. A new one shows as:
+  - EOF on every open connection;
+  - a new `terminal_id` for every pane;
+  - `state_change_seq` restarting from 1.
+
+  When herdr restores its saved session, pane ids survive, with their gaps and the per-workspace
+  next-number counters. A server without a saved session starts empty and issues ids from `w1:p1`
+  again.
+
+  **The detection rule is decided and tested in Story 1.6**, which owns epoch detection. It must
+  handle three hazards, and it must never keep an epoch on a pane-id match alone:
+  - **A fresh server reissues the same ids.** It starts at `w1:p1`, and once the operator recreates
+    as many panes, the ids match the old set. Keeping the epoch would join unrelated histories.
+  - **A pane can close while herddash is disconnected.** Treating one missing id as a fresh server
+    would increment the epoch and split every Agent, against FR-8.
+  - **Nothing persists the evidence yet.** Until milestone 2 stores it, the engine has no
+    pane-to-`terminal_id` map from before a Daemon restart to compare against.
 
 ### AD-4 — The record is append-only — ADR-0005
 
@@ -205,7 +222,8 @@ Arrows are the only permitted import directions. `core` imports only the standar
   - **Advisory:** FR-16's flag is set and herdr is below 0.9.5. The engine records and publishes
     normally, with `gate: advisory`.
 - **Event handling:** a status event is recorded at once as a `live` Transition, because it is an
-  observed fact carrying herdr's ordering. The snapshot is the truth for which panes exist and their
+  observed fact. It carries no herdr sequence; its order is its arrival on the pane's own
+  subscription connection. The snapshot is the truth for which panes exist and their
   current Status, and any disagreement is recorded as a `snapshot` Transition. Buffered events are
   never replayed onto a snapshot. Events that arrive during a snapshot read cause another read.
 
@@ -246,16 +264,19 @@ Arrows are the only permitted import directions. `core` imports only the standar
   because resolution raced it.
 - **Rule:** the engine resolves the Profile through `internal/procenv` before recording an Agent's
   first Transition, with a bounded timeout that yields `unresolved`. It re-resolves on agent
-  detection and when herdr reports a foreground-process change. Which herdr call yields the
-  foreground process, and which signal reports a change, is UNVERIFIED until milestone 1. A pane
-  herdr restored without `CLAUDE_CONFIG_DIR` resolves to the absent case, which is the true Profile.
+  detection. The foreground process comes from `pane.process_info`, and its environment carries
+  the Profile. On herdr 0.9.5 (socket API record, finding Q2, 2026-10-16), starting `sleep` and
+  changing directory produced no event. Renaming the foreground's argv0 to `claude` produced
+  `pane.agent_detected`. So that lifecycle event is the re-resolution trigger. A foreground change
+  herdr does not report is seen only by calling `pane.process_info` again. A pane herdr restored
+  without `CLAUDE_CONFIG_DIR` resolves to the absent case, which is the true Profile.
 
 ## Consistency Conventions
 
 | Concern | Convention |
 | --- | --- |
 | Naming | PRD §3 terms become Go identifiers verbatim: `Agent`, `Transition`, `Profile`, `AttentionClass`, `WaitingTime`, `ContextLine`, `AgentKey`, `AgentView`, `ConnectionTruth`. herdr wire names stay inside `internal/herdr`. |
-| Time | UTC Unix milliseconds in storage and on the wire. `observed_at` is the Daemon's clock. Order within an Agent is herdr's sequence when known, else `observed_at`. |
+| Time | UTC Unix milliseconds in storage and on the wire. `observed_at` is the Daemon's clock. Order within an Agent is `observed_at`, then the order the engine recorded them. herdr's sequence (`state_change_seq`) is kept as evidence; it exists only for snapshot-derived Transitions and restarts with herdr, so it is compared only within one server instance. |
 | Status and class values | herdr's strings verbatim: `working`, `blocked`, `done`, `idle`, `unknown`. Attention Class values are `needs_you`, `finished`, `working` and `unknown`. Provenance is one of `live`, `snapshot` or `backfill`. |
 | ConnectionTruth | `{connected, last_snapshot_at, herdr_version, herdr_minimum, gate: ok\|advisory\|refused, resync_guaranteed}`. |
 | JSON | `snake_case` fields. Errors are `{"error":{"code":"...","message":"..."}}` with a matching status. Absent values are omitted, except an empty Context Line, which is `""`. Each AgentView carries `heading`, `waiting_since` and `waiting_exact`. |
@@ -343,23 +364,25 @@ root and no system service.
 
 ## Open Questions
 
-Each is answered in milestone 1, against a herdr 0.9.5 binary, before ADR-0005's columns are fixed.
+None. All four were answered on 2026-10-16 against an isolated herdr 0.9.5 binary (Story 1.3).
+The evidence is in the socket API record's "Findings against herdr 0.9.5".
 
-1. **Pane ids across a herdr restart.** Do they survive, and how does a new server instance show
-   itself? This sets how the engine detects a new epoch (AD-3).
-2. **Foreground process.** Which call yields a pane's foreground process id, and which event reports
-   a change (AD-14)?
-3. **Herdr's ordering field.** Which field orders Transitions within an Agent, `state_change_seq` or
-   another?
-4. **One request per connection on 0.9.x.** It is confirmed only on 0.8.2. It is PRD open question
-   2.
+1. **Pane ids across a herdr restart.** They survive when herdr restores its saved session, and
+   nothing names a server instance; a new one shows as new `terminal_id`s for the same pane ids.
+   AD-3 records the signals and hazards; Story 1.6 decides and tests the epoch rule.
+2. **Foreground process.** `pane.process_info` yields it. Of the changes observed, only a
+   recognised agent program produced an event, `pane.agent_detected`. AD-14 now says so.
+3. **Herdr's ordering field.** `state_change_seq`: one counter per server, on snapshot agent records
+   only, restarting with herdr. Live events carry none. The Time convention now says how it is used.
+4. **One request per connection on 0.9.x.** Holds on 0.9.5. This also answers PRD open question 2.
 
 ## Deferred
 
 - **Transitions table columns and indexes.** These are seed for milestone 2, after the open
   questions; ADR-0005 fixes only the invariants.
-- **The wire-type generator.** Which tool turns `herdr api schema --json` into Go types is chosen
-  in milestone 1. Only `internal/herdr/gen` is affected.
+- ~~**The wire-type generator.**~~ Chosen in milestone 1: genwire, a standard-library-only
+  generator in `internal/herdr/gen/genwire`, run by `go generate ./internal/herdr/gen` against the
+  committed 0.9.5 schema dump.
 - **Specific values:** the default port (distinct from 7317), the reconcile interval, the minimum
   resync interval, backoff limits and the Profile resolution timeout. Each is a named constant in
   one place, chosen when first built, and documented with the configuration.

@@ -1,6 +1,6 @@
 # ADR-0006: How herddash speaks to herdr
 
-**Status: Accepted.** Written 2026-10-15 during the architecture run, under the operator's
+**Status: Accepted (amended 2026-10-16).** Written 2026-10-15 during the architecture run, under the operator's
 delegation. It draws on [herdr-socket-api.md](../research/herdr-socket-api.md) and the PRD addendum
 §B. Claims that record marks UNVERIFIED are marked UNVERIFIED here too, and milestone 1 exercises
 them against a herdr 0.9.5 binary.
@@ -78,3 +78,22 @@ machine runs 0.8.2.
 - **Polling `session.snapshot` only.** Misses short-lived Transitions between polls and loads herdr
   for nothing.
 - **Hand-written wire types.** The research's field lists lean on an older bundled schema.
+
+## Amendment, 2026-10-16: milestone-1 findings (Story 1.3)
+
+Exercised against an isolated herdr 0.9.5. The evidence is in the socket API record's "Findings
+against herdr 0.9.5". The decision stands.
+
+- **Confirmed on 0.9.5:**
+  - A connection carries one request and closes.
+  - One unknown `pane_id` fails the whole subscribe request, and the server closes the connection.
+  - Error responses echo the request id.
+  - A new subscription delivers live events only.
+  - Lifecycle pushes use underscored names in `{event, data}`; the pane-scoped streams keep dotted
+    names.
+- **`events_lost` does not appear anywhere in the 0.9.5 schema dump.** `error.code` is a free
+  string, so `events_lost` has no generated type. herddash recognises it by matching the raw
+  `error.code`. Its documented behaviour is still UNVERIFIED by test.
+- **The wire-type generator** is genwire, a standard-library-only generator in
+  `internal/herdr/gen/genwire`. It is run by `go generate ./internal/herdr/gen` against the
+  committed 0.9.5 schema dump.
