@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -139,7 +140,9 @@ func (fc *fakeConn) reply(line string) {
 func (fc *fakeConn) expectClientClose() {
 	fc.conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	_, err := fc.r.ReadByte()
-	if errors.Is(err, io.EOF) {
+	// Linux resets rather than closes a unix socket whose owner closed it with
+	// unread data, as a client that stops a subscription mid-stream does.
+	if errors.Is(err, io.EOF) || errors.Is(err, syscall.ECONNRESET) {
 		fc.srv.clientClosed.Add(1)
 		return
 	}
