@@ -4,5 +4,16 @@
 // focus method and no pane-output method. Wire types live in gen/ and are mapped to
 // core types at this package's edge.
 //
-// Permitted internal imports: core.
+// A Client holds no connection. Ping, Snapshot and ForegroundProcess each dial,
+// write one request line, read one response line and close, because herdr answers
+// one request per connection. SubscribeLifecycle and SubscribeStatus each own one
+// long-lived connection; closing the Subscription is unsubscribing.
+//
+// When a subscription stream can no longer be trusted (events_lost, any other
+// herdr error code, a closed or failed connection, an undecodable line) the
+// Subscription delivers one Health signal last and closes its channel. Retrying,
+// reconnecting, resyncing, gating on version and tracking the pane set are the
+// engine's.
+//
+// Permitted internal imports: core, and its own gen.
 package herdr
