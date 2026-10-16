@@ -146,22 +146,40 @@ is the only chance to get it right, and a published 1.0.0 cannot be withdrawn.
 
 ## Build and test
 
-Requires Go 1.26 or newer (the SQLite driver sets that floor; ADR-0004). There is no code yet, so
-these are the intended commands:
+Requires Go 1.26 or newer (the SQLite driver sets that floor; ADR-0004). CI
+(`.github/workflows/ci.yml`) runs these on every pull request and on pushes to `develop` and
+`main` (tests with `-race`), then builds `./cmd/herddash` and vets the module with
+`CGO_ENABLED=0` for darwin/arm64, darwin/amd64, linux/amd64 and linux/arm64:
 
 ```bash
 go build ./...
-go test ./...
 go vet ./...
+go test ./...
 gofmt -l .      # must print nothing
 ```
+
+`arch_test.go` at the module root enforces the spine's import graph over every non-test Go file in
+the module: it fails, naming the edge, on any import between internal packages that the spine's
+diagram does not draw, on any package outside the spine, on any non-standard import in
+`internal/core`, and on `internal/core` reading or waiting on the clock (`time.Now`, `Since`,
+`Sleep` and the like, or a dot-import of `time`). Changing its permitted set is a
+structural change and needs an ADR.
+
+`go run ./cmd/herddash version` prints `herddash dev (<commit>)`. Release builds stamp
+`-ldflags "-X main.version=... -X main.commit=..."`; unstamped builds take the commit from Go's
+embedded VCS info (`go run` embeds none, so it prints `unknown`).
 
 No npm, no build step for assets. Web assets are embedded in the binary.
 
 ## Repository state
 
-**There is no code yet** — documentation and project setup only. `main` and `develop` are kept
-level; if they are not, a `develop` into `main` pull request is open or overdue.
+**The skeleton exists** (Story 1.1): the Go module `github.com/vilosource/herddash` with no
+dependencies, `cmd/herddash` with only the `version` subcommand, and the eight
+`internal/{core,engine,herdr,procenv,store,httpapi,importer,config}` packages. Only `internal/core`
+has content, the shared domain types (`AgentKey`, `Status`, `AgentProgram`, `Provenance`, and
+`Transition`, built only through `core.NewTransition`); the rest are package docs naming their
+spine role. There is no herdr client, store or HTTP yet. `main` and `develop` are kept level; if
+they are not, a `develop` into `main` pull request is open or overdue.
 
 The remote is `git@github.com:vilosource/herddash.git`, public, MIT. This repository's git identity
 is **pinned locally** to the GitHub noreply address rather than the machine's global work email, so
