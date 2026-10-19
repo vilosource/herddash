@@ -25,6 +25,10 @@ type Options struct {
 	Clock func() time.Time
 	// Logger defaults to discarding everything.
 	Logger *slog.Logger
+	// AllowUnsupportedHerdr is FR-16's dogfooding override: a herdr older than
+	// core.HerdrMinimum is observed, with a warning (advisory), instead of
+	// refused.
+	AllowUnsupportedHerdr bool
 }
 
 // Engine is the single-writer actor (AD-2). Only its Run goroutine holds the
@@ -62,12 +66,21 @@ type Options struct {
 // panes it starts tracking (and every pane after a reconnect), so a pane herdr
 // keeps rejecting is subscribed again only by a resync, once per interval.
 // While connected and ready, a snapshot is also read every reconcileInterval.
+//
+// Version gate (FR-16, AD-11): every start decides the gate on the version
+// ping returns, before the lifecycle subscription. A refused herdr is observed
+// by nothing: no subscription, no snapshot, every tracked Agent removed. The
+// engine pings it again every refusedRecheckInterval, forever, outside the
+// reconnect backoff. An advisory herdr is observed as a supported one is, with
+// a warning at each start.
 type Engine struct {
 	host, server string
 	client       Client
 	sink         Sink
 	clock        func() time.Time
 	log          *slog.Logger
+	// allowUnsupported is Options.AllowUnsupportedHerdr; read-only after New.
+	allowUnsupported bool
 
 	inbox chan any
 	// stopped closes when Run returns.
@@ -78,6 +91,11 @@ type Engine struct {
 
 	// Everything below belongs to the Run goroutine alone.
 	herdrVersion string
+	// gateReported is set once a gate outcome has been reported; gate and
+	// gateVersion are the last one, so an unchanged repeat is not reported.
+	gateReported bool
+	gate         core.Gate
+	gateVersion  string
 	lifecycle    Subscription[core.LifecycleEvent]
 	// epoch is the server epoch every AgentKey carries (AD-3).
 	epoch uint64
@@ -174,13 +192,16 @@ type pane struct {
 
 // Inbox messages.
 type (
-	// connectMsg is the outcome of one attempt to reach herdr: ping and
-	// the lifecycle subscription.
+	// connectMsg is the outcome of one attempt to reach herdr: ping, the
+	// version gate and, unless refused, the lifecycle subscription.
 	connectMsg struct {
 		conn    uint64
 		version string
-		sub     Subscription[core.LifecycleEvent]
-		err     error
+		gate    core.Gate
+		// resyncGuaranteed is false below 0.9.0 or for an unparsable version.
+		resyncGuaranteed bool
+		sub              Subscription[core.LifecycleEvent]
+		err              error
 	}
 	// connectDueMsg says the wait before the next attempt is over.
 	connectDueMsg struct {
@@ -227,16 +248,18 @@ type (
 // New returns an Engine. Run starts it.
 func New(o Options) *Engine {
 	e := &Engine{
-		host:    o.Host,
-		server:  o.Server,
-		client:  o.Client,
-		sink:    o.Sink,
-		clock:   o.Clock,
-		log:     o.Logger,
-		inbox:   make(chan any),
-		stopped: make(chan struct{}),
-		panes:   map[string]*pane{},
-		epoch:   firstEpoch,
+		host:   o.Host,
+		server: o.Server,
+		client: o.Client,
+		sink:   o.Sink,
+		clock:  o.Clock,
+		log:    o.Logger,
+
+		allowUnsupported: o.AllowUnsupportedHerdr,
+		inbox:            make(chan any),
+		stopped:          make(chan struct{}),
+		panes:            map[string]*pane{},
+		epoch:            firstEpoch,
 	}
 	if e.clock == nil {
 		e.clock = time.Now
@@ -267,8 +290,9 @@ func (e *Engine) Run(ctx context.Context) {
 }
 
 // connect starts one attempt to reach herdr, in a goroutine of its own: ping
-// for herdr's version, then the lifecycle subscription. Its outcome arrives as
-// a connectMsg; the first snapshot follows only once it has succeeded.
+// for herdr's version, the version gate on it, then, unless the gate refused,
+// the lifecycle subscription. Its outcome arrives as a connectMsg; the first
+// snapshot follows only once it has succeeded.
 func (e *Engine) connect() {
 	e.conn++
 	conn := e.conn
@@ -284,7 +308,7 @@ func (e *Engine) connect() {
 		pcancel()
 		if m.err != nil {
 			m.err = fmt.Errorf("engine: ping herdr: %w", m.err)
-		} else {
+		} else if m.gate, m.resyncGuaranteed = core.DecideGate(m.version, e.allowUnsupported); m.gate != core.GateRefused {
 			sctx, scancel := context.WithTimeout(ctx, subscribeTimeout)
 			m.sub, m.err = e.client.SubscribeLifecycle(sctx)
 			scancel()
@@ -310,10 +334,22 @@ func (e *Engine) onConnect(m connectMsg) {
 		e.retry(m.err)
 		return
 	}
-	e.connected = true
+	changed := e.reportGate(m.gate, m.version)
 	e.herdrVersion = m.version
+	switch m.gate {
+	case core.GateRefused:
+		e.refused(changed)
+		return
+	case core.GateAdvisory:
+		msg := "herdr's version is below the supported minimum or could not be read; observing it because allow_unsupported_herdr is set"
+		if !m.resyncGuaranteed {
+			msg += "; the resync guarantee does not hold below " + core.HerdrResyncMinimum
+		}
+		e.log.Warn(msg, "herdr_version", m.version, "herdr_minimum", core.HerdrMinimum, "resync_guaranteed", m.resyncGuaranteed)
+	}
+	e.connected = true
 	e.lifecycle = m.sub
-	e.log.Info("herdr reached", "herdr_version", m.version)
+	e.log.Info("herdr reached", "herdr_version", m.version, "gate", m.gate)
 	conn, sub := m.conn, m.sub
 	e.wg.Add(1)
 	go func() {
@@ -325,6 +361,44 @@ func (e *Engine) onConnect(m connectMsg) {
 		}
 	}()
 	e.requestSnapshot()
+}
+
+// reportGate reports a connect's gate outcome to the Sink when it or the herdr
+// version differs from the last one reported, or none has been, and says
+// whether it did.
+func (e *Engine) reportGate(gate core.Gate, version string) bool {
+	if e.gateReported && gate == e.gate && version == e.gateVersion {
+		return false
+	}
+	e.gateReported, e.gate, e.gateVersion = true, gate, version
+	e.sink.Gate(gate, version, e.now())
+	return true
+}
+
+// refused handles a start the version gate refused: nothing of this herdr is
+// observed, every tracked Agent is removed, and herdr is pinged again after
+// refusedRecheckInterval. A refused herdr was reachable, so it clears the
+// reconnect backoff rather than counting into it.
+// changed is whether this outcome was just reported, so it is logged as a
+// warning once and at debug on each recheck.
+func (e *Engine) refused(changed bool) {
+	e.failures = 0
+	e.disconnect()
+	ids := make([]string, 0, len(e.panes))
+	for id := range e.panes {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		e.remove(id, "herdr refused")
+	}
+	if changed {
+		e.log.Warn("herdr's version is below the supported minimum or could not be read; refusing to observe it",
+			"herdr_version", e.herdrVersion, "herdr_minimum", core.HerdrMinimum, "recheck_in", refusedRecheckInterval.String())
+	} else {
+		e.log.Debug("herdr still refused", "herdr_version", e.herdrVersion, "herdr_minimum", core.HerdrMinimum)
+	}
+	e.awaitConnect(refusedRecheckInterval)
 }
 
 // retry abandons a failed start and waits before the next, longer after each

@@ -117,7 +117,10 @@ type fakeClient struct {
 	// until the channel closes; it then returns the snapshot of that moment.
 	hold      chan struct{}
 	pingTimes []time.Time
-	ends      []func() // every subscription's end
+	// versions scripts what each ping answers, in order; the last one stays.
+	// Empty means "0.9.5".
+	versions []string
+	ends     []func() // every subscription's end
 	// holdSub holds the next status subscribe for a pane, whatever its
 	// context, until its channel closes.
 	holdSub map[string]chan struct{}
@@ -168,7 +171,22 @@ func (f *fakeClient) Ping(ctx context.Context) (string, error) {
 	if f.failing("ping") {
 		return "", errBoom
 	}
-	return "0.9.5", f.pingErr
+	v := "0.9.5"
+	if len(f.versions) > 0 {
+		v = f.versions[0]
+		if len(f.versions) > 1 {
+			f.versions = f.versions[1:]
+		}
+	}
+	return v, f.pingErr
+}
+
+// setVersions scripts the versions the next pings answer, in order; the last
+// one is answered from then on.
+func (f *fakeClient) setVersions(vs ...string) {
+	f.mu.Lock()
+	f.versions = slices.Clone(vs)
+	f.mu.Unlock()
 }
 
 func (f *fakeClient) Snapshot(ctx context.Context) (core.Snapshot, error) {
@@ -431,7 +449,12 @@ type recorder struct {
 	epochs      []uint64 // the epoch of each line's key, or of a reconnect
 	transitions []core.Transition
 	resyncTimes []time.Time
-	notify      chan struct{}
+	// gates holds one "gate <gate> <version>" per Gate report. With
+	// gateLines set, each is also one of the lines; tests from before the
+	// gate leave it unset.
+	gates     []string
+	gateLines bool
+	notify    chan struct{}
 }
 
 func newRecorder() *recorder { return &recorder{notify: make(chan struct{}, 256)} }
@@ -462,6 +485,26 @@ func (r *recorder) Resynced(cause string, observedAt int64) {
 	r.resyncTimes = append(r.resyncTimes, time.Now())
 	r.mu.Unlock()
 	r.add("resync "+cause, observedAt, 0)
+}
+
+func (r *recorder) Gate(gate core.Gate, version string, observedAt int64) {
+	line := fmt.Sprintf("gate %s %s", gate, version)
+	r.mu.Lock()
+	r.gates = append(r.gates, line)
+	lines := r.gateLines
+	r.mu.Unlock()
+	if lines {
+		r.add(line, observedAt, 0)
+		return
+	}
+	r.notify <- struct{}{}
+}
+
+// gateReports returns every Gate report so far.
+func (r *recorder) gateReports() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.gates)
 }
 
 // resyncs returns when each resync began, by the wall clock.
@@ -577,8 +620,19 @@ type harness struct {
 
 func startEngine(t *testing.T, fake *fakeClient) *harness {
 	t.Helper()
+	return startEngineWith(t, fake, nil)
+}
+
+// startEngineWith starts an engine whose Options and recorder opts adjusts
+// first; opts may be nil.
+func startEngineWith(t *testing.T, fake *fakeClient, opts func(*Options, *recorder)) *harness {
+	t.Helper()
 	rec := newRecorder()
-	e := New(Options{Host: "mac", Server: "default", Client: fake, Sink: rec, Clock: testClock()})
+	o := Options{Host: "mac", Server: "default", Client: fake, Sink: rec, Clock: testClock()}
+	if opts != nil {
+		opts(&o, rec)
+	}
+	e := New(o)
 	ctx, cancel := context.WithCancel(context.Background())
 	h := &harness{t: t, fake: fake, rec: rec, engine: e, cancel: cancel, done: make(chan struct{})}
 	go func() {
@@ -669,5 +723,6 @@ func TestMain(m *testing.M) {
 	reconnectInitialDelay = 5 * time.Millisecond
 	reconnectMaxDelay = 50 * time.Millisecond
 	resyncMinInterval = 10 * time.Millisecond
+	refusedRecheckInterval = 10 * time.Millisecond
 	os.Exit(m.Run())
 }

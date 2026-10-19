@@ -1,11 +1,15 @@
 package engine
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -98,9 +102,9 @@ func TestLiveChange(t *testing.T) {
 	h.fake.setSnapshot(s)
 	h.lifecycle(core.LifecycleEvent{Kind: core.LifecycleClosed, PaneID: "w1:p1"})
 	h.rec.expect(t, "agent w1:p1 claude working", "agent w1:p2 claude idle", "transition w1:p1 claude working->blocked live", "removed w1:p1")
-	// One clock reading per report, in order: the two Agents, the
-	// Transition, the removal.
-	want := []int64{clockAt(1), clockAt(2), clockAt(3), clockAt(4)}
+	// One clock reading per report, in order: the gate (not a line here), the
+	// two Agents, the Transition, the removal.
+	want := []int64{clockAt(2), clockAt(3), clockAt(4), clockAt(5)}
 	if got := h.rec.observedTimes(); !slices.Equal(got, want) {
 		t.Errorf("observed_at %v, want %v", got, want)
 	}
@@ -1323,4 +1327,316 @@ func TestReconnectMidResync(t *testing.T) {
 	if n := h.rec.count("resync events_lost"); n != 0 {
 		t.Errorf("%d scheduled resyncs ran after the reconnect, want 0", n)
 	}
+}
+
+// logSink collects an engine's JSON log, debug included.
+type logSink struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (l *logSink) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+// entries returns every log entry at level whose message contains msg.
+func (l *logSink) entries(t *testing.T, level, msg string) []map[string]any {
+	t.Helper()
+	l.mu.Lock()
+	text := l.b.String()
+	l.mu.Unlock()
+	var out []map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(text), "\n") {
+		if line == "" {
+			continue
+		}
+		var e map[string]any
+		if err := json.Unmarshal([]byte(line), &e); err != nil {
+			t.Fatalf("log line %q: %v", line, err)
+		}
+		if m, _ := e["msg"].(string); e["level"] == level && strings.Contains(m, msg) {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// startGated starts an engine on twoAgents whose pings answer versions, with
+// the dogfooding override set to allow, gate reports among the lines and the
+// log collected.
+func startGated(t *testing.T, allow bool, versions ...string) (*harness, *logSink) {
+	t.Helper()
+	fake := newFakeClient(t, twoAgents())
+	fake.setVersions(versions...)
+	logs := &logSink{}
+	h := startEngineWith(t, fake, func(o *Options, r *recorder) {
+		o.AllowUnsupportedHerdr = allow
+		o.Logger = slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+		r.gateLines = true
+	})
+	return h, logs
+}
+
+// setRecheckInterval sets refusedRecheckInterval for one test, restoring it after.
+func setRecheckInterval(t *testing.T, d time.Duration) {
+	t.Helper()
+	prev := refusedRecheckInterval
+	refusedRecheckInterval = d
+	t.Cleanup(func() { refusedRecheckInterval = prev })
+}
+
+// onlyPings fails the test unless every herdr call so far is a ping.
+func onlyPings(t *testing.T, calls []string) {
+	t.Helper()
+	for _, c := range calls {
+		if c != "ping" {
+			t.Fatalf("calls %v: a refused herdr got more than pings", calls)
+		}
+	}
+}
+
+const (
+	refusedMsg  = "refusing to observe it"
+	advisoryMsg = "observing it because allow_unsupported_herdr is set"
+	resyncMsg   = "the resync guarantee does not hold below 0.9.0"
+)
+
+func TestGateSupported(t *testing.T) {
+	for _, v := range []string{"0.9.5", "0.10.0", "1.0.0", "v0.9.6", "0.9.5-rc1"} {
+		t.Run(v, func(t *testing.T) {
+			h, logs := startGated(t, false, v)
+			h.rec.expect(t, "gate ok "+v, "agent w1:p1 claude working", "agent w1:p2 claude idle")
+			sub := h.fake.awaitStatusSubs("w1:p1", 1)
+			h.settle()
+			sub.event(core.StatusEvent{PaneID: "w1:p1", Status: core.StatusBlocked, AgentProgram: "claude"})
+			h.rec.awaitCount(t, "transition w1:p1 claude working->blocked live", 1)
+			if got := h.rec.lastTransition().HerdrVersion(); got != v {
+				t.Errorf("Transition herdr version %q, want %q", got, v)
+			}
+			if n := len(logs.entries(t, "WARN", "supported minimum")); n != 0 {
+				t.Errorf("%d version warnings for a supported herdr", n)
+			}
+		})
+	}
+}
+
+func TestGateRefused(t *testing.T) {
+	h, logs := startGated(t, false, "0.9.4")
+	h.fake.awaitPings(3)
+	h.rec.expect(t, "gate refused 0.9.4")
+	onlyPings(t, h.fake.callList())
+	if as := h.agents(); len(as) != 0 {
+		t.Errorf("agents %+v from a refused herdr", as)
+	}
+	warns := logs.entries(t, "WARN", refusedMsg)
+	if len(warns) != 1 {
+		t.Fatalf("%d refusal warnings, want 1", len(warns))
+	}
+	if warns[0]["herdr_version"] != "0.9.4" || warns[0]["herdr_minimum"] != "0.9.5" {
+		t.Errorf("refusal warning %v does not name 0.9.4 and 0.9.5", warns[0])
+	}
+}
+
+func TestGateRefusedThenUpgraded(t *testing.T) {
+	setReconnectDelays(t, time.Hour, time.Hour) // a backoff would never retry
+	setRecheckInterval(t, 20*time.Millisecond)
+	h, _ := startGated(t, false, "0.8.2", "0.8.2", "0.8.2", "0.9.5")
+	h.rec.expect(t, "gate refused 0.8.2", "gate ok 0.9.5", "agent w1:p1 claude working", "agent w1:p2 claude idle")
+	calls := h.fake.callList()
+	onlyPings(t, calls[:3])
+	if calls[3] != "ping" || calls[4] != "lifecycle" || calls[5] != "snapshot" {
+		t.Errorf("calls %v: want three refused pings, then a normal start", calls)
+	}
+	pings := h.fake.pings()
+	for i := 1; i < 4; i++ {
+		if gap := pings[i].Sub(pings[i-1]); gap < 15*time.Millisecond {
+			t.Errorf("recheck %d followed %v after the last, want the 20ms interval", i, gap)
+		}
+	}
+	h.fake.awaitSubscribe("w1:p1")
+	h.settle()
+	h.fake.statusSub("w1:p1").event(core.StatusEvent{PaneID: "w1:p1", Status: core.StatusBlocked, AgentProgram: "claude"})
+	h.rec.awaitCount(t, "transition w1:p1 claude working->blocked live", 1)
+}
+
+func TestGateRefusedRechecks(t *testing.T) {
+	setReconnectDelays(t, time.Hour, time.Hour)
+	setRecheckInterval(t, 20*time.Millisecond)
+	h, logs := startGated(t, false, "0.8.2")
+	h.fake.awaitPings(8)
+	h.stop()
+	if got := h.rec.all(); !slices.Equal(got, []string{"gate refused 0.8.2"}) {
+		t.Errorf("lines %v, want one gate line", got)
+	}
+	onlyPings(t, h.fake.callList())
+	pings := h.fake.pings()
+	for i := 1; i < len(pings); i++ {
+		gap := pings[i].Sub(pings[i-1])
+		if gap < 15*time.Millisecond || gap > 5*time.Second {
+			t.Errorf("recheck %d followed %v after the last, want the 20ms interval", i, gap)
+		}
+	}
+	if h.engine.failures != 0 {
+		t.Errorf("failures %d, want refusals kept out of the backoff", h.engine.failures)
+	}
+	if n := len(logs.entries(t, "WARN", refusedMsg)); n != 1 {
+		t.Errorf("%d refusal warnings, want 1", n)
+	}
+	if n := len(logs.entries(t, "DEBUG", "herdr still refused")); n < len(pings)-2 {
+		t.Errorf("%d recheck debug entries for %d pings", n, len(pings))
+	}
+}
+
+func TestGateAdvisory(t *testing.T) {
+	h, logs := startGated(t, true, "0.8.2")
+	h.rec.expect(t, "gate advisory 0.8.2", "agent w1:p1 claude working", "agent w1:p2 claude idle")
+	h.fake.awaitSubscribe("w1:p1")
+	h.settle()
+	h.fake.statusSub("w1:p1").event(core.StatusEvent{PaneID: "w1:p1", Status: core.StatusBlocked, AgentProgram: "claude"})
+	h.rec.awaitCount(t, "transition w1:p1 claude working->blocked live", 1)
+	if got := h.rec.lastTransition().HerdrVersion(); got != "0.8.2" {
+		t.Errorf("Transition herdr version %q, want 0.8.2", got)
+	}
+	warns := logs.entries(t, "WARN", advisoryMsg)
+	if len(warns) != 1 {
+		t.Fatalf("%d advisory warnings, want 1", len(warns))
+	}
+	if m := warns[0]["msg"].(string); !strings.Contains(m, resyncMsg) {
+		t.Errorf("advisory warning %q does not say the resync guarantee does not hold", m)
+	}
+	if warns[0]["herdr_version"] != "0.8.2" || warns[0]["herdr_minimum"] != "0.9.5" {
+		t.Errorf("advisory warning %v does not name 0.8.2 and 0.9.5", warns[0])
+	}
+
+	// One warning per connect; the unchanged outcome is not reported again.
+	h.loseLifecycle()
+	h.rec.awaitCount(t, "reconnected 0.8.2 epoch 1 kept", 1)
+	h.settle()
+	if n := len(logs.entries(t, "WARN", advisoryMsg)); n != 2 {
+		t.Errorf("%d advisory warnings after a reconnect, want 2", n)
+	}
+	if got := h.rec.gateReports(); len(got) != 1 {
+		t.Errorf("gate reports %v, want the unchanged repeat left out", got)
+	}
+}
+
+func TestGateAdvisory09x(t *testing.T) {
+	h, logs := startGated(t, true, "0.9.2")
+	h.rec.expect(t, "gate advisory 0.9.2", "agent w1:p1 claude working", "agent w1:p2 claude idle")
+	warns := logs.entries(t, "WARN", advisoryMsg)
+	if len(warns) != 1 {
+		t.Fatalf("%d advisory warnings, want 1", len(warns))
+	}
+	if m := warns[0]["msg"].(string); strings.Contains(m, resyncMsg) {
+		t.Errorf("advisory warning %q for 0.9.2 carries the resync clause", m)
+	}
+}
+
+func TestGateUnparsable(t *testing.T) {
+	for _, v := range []string{"", "dev"} {
+		t.Run("refused "+v, func(t *testing.T) {
+			h, _ := startGated(t, false, v)
+			h.fake.awaitPings(2)
+			h.rec.expect(t, "gate refused "+v)
+			onlyPings(t, h.fake.callList())
+		})
+		t.Run("advisory "+v, func(t *testing.T) {
+			h, logs := startGated(t, true, v)
+			h.rec.expect(t, "gate advisory "+v, "agent w1:p1 claude working", "agent w1:p2 claude idle")
+			warns := logs.entries(t, "WARN", advisoryMsg)
+			if len(warns) != 1 || !strings.Contains(warns[0]["msg"].(string), resyncMsg) {
+				t.Errorf("advisory warnings %v, want one saying resync is not guaranteed", warns)
+			}
+		})
+	}
+}
+
+func TestGateDowngradedAcrossReconnect(t *testing.T) {
+	h, logs := startGated(t, false, "0.9.5", "0.8.2")
+	h.rec.expect(t, "gate ok 0.9.5", "agent w1:p1 claude working", "agent w1:p2 claude idle")
+	h.fake.awaitSubscribe("w1:p1")
+	h.fake.awaitSubscribe("w1:p2")
+	h.settle()
+	p1, p2 := h.fake.statusSub("w1:p1"), h.fake.statusSub("w1:p2")
+	before := len(h.fake.callList())
+	h.loseLifecycle()
+	h.rec.expect(t, "gate ok 0.9.5", "agent w1:p1 claude working", "agent w1:p2 claude idle",
+		"gate refused 0.8.2", "removed w1:p1", "removed w1:p2")
+	waitClosed(t, p1)
+	waitClosed(t, p2)
+	h.fake.awaitPings(4)
+	onlyPings(t, h.fake.callList()[before:])
+	if as := h.agents(); len(as) != 0 {
+		t.Errorf("agents %+v after the refusal", as)
+	}
+	if n := len(logs.entries(t, "WARN", refusedMsg)); n != 1 {
+		t.Errorf("%d refusal warnings, want 1", n)
+	}
+	if n := len(logs.entries(t, "INFO", "agent removed")); n != 2 {
+		t.Errorf("%d removal log entries, want 2", n)
+	}
+	for _, e := range logs.entries(t, "INFO", "agent removed") {
+		if e["reason"] != "herdr refused" {
+			t.Errorf("removal reason %v, want herdr refused", e["reason"])
+		}
+	}
+}
+
+func TestGateRefusedVersionChange(t *testing.T) {
+	h, logs := startGated(t, false, "0.8.2", "0.8.2", "0.9.4")
+	h.fake.awaitPings(5)
+	h.rec.expect(t, "gate refused 0.8.2", "gate refused 0.9.4")
+	onlyPings(t, h.fake.callList())
+	if n := len(logs.entries(t, "WARN", refusedMsg)); n != 2 {
+		t.Errorf("%d refusal warnings, want one per reported version", n)
+	}
+}
+
+func TestGateOKVersionChange(t *testing.T) {
+	h, _ := startGated(t, false, "0.9.5", "0.9.6")
+	h.rec.expect(t, "gate ok 0.9.5", "agent w1:p1 claude working", "agent w1:p2 claude idle")
+	h.fake.awaitSubscribe("w1:p1")
+	h.fake.awaitSubscribe("w1:p2")
+	h.settle()
+	h.loseLifecycle()
+	h.rec.expect(t, "gate ok 0.9.5", "agent w1:p1 claude working", "agent w1:p2 claude idle",
+		"gate ok 0.9.6", "reconnected 0.9.6 epoch 1 kept")
+}
+
+// recoverAfterRefusal runs ok, then refused across a reconnect, then ok again,
+// with snap the snapshot herdr shows once refused: the Agents are reported
+// again under epoch, and their new status subscriptions are live.
+func recoverAfterRefusal(t *testing.T, snap core.Snapshot, reconnected string, epoch uint64) {
+	t.Helper()
+	h, _ := startGated(t, false, "0.9.5", "0.8.2", "0.9.5")
+	h.rec.expect(t, "gate ok 0.9.5", "agent w1:p1 claude working", "agent w1:p2 claude idle")
+	h.fake.awaitSubscribe("w1:p1")
+	h.fake.awaitSubscribe("w1:p2")
+	h.settle()
+	h.fake.setSnapshot(snap)
+	h.loseLifecycle()
+	h.rec.expect(t, "gate ok 0.9.5", "agent w1:p1 claude working", "agent w1:p2 claude idle",
+		"gate refused 0.8.2", "removed w1:p1", "removed w1:p2",
+		"gate ok 0.9.5", reconnected, "agent w1:p1 claude working", "agent w1:p2 claude idle")
+	if eps := h.rec.lineEpochs(); eps[len(eps)-1] != epoch || eps[len(eps)-2] != epoch {
+		t.Errorf("line epochs %v, want the Agents reported again under epoch %d", eps, epoch)
+	}
+	sub := h.fake.awaitStatusSubs("w1:p1", 2)
+	h.fake.awaitStatusSubs("w1:p2", 2)
+	h.settle()
+	sub.event(core.StatusEvent{PaneID: "w1:p1", Status: core.StatusBlocked, AgentProgram: "claude"})
+	h.rec.awaitCount(t, "transition w1:p1 claude working->blocked live", 1)
+	if ep := h.rec.lastTransition().Key().Epoch; ep != epoch {
+		t.Errorf("transition epoch %d, want %d", ep, epoch)
+	}
+}
+
+func TestGateRecoveryAfterRefusal(t *testing.T) {
+	recoverAfterRefusal(t, twoAgents(), "reconnected 0.9.5 epoch 1 kept", 1)
+}
+
+func TestGateRecoveryAfterRefusalRestarted(t *testing.T) {
+	recoverAfterRefusal(t, restarted(), "reconnected 0.9.5 epoch 2 incremented", 2)
 }
