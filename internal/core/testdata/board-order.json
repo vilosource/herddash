@@ -1,0 +1,619 @@
+{
+  "description": "Golden Board order (Story 3.1). input holds shuffled Agent inputs, each with view: the expected AgentView exactly as NewAgentView serialises it (key, class, heading, shortened directory, context line, waiting_since, waiting_exact, sort_key). order is the expected AgentKey strings after sorting; headers are the indexes, in sorted order, where a zone-1 workspace group starts. Shared fixture: the Go test in internal/core/view_test.go checks every view, the order and the headers; the Board's ordering tests (Story 3.7) sort the expected views by their sort_key arrays, compared element by element, and must not re-derive class, zone, group, rank or sentinels. An unknown group or start is 9007199254740991 (Number.MAX_SAFE_INTEGER). since is FoldResult.Since (absent: fold not known); exact says the class began live.",
+  "home": "/Users/op",
+  "input": [
+    {
+      "key": {
+        "host": "mac",
+        "server": "default",
+        "epoch": 1,
+        "pane_id": "w9:p1"
+      },
+      "agent_program": "claude",
+      "profile": "cldp",
+      "status": "working",
+      "ever_working": true,
+      "since": 1,
+      "exact": true,
+      "directory": "/tmp",
+      "workspace": "",
+      "workspace_position": 0,
+      "tab": "",
+      "pane_title": "stray",
+      "view": {
+        "key": {
+          "host": "mac",
+          "server": "default",
+          "epoch": 1,
+          "pane_id": "w9:p1"
+        },
+        "agent_program": "claude",
+        "profile": "cldp",
+        "heading": "cldp · claude",
+        "directory": "/tmp",
+        "workspace": "",
+        "tab": "",
+        "status": "working",
+        "attention_class": "working",
+        "waiting_since": 1,
+        "waiting_exact": true,
+        "pane_title": "stray",
+        "context_line": "stray",
+        "sort_key": [
+          1,
+          9007199254740991,
+          2,
+          1,
+          "mac/default/1/w9:p1"
+        ]
+      }
+    },
+    {
+      "key": {
+        "host": "mac",
+        "server": "default",
+        "epoch": 10,
+        "pane_id": "w3:p2"
+      },
+      "agent_program": "claude",
+      "profile": "cldp",
+      "status": "idle",
+      "ever_working": true,
+      "since": 30,
+      "exact": true,
+      "directory": "/Users/op",
+      "workspace": "notes",
+      "workspace_position": 3,
+      "tab": "2",
+      "pane_title": "",
+      "view": {
+        "key": {
+          "host": "mac",
+          "server": "default",
+          "epoch": 10,
+          "pane_id": "w3:p2"
+        },
+        "agent_program": "claude",
+        "profile": "cldp",
+        "heading": "cldp · claude",
+        "directory": "~",
+        "workspace": "notes",
+        "tab": "2",
+        "status": "idle",
+        "attention_class": "finished",
+        "waiting_since": 30,
+        "waiting_exact": true,
+        "pane_title": "",
+        "context_line": "",
+        "sort_key": [
+          0,
+          0,
+          1,
+          30,
+          "mac/default/10/w3:p2"
+        ]
+      }
+    },
+    {
+      "key": {
+        "host": "mac",
+        "server": "default",
+        "epoch": 1,
+        "pane_id": "w2:p1"
+      },
+      "agent_program": "claude",
+      "profile": "cldw",
+      "status": "blocked",
+      "ever_working": true,
+      "since": 10,
+      "exact": true,
+      "directory": "/Users/op/src/api",
+      "workspace": "api",
+      "workspace_position": 2,
+      "tab": "main",
+      "pane_title": "fix-auth-bug",
+      "view": {
+        "key": {
+          "host": "mac",
+          "server": "default",
+          "epoch": 1,
+          "pane_id": "w2:p1"
+        },
+        "agent_program": "claude",
+        "profile": "cldw",
+        "heading": "cldw · claude",
+        "directory": "~/src/api",
+        "workspace": "api",
+        "tab": "main",
+        "status": "blocked",
+        "attention_class": "needs_you",
+        "waiting_since": 10,
+        "waiting_exact": true,
+        "pane_title": "fix-auth-bug",
+        "context_line": "fix-auth-bug",
+        "sort_key": [
+          0,
+          0,
+          0,
+          10,
+          "mac/default/1/w2:p1"
+        ]
+      }
+    },
+    {
+      "key": {
+        "host": "mac",
+        "server": "default",
+        "epoch": 1,
+        "pane_id": "w1:p4"
+      },
+      "agent_program": "claude",
+      "profile": "cldw",
+      "status": "unknown",
+      "ever_working": false,
+      "since": 15,
+      "exact": false,
+      "directory": "/Users/opx/elsewhere",
+      "workspace": "herddash",
+      "workspace_position": 1,
+      "tab": "aux",
+      "pane_title": "Claude Code",
+      "view": {
+        "key": {
+          "host": "mac",
+          "server": "default",
+          "epoch": 1,
+          "pane_id": "w1:p4"
+        },
+        "agent_program": "claude",
+        "profile": "cldw",
+        "heading": "cldw · claude",
+        "directory": "/Users/opx/elsewhere",
+        "workspace": "herddash",
+        "tab": "aux",
+        "status": "unknown",
+        "attention_class": "unknown",
+        "waiting_since": 15,
+        "waiting_exact": false,
+        "pane_title": "Claude Code",
+        "context_line": "",
+        "sort_key": [
+          1,
+          1,
+          3,
+          15,
+          "mac/default/1/w1:p4"
+        ]
+      }
+    },
+    {
+      "key": {
+        "host": "mac",
+        "server": "default",
+        "epoch": 1,
+        "pane_id": "w2:p3"
+      },
+      "agent_program": "codex",
+      "profile": "codex",
+      "status": "working",
+      "ever_working": true,
+      "since": 40,
+      "exact": true,
+      "directory": "/Users/op/src/api",
+      "workspace": "api",
+      "workspace_position": 2,
+      "tab": "aux",
+      "pane_title": "busy",
+      "view": {
+        "key": {
+          "host": "mac",
+          "server": "default",
+          "epoch": 1,
+          "pane_id": "w2:p3"
+        },
+        "agent_program": "codex",
+        "profile": "codex",
+        "heading": "codex",
+        "directory": "~/src/api",
+        "workspace": "api",
+        "tab": "aux",
+        "status": "working",
+        "attention_class": "working",
+        "waiting_since": 40,
+        "waiting_exact": true,
+        "pane_title": "busy",
+        "context_line": "",
+        "sort_key": [
+          1,
+          2,
+          2,
+          40,
+          "mac/default/1/w2:p3"
+        ]
+      }
+    },
+    {
+      "key": {
+        "host": "mac",
+        "server": "default",
+        "epoch": 1,
+        "pane_id": "w3:p1"
+      },
+      "agent_program": "codex",
+      "profile": "codex",
+      "status": "blocked",
+      "ever_working": false,
+      "directory": "/Users/op/notes",
+      "workspace": "notes",
+      "workspace_position": 3,
+      "tab": "1",
+      "pane_title": "anything",
+      "view": {
+        "key": {
+          "host": "mac",
+          "server": "default",
+          "epoch": 1,
+          "pane_id": "w3:p1"
+        },
+        "agent_program": "codex",
+        "profile": "codex",
+        "heading": "codex",
+        "directory": "~/notes",
+        "workspace": "notes",
+        "tab": "1",
+        "status": "blocked",
+        "attention_class": "needs_you",
+        "waiting_exact": false,
+        "pane_title": "anything",
+        "context_line": "",
+        "sort_key": [
+          0,
+          0,
+          0,
+          9007199254740991,
+          "mac/default/1/w3:p1"
+        ]
+      }
+    },
+    {
+      "key": {
+        "host": "mac",
+        "server": "default",
+        "epoch": 1,
+        "pane_id": "w1:p5"
+      },
+      "agent_program": "claude",
+      "profile": "cldp",
+      "status": "idle",
+      "ever_working": false,
+      "since": 60,
+      "exact": true,
+      "directory": "/Users/op/src/herddash",
+      "workspace": "herddash",
+      "workspace_position": 1,
+      "tab": "aux",
+      "pane_title": "new-session",
+      "view": {
+        "key": {
+          "host": "mac",
+          "server": "default",
+          "epoch": 1,
+          "pane_id": "w1:p5"
+        },
+        "agent_program": "claude",
+        "profile": "cldp",
+        "heading": "cldp · claude",
+        "directory": "~/src/herddash",
+        "workspace": "herddash",
+        "tab": "aux",
+        "status": "idle",
+        "attention_class": "working",
+        "waiting_since": 60,
+        "waiting_exact": true,
+        "pane_title": "new-session",
+        "context_line": "new-session",
+        "sort_key": [
+          1,
+          1,
+          2,
+          60,
+          "mac/default/1/w1:p5"
+        ]
+      }
+    },
+    {
+      "key": {
+        "host": "mac",
+        "server": "default",
+        "epoch": 1,
+        "pane_id": "w1:p2"
+      },
+      "agent_program": "claude",
+      "profile": "unresolved",
+      "status": "done",
+      "ever_working": true,
+      "since": 5,
+      "exact": true,
+      "directory": "/Users/op/src/herddash",
+      "workspace": "herddash",
+      "workspace_position": 1,
+      "tab": "build",
+      "pane_title": "write-tests",
+      "view": {
+        "key": {
+          "host": "mac",
+          "server": "default",
+          "epoch": 1,
+          "pane_id": "w1:p2"
+        },
+        "agent_program": "claude",
+        "profile": "unresolved",
+        "heading": "unresolved · claude",
+        "directory": "~/src/herddash",
+        "workspace": "herddash",
+        "tab": "build",
+        "status": "done",
+        "attention_class": "finished",
+        "waiting_since": 5,
+        "waiting_exact": true,
+        "pane_title": "write-tests",
+        "context_line": "write-tests",
+        "sort_key": [
+          0,
+          0,
+          1,
+          5,
+          "mac/default/1/w1:p2"
+        ]
+      }
+    },
+    {
+      "key": {
+        "host": "mac",
+        "server": "default",
+        "epoch": 1,
+        "pane_id": "w2:p4"
+      },
+      "agent_program": "claude",
+      "profile": "cldw",
+      "status": "unknown",
+      "ever_working": false,
+      "directory": "/Users/op/src/api",
+      "workspace": "api",
+      "workspace_position": 2,
+      "tab": "aux",
+      "pane_title": "",
+      "view": {
+        "key": {
+          "host": "mac",
+          "server": "default",
+          "epoch": 1,
+          "pane_id": "w2:p4"
+        },
+        "agent_program": "claude",
+        "profile": "cldw",
+        "heading": "cldw · claude",
+        "directory": "~/src/api",
+        "workspace": "api",
+        "tab": "aux",
+        "status": "unknown",
+        "attention_class": "unknown",
+        "waiting_exact": false,
+        "pane_title": "",
+        "context_line": "",
+        "sort_key": [
+          1,
+          2,
+          3,
+          9007199254740991,
+          "mac/default/1/w2:p4"
+        ]
+      }
+    },
+    {
+      "key": {
+        "host": "mac",
+        "server": "default",
+        "epoch": 1,
+        "pane_id": "w1:p1"
+      },
+      "agent_program": "claude",
+      "profile": "cldp",
+      "status": "blocked",
+      "ever_working": true,
+      "since": 20,
+      "exact": false,
+      "directory": "/Users/op/src/herddash",
+      "workspace": "herddash",
+      "workspace_position": 1,
+      "tab": "build",
+      "pane_title": "Claude Code",
+      "view": {
+        "key": {
+          "host": "mac",
+          "server": "default",
+          "epoch": 1,
+          "pane_id": "w1:p1"
+        },
+        "agent_program": "claude",
+        "profile": "cldp",
+        "heading": "cldp · claude",
+        "directory": "~/src/herddash",
+        "workspace": "herddash",
+        "tab": "build",
+        "status": "blocked",
+        "attention_class": "needs_you",
+        "waiting_since": 20,
+        "waiting_exact": false,
+        "pane_title": "Claude Code",
+        "context_line": "",
+        "sort_key": [
+          0,
+          0,
+          0,
+          20,
+          "mac/default/1/w1:p1"
+        ]
+      }
+    },
+    {
+      "key": {
+        "host": "mac",
+        "server": "default",
+        "epoch": 1,
+        "pane_id": "w3:p3"
+      },
+      "agent_program": "claude",
+      "profile": "cldp",
+      "status": "working",
+      "ever_working": true,
+      "since": 12,
+      "exact": true,
+      "directory": "/Users/op/notes",
+      "workspace": "notes",
+      "workspace_position": 3,
+      "tab": "1",
+      "pane_title": "summarise",
+      "view": {
+        "key": {
+          "host": "mac",
+          "server": "default",
+          "epoch": 1,
+          "pane_id": "w3:p3"
+        },
+        "agent_program": "claude",
+        "profile": "cldp",
+        "heading": "cldp · claude",
+        "directory": "~/notes",
+        "workspace": "notes",
+        "tab": "1",
+        "status": "working",
+        "attention_class": "working",
+        "waiting_since": 12,
+        "waiting_exact": true,
+        "pane_title": "summarise",
+        "context_line": "summarise",
+        "sort_key": [
+          1,
+          3,
+          2,
+          12,
+          "mac/default/1/w3:p3"
+        ]
+      }
+    },
+    {
+      "key": {
+        "host": "mac",
+        "server": "default",
+        "epoch": 2,
+        "pane_id": "w2:p2"
+      },
+      "agent_program": "claude",
+      "profile": "cldw",
+      "status": "done",
+      "ever_working": true,
+      "since": 30,
+      "exact": false,
+      "directory": "/opt/work",
+      "workspace": "api",
+      "workspace_position": 2,
+      "tab": "main",
+      "pane_title": "  ",
+      "view": {
+        "key": {
+          "host": "mac",
+          "server": "default",
+          "epoch": 2,
+          "pane_id": "w2:p2"
+        },
+        "agent_program": "claude",
+        "profile": "cldw",
+        "heading": "cldw · claude",
+        "directory": "/opt/work",
+        "workspace": "api",
+        "tab": "main",
+        "status": "done",
+        "attention_class": "finished",
+        "waiting_since": 30,
+        "waiting_exact": false,
+        "pane_title": "  ",
+        "context_line": "",
+        "sort_key": [
+          0,
+          0,
+          1,
+          30,
+          "mac/default/2/w2:p2"
+        ]
+      }
+    },
+    {
+      "key": {
+        "host": "mac",
+        "server": "default",
+        "epoch": 1,
+        "pane_id": "w1:p3"
+      },
+      "agent_program": "claude",
+      "profile": "cldp",
+      "status": "working",
+      "ever_working": true,
+      "since": 50,
+      "exact": true,
+      "directory": "/Users/op/src/herddash",
+      "workspace": "herddash",
+      "workspace_position": 1,
+      "tab": "build",
+      "pane_title": "refactor-store",
+      "view": {
+        "key": {
+          "host": "mac",
+          "server": "default",
+          "epoch": 1,
+          "pane_id": "w1:p3"
+        },
+        "agent_program": "claude",
+        "profile": "cldp",
+        "heading": "cldp · claude",
+        "directory": "~/src/herddash",
+        "workspace": "herddash",
+        "tab": "build",
+        "status": "working",
+        "attention_class": "working",
+        "waiting_since": 50,
+        "waiting_exact": true,
+        "pane_title": "refactor-store",
+        "context_line": "refactor-store",
+        "sort_key": [
+          1,
+          1,
+          2,
+          50,
+          "mac/default/1/w1:p3"
+        ]
+      }
+    }
+  ],
+  "order": [
+    "mac/default/1/w2:p1",
+    "mac/default/1/w1:p1",
+    "mac/default/1/w3:p1",
+    "mac/default/1/w1:p2",
+    "mac/default/2/w2:p2",
+    "mac/default/10/w3:p2",
+    "mac/default/1/w1:p3",
+    "mac/default/1/w1:p5",
+    "mac/default/1/w1:p4",
+    "mac/default/1/w2:p3",
+    "mac/default/1/w2:p4",
+    "mac/default/1/w3:p3",
+    "mac/default/1/w9:p1"
+  ],
+  "headers": [
+    6,
+    9,
+    11,
+    12
+  ]
+}
