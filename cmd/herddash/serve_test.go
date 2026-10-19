@@ -387,11 +387,13 @@ func TestPrinter(t *testing.T) {
 	p.Removed(engine.Agent{Key: key, Status: core.StatusBlocked}, at+3000)
 	p.Reconnected("0.9.5", 1, true, at+4000)
 	p.Reconnected("0.9.5", 2, false, at+5000)
+	p.Resynced("events_lost", at+6000)
 	want := "2026-10-16T12:00:00.000Z agent      host=mac epoch=1 pane=w1:p1 program=claude status=working\n" +
 		"2026-10-16T12:00:01.500Z transition host=mac epoch=1 pane=w1:p1 program=claude status=blocked previous=working provenance=live\n" +
 		"2026-10-16T12:00:03.000Z removed    host=mac epoch=1 pane=w1:p1 program=- status=blocked\n" +
 		"2026-10-16T12:00:04.000Z reconnect  herdr=0.9.5 epoch=1 epoch_change=kept\n" +
-		"2026-10-16T12:00:05.000Z reconnect  herdr=0.9.5 epoch=2 epoch_change=incremented\n"
+		"2026-10-16T12:00:05.000Z reconnect  herdr=0.9.5 epoch=2 epoch_change=incremented\n" +
+		"2026-10-16T12:00:06.000Z resync     cause=events_lost\n"
 	if b.String() != want {
 		t.Errorf("printed\n%s\nwant\n%s", b.String(), want)
 	}

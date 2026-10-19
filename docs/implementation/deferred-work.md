@@ -28,3 +28,6 @@
 - source_spec: `docs/implementation/spec-1-6-reconnect-forever-and-know-when-herdr-restarted.md`
   summary: Tell consumers when herdr is lost: serve prints nothing until it reconnects, and Engine.Agents() keeps returning the last Statuses as if current.
   evidence: Only Sink.Reconnected exists; the spine's ConnectionTruth (connected, last_snapshot_at, gate) is the Epic 3 vehicle for this.
+- source_spec: `docs/implementation/spec-1-7-resync-when-the-stream-cannot-be-trusted.md`
+  summary: Document the engine tunables (snapshot, reconnect, resync and reconcile intervals) with the configuration, as the spine's Deferred list says.
+  evidence: Story 1.7 review; they exist only as commented constants in internal/engine/tunables.go, and Story 1.6's backoff values were not documented either.

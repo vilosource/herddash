@@ -24,6 +24,15 @@ const (
 	// defaultReconnectStableAfter is how long a connection must stay up
 	// before losing it no longer counts towards the backoff.
 	defaultReconnectStableAfter = 30 * time.Second
+	// defaultResyncMinInterval is the least time between the starts of two
+	// resyncs (AD-11). A trigger inside it schedules one resync for when it
+	// elapses. It also bounds how often a pane herdr keeps rejecting is
+	// subscribed again: once per interval.
+	defaultResyncMinInterval = 5 * time.Second
+	// defaultReconcileInterval is how often the engine reads a snapshot while
+	// connected, whether or not anything signalled a change: the snapshot is
+	// the truth, and events are only the low-latency signal.
+	defaultReconcileInterval = 60 * time.Second
 	// pingTimeout bounds the ping that reads herdr's version at each start.
 	pingTimeout = 10 * time.Second
 	// subscribeTimeout bounds the setup of a subscription, lifecycle or status,
@@ -45,6 +54,8 @@ var (
 	reconnectInitialDelay = defaultReconnectInitialDelay
 	reconnectMaxDelay     = defaultReconnectMaxDelay
 	reconnectStableAfter  = defaultReconnectStableAfter
+	resyncMinInterval     = defaultResyncMinInterval
+	reconcileInterval     = defaultReconcileInterval
 )
 
 // reconnectDelay is the wait after the nth consecutive failed attempt to start

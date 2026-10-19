@@ -50,6 +50,18 @@ type Options struct {
 // arrives while one is causes exactly one more read after it, and reads start
 // at least snapshotMinInterval apart. Buffered events are never replayed onto a
 // snapshot.
+//
+// Resync (AD-11): a health signal on a status subscription, a failed status
+// subscribe, or a snapshot showing a tracked Agent with no live or pending
+// subscription means the engine can no longer trust it saw every event. It
+// resyncs: it reports Resynced to the Sink, subscribes again every tracked pane
+// without a subscription, and once those attempts have settled reads a
+// snapshot that started after them; applying that snapshot ends the resync.
+// One resync runs at a time, a trigger during one causes one more after it, and
+// resyncs start at least resyncMinInterval apart. apply subscribes only the
+// panes it starts tracking (and every pane after a reconnect), so a pane herdr
+// keeps rejecting is subscribed again only by a resync, once per interval.
+// While connected and ready, a snapshot is also read every reconcileInterval.
 type Engine struct {
 	host, server string
 	client       Client
@@ -106,6 +118,22 @@ type Engine struct {
 	// is set while a read waits for its time to start.
 	lastStart time.Time
 	scheduled bool
+
+	// resyncing is set from a resync's start until the snapshot that ends it
+	// is applied. resyncPending holds the panes whose resubscribe it still
+	// waits for; resyncReadFrom is the first read that may end it, 0 while any
+	// is pending.
+	resyncing      bool
+	resyncPending  map[string]bool
+	resyncReadFrom uint64
+	// resyncAgain records a trigger during the resync's read, so one more
+	// resync follows it; resyncScheduled is set while a resync waits for the
+	// minimum interval. resyncNext is the cause either one will report.
+	resyncAgain     bool
+	resyncScheduled bool
+	resyncNext      string
+	// resyncLastStart is when the latest resync began, by the wall clock.
+	resyncLastStart time.Time
 }
 
 // pane is one tracked Agent pane.
@@ -135,6 +163,13 @@ type pane struct {
 	// arrived, or 0. That read may predate the event, so its Status is not
 	// compared; the read after it settles the Status.
 	liveDuring uint64
+	// subFailed is set when a subscribe attempt made outside a resync failed.
+	// The resync that failure triggers skips the pane once, clearing it, so
+	// the pane is subscribed again only by the resync after that.
+	subFailed bool
+	// cause is why the pane last lost or failed its subscription: the cause a
+	// resync for it reports.
+	cause string
 }
 
 // Inbox messages.
@@ -174,6 +209,14 @@ type (
 	}
 	// snapshotDueMsg says a scheduled read may start.
 	snapshotDueMsg struct {
+		conn uint64
+	}
+	// resyncDueMsg says a scheduled resync may start.
+	resyncDueMsg struct {
+		conn uint64
+	}
+	// reconcileDueMsg says reconcileInterval has elapsed again.
+	reconcileDueMsg struct {
 		conn uint64
 	}
 	agentsQuery struct {
@@ -357,6 +400,14 @@ func (e *Engine) disconnect() {
 	e.again = false
 	e.removedDuring = nil
 	e.scheduled = false
+	// A reconnect resubscribes, reads and replaces state itself: any resync in
+	// progress or scheduled is abandoned.
+	e.resyncing = false
+	e.resyncPending = nil
+	e.resyncReadFrom = 0
+	e.resyncAgain = false
+	e.resyncScheduled = false
+	e.resyncNext = ""
 }
 
 func (e *Engine) loop(ctx context.Context) {
@@ -428,6 +479,16 @@ func (e *Engine) handle(m any) {
 			e.scheduled = false
 			e.startSnapshot()
 		}
+	case resyncDueMsg:
+		if m.conn == e.conn && e.connected && e.ready && e.resyncScheduled {
+			e.resyncScheduled = false
+			e.startResync(e.resyncNext)
+		}
+	case reconcileDueMsg:
+		if m.conn == e.conn && e.connected && e.ready {
+			e.log.Debug("reconcile")
+			e.requestSnapshot()
+		}
 	case agentsQuery:
 		m.reply <- e.agents()
 	}
@@ -452,8 +513,10 @@ func (e *Engine) onLifecycle(d herdr.Delivery[core.LifecycleEvent]) {
 			e.transition(p, ev.FinalStatus, core.ProvenanceLive, nil)
 		}
 		e.remove(ev.PaneID, string(ev.Kind))
+		e.resyncSettle()
 	case core.LifecycleClosed, core.LifecycleExited:
 		e.remove(ev.PaneID, string(ev.Kind))
+		e.resyncSettle()
 	case core.LifecycleAgentDetected:
 		if _, tracked := e.panes[ev.PaneID]; tracked {
 			// Perhaps another program in the same pane: read it again.
@@ -482,7 +545,8 @@ func (e *Engine) onStatus(m statusMsg) {
 			p.sub.Close()
 			p.sub = nil
 		}
-		e.requestSnapshot() // which subscribes again if the Agent is still there
+		p.cause = string(h.Kind)
+		e.requestResync(p.cause) // which subscribes again and reads
 		return
 	}
 	ev := m.d.Event
@@ -512,19 +576,29 @@ func (e *Engine) onSubscribed(m subscribedMsg) {
 		return
 	}
 	p.subscribing = false
+	pending := e.resyncPending[p.id]
+	delete(e.resyncPending, p.id)
 	if m.err != nil {
-		// Only this pane fails; perhaps it closed since it was named. Read
-		// again: the snapshot decides whether it is still there.
+		// Only this pane fails; perhaps it closed since it was named. A
+		// resync's snapshot decides whether it is still there.
 		e.log.Warn("status subscribe failed", "pane", p.id, "error", m.err)
+		p.subFailed = !pending // a resync's own failure is not skipped again
+		p.cause = subscribeCause(m.err)
 		if !p.known {
 			delete(e.panes, p.id)
 			if e.inFlight {
 				e.removedDuring[p.id] = true // the read in flight may predate this
 			}
 		}
-		e.requestSnapshot()
+		if pending {
+			// Part of a resync already: its snapshot follows.
+			e.resyncSettle()
+		} else {
+			e.requestResync(p.cause)
+		}
 		return
 	}
+	p.subFailed = false
 	p.sub = m.sub
 	if next := e.snapSeq + 1; p.removableFrom > next {
 		p.removableFrom = next
@@ -539,7 +613,22 @@ func (e *Engine) onSubscribed(m subscribedMsg) {
 			}
 		}
 	}()
-	e.requestSnapshot()
+	if pending {
+		e.resyncSettle() // the resync's read is the one that follows
+	} else {
+		e.requestSnapshot()
+	}
+}
+
+// subscribeCause names a failed status subscribe as a resync cause: the
+// health signal's kind, or closed when the attempt failed before herdr
+// answered (a timeout).
+func subscribeCause(err error) string {
+	var h *herdr.Health
+	if errors.As(err, &h) {
+		return string(h.Kind)
+	}
+	return string(herdr.HealthClosed)
 }
 
 func (e *Engine) onSnapshot(m snapshotMsg) {
@@ -555,20 +644,41 @@ func (e *Engine) onSnapshot(m snapshotMsg) {
 		e.schedule(snapshotRetryDelay)
 		return
 	}
-	if !e.ready {
+	first := !e.ready
+	if first {
 		e.ready = true
 		e.readyAt = time.Now()
 		if e.everReady {
 			e.decideEpoch(m.snap)
 		}
 		e.everReady = true
+		e.startReconcile()
 	}
-	e.apply(m.seq, m.snap)
+	// The read that ends a resync is the first one started after its
+	// subscribe attempts settled.
+	ending := e.resyncing && e.resyncReadFrom != 0 && m.seq >= e.resyncReadFrom
+	if ending {
+		e.resyncing = false
+		e.resyncReadFrom = 0
+		e.resyncPending = nil
+	}
+	unsubscribed := e.apply(m.seq, m.snap, first)
 	e.removedDuring = nil
 	if e.again {
 		e.again = false
 		e.requestSnapshot()
 	}
+	if ending {
+		e.log.Info("resync done")
+		if e.resyncAgain {
+			e.resyncAgain = false
+			e.requestResync(e.resyncNext)
+		}
+	}
+	if unsubscribed != "" && !e.resyncing {
+		e.requestResync(unsubscribed)
+	}
+	e.resyncSettle() // in case the snapshot removed the last pane it waited for
 }
 
 // decideEpoch applies the epoch rule (AD-3) to the first snapshot after a
@@ -608,8 +718,13 @@ func (e *Engine) decideEpoch(s core.Snapshot) {
 }
 
 // apply makes the engine agree with snapshot seq: the snapshot is the truth for
-// which Agents exist and their Status.
-func (e *Engine) apply(seq uint64, s core.Snapshot) {
+// which Agents exist and their Status. It subscribes the panes it starts
+// tracking, and, when resubscribe is set (the first snapshot of a connection),
+// every pane without a subscription. Otherwise a tracked Agent it finds with
+// no live or pending subscription is left to a resync: apply returns that
+// pane's cause, or "" when there is none.
+func (e *Engine) apply(seq uint64, s core.Snapshot, resubscribe bool) string {
+	unsubscribed := ""
 	e.terminals = make(map[string]string, len(s.Panes))
 	for _, obs := range s.Panes {
 		e.terminals[obs.PaneID] = obs.TerminalID
@@ -631,12 +746,14 @@ func (e *Engine) apply(seq uint64, s core.Snapshot) {
 			e.remove(obs.PaneID, "terminal replaced")
 			tracked = false
 		}
+		fresh := false
 		if !tracked {
 			if e.removedDuring[obs.PaneID] {
 				continue // removed while this read ran; the next read decides
 			}
 			p = e.track(obs.PaneID)
 			p.removableFrom = seq + 1
+			fresh = true
 		}
 		if p.context.PaneTitle != obs.Context.PaneTitle {
 			e.log.Debug("pane title", "pane", p.id, "pane_title", obs.Context.PaneTitle)
@@ -656,8 +773,15 @@ func (e *Engine) apply(seq uint64, s core.Snapshot) {
 		case a.Status != p.status:
 			e.transition(p, a.Status, core.ProvenanceSnapshot, a.StateChangeSeq)
 		}
-		if p.sub == nil && !p.subscribing {
+		switch {
+		case p.sub != nil || p.subscribing:
+		case fresh || resubscribe:
 			e.subscribe(p)
+		case unsubscribed == "":
+			unsubscribed = p.cause
+			if unsubscribed == "" {
+				unsubscribed = string(herdr.HealthClosed)
+			}
 		}
 	}
 	var gone []string
@@ -670,6 +794,7 @@ func (e *Engine) apply(seq uint64, s core.Snapshot) {
 	for _, id := range gone {
 		e.remove(id, "absent from snapshot")
 	}
+	return unsubscribed
 }
 
 // noteEvent records that an event arrived; one during a read causes one more.
@@ -713,6 +838,134 @@ func (e *Engine) schedule(delay time.Duration) {
 		case <-e.runCtx.Done():
 		}
 	}()
+}
+
+// startReconcile starts the current connection's reconcile timer: every
+// reconcileInterval it asks for a snapshot, through the snapshot guard, until
+// the connection ends.
+func (e *Engine) startReconcile() {
+	conn, ctx := e.conn, e.connCtx
+	e.wg.Add(1)
+	go func() {
+		defer e.wg.Done()
+		t := time.NewTicker(reconcileInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-t.C:
+				if !e.send(reconcileDueMsg{conn: conn}) {
+					return
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+}
+
+// requestResync asks for a resync for cause. Before a running resync's read
+// has started, the trigger joins it: any pane it left without a subscription
+// is subscribed as part of it. After that, it causes exactly one more resync
+// once the running one ends. With none running, a resync starts now, or when
+// resyncMinInterval since the last one began has elapsed. Requests coalesce.
+//
+// Until the connection's first snapshot is applied it does nothing: that
+// snapshot subscribes every pane, after the epoch is decided.
+func (e *Engine) requestResync(cause string) {
+	if !e.connected || !e.ready {
+		return
+	}
+	switch {
+	case e.resyncing:
+		if e.resyncReadFrom == 0 || e.snapSeq < e.resyncReadFrom {
+			if e.resyncSubscribe() > 0 {
+				e.resyncReadFrom = 0 // wait for these too
+			}
+			return
+		}
+		if !e.resyncAgain {
+			e.resyncAgain = true
+			e.resyncNext = cause
+		}
+	case e.resyncScheduled:
+	default:
+		if wait := resyncMinInterval - time.Since(e.resyncLastStart); wait > 0 {
+			e.scheduleResync(wait, cause)
+			return
+		}
+		e.startResync(cause)
+	}
+}
+
+// scheduleResync starts a resync for cause after delay.
+func (e *Engine) scheduleResync(delay time.Duration, cause string) {
+	e.resyncScheduled = true
+	e.resyncNext = cause
+	conn, ctx := e.conn, e.connCtx
+	e.wg.Add(1)
+	go func() {
+		defer e.wg.Done()
+		t := time.NewTimer(delay)
+		defer t.Stop()
+		select {
+		case <-t.C:
+			e.send(resyncDueMsg{conn: conn})
+		case <-ctx.Done():
+		}
+	}()
+}
+
+// startResync begins a resync: it is reported once, every tracked pane
+// without a subscription is subscribed again, and once those attempts settle a
+// snapshot is read.
+func (e *Engine) startResync(cause string) {
+	e.resyncing = true
+	e.resyncLastStart = time.Now()
+	e.resyncReadFrom = 0
+	e.resyncPending = map[string]bool{}
+	e.resyncNext = ""
+	e.log.Info("resync", "cause", cause)
+	e.sink.Resynced(cause, e.now())
+	e.resyncSubscribe()
+	e.resyncSettle()
+}
+
+// resyncSubscribe subscribes again, as part of the running resync, every
+// tracked pane without a live or pending subscription, except one whose
+// subscribe outside a resync just failed: that pane is skipped once, and the
+// snapshot that ends the resync finds it and causes the next one, at least
+// resyncMinInterval later. It returns how many it subscribed.
+func (e *Engine) resyncSubscribe() int {
+	ids := make([]string, 0, len(e.panes))
+	for id := range e.panes {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	n := 0
+	for _, id := range ids {
+		p := e.panes[id]
+		if p.sub != nil || p.subscribing {
+			continue
+		}
+		if p.subFailed {
+			p.subFailed = false
+			continue
+		}
+		e.subscribe(p)
+		e.resyncPending[id] = true
+		n++
+	}
+	return n
+}
+
+// resyncSettle starts the running resync's read once none of its subscribe
+// attempts is pending: the first read that starts from now on ends it.
+func (e *Engine) resyncSettle() {
+	if !e.resyncing || len(e.resyncPending) > 0 || e.resyncReadFrom != 0 {
+		return
+	}
+	e.resyncReadFrom = e.snapSeq + 1
+	e.requestSnapshot()
 }
 
 func (e *Engine) startSnapshot() {
@@ -768,6 +1021,7 @@ func (e *Engine) remove(id, reason string) {
 		return
 	}
 	delete(e.panes, id)
+	delete(e.resyncPending, id) // the caller settles the resync
 	if p.sub != nil {
 		p.sub.Close()
 	}
