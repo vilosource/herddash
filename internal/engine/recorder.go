@@ -8,14 +8,15 @@ import (
 	"github.com/vilosource/herddash/internal/store"
 )
 
-// Recorder is what the engine needs from the store (AD-4, AD-9): the record's
-// two appends, one Agent's history to fold, and the engine's own state across
-// Daemon restarts. *store.Store provides it; tests provide a fake. Only the
+// Recorder is what the engine needs from the store (AD-4, AD-9): the
+// record's two appends, one Agent's history to fold, the Retention sweep,
+// and the engine's own state across Daemon restarts. *store.Store provides it; tests provide a fake. Only the
 // engine goroutine calls it.
 type Recorder interface {
 	Append(t core.Transition) error
 	History(ctx context.Context, key core.AgentKey) ([]core.Transition, error)
 	AppendResyncMarker(m store.ResyncMarker) error
+	Sweep(ctx context.Context, cutoff int64, present []store.Present) (store.SweepResult, error)
 	LoadServerState(host, server string) (store.ServerState, bool, error)
 	SaveServerState(host, server string, st store.ServerState) error
 }
@@ -74,13 +75,17 @@ func (e *Engine) markCauses(cs []cause) {
 }
 
 // record appends t to the record. A failed write is logged and dropped: it
-// never stops the engine or the Sink.
+// never stops the engine or the Sink. The pane is marked unrecorded, so
+// Retention keeps all its rows.
 func (e *Engine) record(t core.Transition) {
 	if e.store == nil {
 		return
 	}
 	if err := e.store.Append(t); err != nil {
 		e.log.Error("transition not recorded", "pane", t.Key().PaneID, "error", err.Error())
+		if p, ok := e.panes[t.Key().PaneID]; ok {
+			p.unrecorded = true
+		}
 	}
 }
 
@@ -114,6 +119,7 @@ func (e *Engine) history(p *pane) ([]core.Transition, bool) {
 	}
 	ts, err := e.store.History(e.runCtx, e.key(p.id))
 	if err != nil {
+		p.unrecorded = true // its fold may not match the record
 		if e.runCtx.Err() != nil {
 			e.log.Info("history not read as the engine stops; first sight not recorded", "pane", p.id)
 			return nil, false

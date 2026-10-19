@@ -43,6 +43,10 @@ const (
 	// Agent's first report waits for it, and running out gives
 	// core.ProfileUnresolved.
 	defaultProfileTimeout = 2 * time.Second
+	// defaultRetentionSweepInterval is how often the engine sweeps the record
+	// for rows older than Retention, from the first connection of a run
+	// becoming ready on (FR-9, AD-4).
+	defaultRetentionSweepInterval = time.Hour
 	// pingTimeout bounds the ping that reads herdr's version at each start.
 	pingTimeout = 10 * time.Second
 	// subscribeTimeout bounds the setup of a subscription, lifecycle or status,
@@ -68,6 +72,7 @@ var (
 	reconcileInterval      = defaultReconcileInterval
 	refusedRecheckInterval = defaultRefusedRecheckInterval
 	profileTimeout         = defaultProfileTimeout
+	retentionSweepInterval = defaultRetentionSweepInterval
 )
 
 // reconnectDelay is the wait after the nth consecutive failed attempt to start
