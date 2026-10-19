@@ -121,6 +121,8 @@ type fakeClient struct {
 	// holdSub holds the next status subscribe for a pane, whatever its
 	// context, until its channel closes.
 	holdSub map[string]chan struct{}
+	// subTimes is when each status subscribe for a pane was called.
+	subTimes map[string][]time.Time
 
 	release   chan struct{}
 	snapCalls chan struct{}
@@ -139,6 +141,7 @@ func newFakeClient(t *testing.T, snap core.Snapshot) *fakeClient {
 		release:   make(chan struct{}),
 		snapCalls: make(chan struct{}, 1024),
 		awaited:   map[string]int{},
+		subTimes:  map[string][]time.Time{},
 	}
 }
 
@@ -217,6 +220,7 @@ func (f *fakeClient) SubscribeLifecycle(ctx context.Context) (Subscription[core.
 func (f *fakeClient) SubscribeStatus(ctx context.Context, paneID string) (Subscription[core.StatusEvent], error) {
 	f.record("status " + paneID)
 	f.mu.Lock()
+	f.subTimes[paneID] = append(f.subTimes[paneID], time.Now())
 	hold := f.holdSub[paneID]
 	delete(f.holdSub, paneID)
 	f.mu.Unlock()
@@ -303,6 +307,47 @@ func (f *fakeClient) callList() []string {
 	return slices.Clone(f.calls)
 }
 
+// subscribeTimes returns when each status subscribe for paneID was called.
+func (f *fakeClient) subscribeTimes(paneID string) []time.Time {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.subTimes[paneID])
+}
+
+// holdSubscribes holds the next status subscribe of each pane until the
+// returned channel closes.
+func (f *fakeClient) holdSubscribes(paneIDs ...string) chan struct{} {
+	c := make(chan struct{})
+	f.mu.Lock()
+	if f.holdSub == nil {
+		f.holdSub = map[string]chan struct{}{}
+	}
+	for _, id := range paneIDs {
+		f.holdSub[id] = c
+	}
+	f.mu.Unlock()
+	return c
+}
+
+// awaitStatusSubs waits until paneID has had n successful status
+// subscriptions in all, and returns the latest.
+func (f *fakeClient) awaitStatusSubs(paneID string, n int) *fakeSub[core.StatusEvent] {
+	f.t.Helper()
+	deadline := time.Now().Add(wait)
+	for {
+		f.mu.Lock()
+		subs := f.status[paneID]
+		f.mu.Unlock()
+		if len(subs) >= n {
+			return subs[len(subs)-1]
+		}
+		if time.Now().After(deadline) {
+			f.t.Fatalf("%d status subscriptions for %s, want %d", len(subs), paneID, n)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 // statusSub returns the latest status subscription for a pane.
 func (f *fakeClient) statusSub(paneID string) *fakeSub[core.StatusEvent] {
 	f.t.Helper()
@@ -385,6 +430,7 @@ type recorder struct {
 	times       []int64  // observed_at of each line
 	epochs      []uint64 // the epoch of each line's key, or of a reconnect
 	transitions []core.Transition
+	resyncTimes []time.Time
 	notify      chan struct{}
 }
 
@@ -409,6 +455,20 @@ func (r *recorder) Reconnected(version string, epoch uint64, kept bool, observed
 		change = "kept"
 	}
 	r.add(fmt.Sprintf("reconnected %s epoch %d %s", version, epoch, change), observedAt, epoch)
+}
+
+func (r *recorder) Resynced(cause string, observedAt int64) {
+	r.mu.Lock()
+	r.resyncTimes = append(r.resyncTimes, time.Now())
+	r.mu.Unlock()
+	r.add("resync "+cause, observedAt, 0)
+}
+
+// resyncs returns when each resync began, by the wall clock.
+func (r *recorder) resyncs() []time.Time {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.resyncTimes)
 }
 
 func (r *recorder) lineEpochs() []uint64 {
@@ -445,6 +505,30 @@ func (r *recorder) lastTransition() core.Transition {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.transitions[len(r.transitions)-1]
+}
+
+// count returns how many lines equal line.
+func (r *recorder) count(line string) int {
+	n := 0
+	for _, l := range r.all() {
+		if l == line {
+			n++
+		}
+	}
+	return n
+}
+
+// awaitCount waits until n lines equal line.
+func (r *recorder) awaitCount(t *testing.T, line string, n int) {
+	t.Helper()
+	deadline := time.After(wait)
+	for r.count(line) < n {
+		select {
+		case <-r.notify:
+		case <-deadline:
+			t.Fatalf("%d lines %q, want %d; lines\n%s", r.count(line), line, n, strings.Join(r.all(), "\n"))
+		}
+	}
 }
 
 // expect waits until the recorder holds exactly want, in order.
@@ -576,13 +660,14 @@ func (h *harness) lifecycle(ev core.LifecycleEvent) {
 
 var errBoom = errors.New("boom")
 
-// TestMain removes the snapshot floor and shortens the retry and reconnect
-// delays, so tests run fast; tests of any set their own value before starting
+// TestMain removes the snapshot floor and shortens the retry, reconnect and
+// resync delays, so tests run fast; tests of any set their own value before starting
 // an engine.
 func TestMain(m *testing.M) {
 	snapshotMinInterval = 0
 	snapshotRetryDelay = 10 * time.Millisecond
 	reconnectInitialDelay = 5 * time.Millisecond
 	reconnectMaxDelay = 50 * time.Millisecond
+	resyncMinInterval = 10 * time.Millisecond
 	os.Exit(m.Run())
 }

@@ -35,4 +35,10 @@ type Sink interface {
 	// same herdr instance) or incremented (AD-3). It comes before the Agent,
 	// Transition and removal reports the reconnect causes.
 	Reconnected(version string, epoch uint64, kept bool, observedAt int64)
+	// Resynced reports that a resync began: the engine could no longer trust a
+	// status stream, so it subscribes again where needed and reads a snapshot
+	// (AD-11). cause names the trigger: a herdr.HealthKind (events_lost, error,
+	// rejected, closed, undecodable). It comes before any Transition or removal
+	// the resync's snapshot causes.
+	Resynced(cause string, observedAt int64)
 }

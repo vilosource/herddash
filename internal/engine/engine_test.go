@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -167,10 +168,10 @@ func TestCloseRace(t *testing.T) {
 	h.fake.reject("w1:p4")
 	h.lifecycle(core.LifecycleEvent{Kind: core.LifecycleAgentDetected, PaneID: "w1:p4", AgentProgram: "claude"})
 	h.fake.awaitSubscribe("w1:p4")
-	h.fake.awaitSnapshotCall() // the rejection reads again
+	h.fake.awaitSnapshotCall() // the rejection resyncs, which reads again
 	h.settle()
 
-	h.rec.expect(t, "agent w1:p1 claude working", "agent w1:p2 claude idle")
+	h.rec.expect(t, "agent w1:p1 claude working", "agent w1:p2 claude idle", "resync rejected")
 	for _, id := range []string{"w1:p1", "w1:p2"} {
 		if h.fake.statusSub(id).isClosed() {
 			t.Errorf("%s's subscription was closed by another pane's rejection", id)
@@ -184,19 +185,18 @@ func TestCloseRace(t *testing.T) {
 
 func TestRejectedKnownPaneIsResubscribed(t *testing.T) {
 	// A rejected subscribe for a pane the snapshot still shows fails only
-	// that attempt: the next snapshot subscribes again.
+	// that attempt: a resync subscribes again.
 	fake := newFakeClient(t, twoAgents())
 	fake.reject("w1:p2")
 	h := startEngine(t, fake)
-	h.rec.expect(t, "agent w1:p1 claude working", "agent w1:p2 claude idle")
-	h.fake.awaitSubscribe("w1:p2")
+	h.rec.expect(t, "agent w1:p1 claude working", "agent w1:p2 claude idle", "resync rejected")
 	fake.mu.Lock()
 	delete(fake.rejected, "w1:p2")
 	fake.mu.Unlock()
-	h.fake.awaitSubscribe("w1:p2")
+	sub := h.fake.awaitStatusSubs("w1:p2", 1)
 	h.settle()
-	h.fake.statusSub("w1:p2").event(core.StatusEvent{PaneID: "w1:p2", Status: core.StatusWorking, AgentProgram: "claude"})
-	h.rec.expect(t, "agent w1:p1 claude working", "agent w1:p2 claude idle", "transition w1:p2 claude idle->working live")
+	sub.event(core.StatusEvent{PaneID: "w1:p2", Status: core.StatusWorking, AgentProgram: "claude"})
+	h.rec.awaitCount(t, "transition w1:p2 claude idle->working live", 1)
 }
 
 func TestRemoval(t *testing.T) {
@@ -327,8 +327,8 @@ func TestContextChanged(t *testing.T) {
 }
 
 func TestStatusSubscriptionEnded(t *testing.T) {
-	// A status stream that ends fails only that pane: the engine reads again
-	// and subscribes again.
+	// A status stream that ends fails only that pane: the engine resyncs,
+	// which subscribes again and reads.
 	h := started(t)
 	old := h.fake.statusSub("w1:p1")
 	old.health(&herdr.Health{Kind: herdr.HealthClosed})
@@ -338,7 +338,7 @@ func TestStatusSubscriptionEnded(t *testing.T) {
 		t.Fatal("not subscribed again")
 	}
 	h.fake.statusSub("w1:p1").event(core.StatusEvent{PaneID: "w1:p1", Status: core.StatusDone, AgentProgram: "claude"})
-	h.rec.expect(t, "agent w1:p1 claude working", "agent w1:p2 claude idle", "transition w1:p1 claude working->done live")
+	h.rec.expect(t, "agent w1:p1 claude working", "agent w1:p2 claude idle", "resync closed", "transition w1:p1 claude working->done live")
 }
 
 func TestFailedStartIsRetried(t *testing.T) {
@@ -430,7 +430,7 @@ func TestRejectedDuringReadIsNotRevived(t *testing.T) {
 	h.fake.setGated(false)
 	h.fake.release <- struct{}{}
 	h.settle()
-	h.rec.expect(t, "agent w1:p1 claude working", "agent w1:p2 claude idle")
+	h.rec.expect(t, "agent w1:p1 claude working", "agent w1:p2 claude idle", "resync rejected")
 	if n := strings.Count(strings.Join(h.fake.callList(), ","), "status w1:p4"); n != 1 {
 		t.Errorf("w1:p4 subscribed %d times, want 1", n)
 	}
@@ -998,5 +998,329 @@ func TestStaleMessages(t *testing.T) {
 	h.rec.expect(t, "agent w1:p1 claude working", "agent w1:p2 claude idle", "reconnected 0.9.5 epoch 1 kept")
 	if as := h.agents(); len(as) != 2 || as[0].Status != core.StatusWorking {
 		t.Errorf("agents %+v, want both unchanged", as)
+	}
+}
+
+// setResyncMinInterval sets resyncMinInterval for one test, restoring it after
+// the engine has stopped.
+func setResyncMinInterval(t *testing.T, d time.Duration) {
+	t.Helper()
+	prev := resyncMinInterval
+	resyncMinInterval = d
+	t.Cleanup(func() { resyncMinInterval = prev })
+}
+
+// callsSince returns the fake's calls from index from on.
+func callsSince(h *harness, from int) []string { return h.fake.callList()[from:] }
+
+func TestResyncEventsLost(t *testing.T) {
+	h := started(t)
+	old := h.fake.statusSub("w1:p1")
+	before := len(h.fake.callList())
+	old.health(&herdr.Health{Kind: herdr.HealthEventsLost, Code: "events_lost", Message: "fell behind"})
+	h.rec.expect(t, "agent w1:p1 claude working", "agent w1:p2 claude idle", "resync events_lost")
+	h.fake.awaitSubscribe("w1:p1")
+	h.settle()
+	h.rec.expect(t, "agent w1:p1 claude working", "agent w1:p2 claude idle", "resync events_lost")
+	after := callsSince(h, before)
+	if !slices.Equal(after, []string{"status w1:p1", "snapshot"}) {
+		t.Errorf("calls after the signal %v, want the resubscribe, then one snapshot", after)
+	}
+	if h.fake.statusSub("w1:p1") == old {
+		t.Error("w1:p1 not subscribed again")
+	}
+	if h.fake.statusSub("w1:p2").isClosed() {
+		t.Error("another pane's subscription was closed")
+	}
+}
+
+func TestResyncDisagreement(t *testing.T) {
+	h := started(t)
+	s := twoAgents()
+	s.Panes[0].Agent.Status = core.StatusIdle
+	s.Panes[0].Agent.StateChangeSeq = seq(20)
+	h.fake.setSnapshot(s)
+	h.fake.statusSub("w1:p1").health(&herdr.Health{Kind: herdr.HealthEventsLost, Code: "events_lost"})
+	h.rec.expect(t, "agent w1:p1 claude working", "agent w1:p2 claude idle", "resync events_lost",
+		"transition w1:p1 claude working->idle snapshot")
+	if o, ok := h.rec.lastTransition().HerdrOrder(); !ok || o != 20 {
+		t.Errorf("herdr order %d %v, want 20", o, ok)
+	}
+}
+
+func TestResyncManyAtOnce(t *testing.T) {
+	three := twoAgents()
+	three.Panes = append(three.Panes, agentPane("w1:p4", core.StatusBlocked))
+	h := startEngine(t, newFakeClient(t, three))
+	h.rec.expect(t, "agent w1:p1 claude working", "agent w1:p2 claude idle", "agent w1:p4 claude blocked")
+	for _, id := range []string{"w1:p1", "w1:p2", "w1:p4"} {
+		h.fake.awaitSubscribe(id)
+	}
+	h.settle()
+	subs := []*fakeSub[core.StatusEvent]{h.fake.statusSub("w1:p1"), h.fake.statusSub("w1:p2"), h.fake.statusSub("w1:p4")}
+	// The resubscribes are held until every drop has arrived, as they would
+	// be when one condition drops every connection at once.
+	release := h.fake.holdSubscribes("w1:p1", "w1:p2", "w1:p4")
+	before := h.fake.snapshots.Load()
+	for _, sub := range subs {
+		sub.health(&herdr.Health{Kind: herdr.HealthClosed, Err: errors.New("EOF")})
+	}
+	for _, id := range []string{"w1:p1", "w1:p2", "w1:p4"} {
+		h.fake.awaitSubscribe(id)
+	}
+	close(release)
+	h.settle()
+	h.rec.expect(t, "agent w1:p1 claude working", "agent w1:p2 claude idle", "agent w1:p4 claude blocked", "resync closed")
+	if n := h.fake.snapshots.Load() - before; n != 1 {
+		t.Errorf("%d snapshot reads, want 1", n)
+	}
+	for _, id := range []string{"w1:p1", "w1:p2", "w1:p4"} {
+		if n := len(h.fake.subscribeTimes(id)); n != 2 {
+			t.Errorf("%s subscribed %d times, want 2", id, n)
+		}
+	}
+}
+
+func TestResyncUnknownErrorCode(t *testing.T) {
+	h := started(t)
+	h.fake.statusSub("w1:p2").health(&herdr.Health{Kind: herdr.HealthError, Code: "weird_new", Message: "?"})
+	h.rec.expect(t, "agent w1:p1 claude working", "agent w1:p2 claude idle", "resync error")
+	h.fake.awaitSubscribe("w1:p2")
+	h.settle()
+	h.running()
+	if as := h.agents(); len(as) != 2 {
+		t.Errorf("agents %+v", as)
+	}
+}
+
+func TestResyncTriggerDuringResync(t *testing.T) {
+	const interval = 150 * time.Millisecond
+	setResyncMinInterval(t, interval)
+	h := started(t)
+	h.fake.setGated(true)
+	h.fake.statusSub("w1:p1").health(&herdr.Health{Kind: herdr.HealthClosed})
+	h.rec.awaitCount(t, "resync closed", 1)
+	h.fake.awaitSubscribe("w1:p1")
+	h.fake.awaitSnapshotCall() // the resync's read, held
+
+	// A second signal while the resync's read is in flight.
+	h.fake.statusSub("w1:p2").health(&herdr.Health{Kind: herdr.HealthEventsLost, Code: "events_lost"})
+	h.agents()
+	h.fake.setGated(false)
+	h.fake.release <- struct{}{}
+	h.rec.awaitCount(t, "resync events_lost", 1)
+	h.fake.awaitSubscribe("w1:p2")
+	h.settle()
+	time.Sleep(2 * interval)
+	h.rec.expect(t, "agent w1:p1 claude working", "agent w1:p2 claude idle", "resync closed", "resync events_lost")
+	times := h.rec.resyncs()
+	if gap := times[1].Sub(times[0]); gap < interval {
+		t.Errorf("the second resync began %v after the first, want at least %v", gap, interval)
+	}
+}
+
+func TestResyncMinInterval(t *testing.T) {
+	const interval = 200 * time.Millisecond
+	setResyncMinInterval(t, interval)
+	h := started(t)
+	h.fake.statusSub("w1:p1").health(&herdr.Health{Kind: herdr.HealthClosed})
+	h.fake.awaitSnapshotCall() // the first resync's read has started: the next signal cannot join it
+	h.fake.statusSub("w1:p2").health(&herdr.Health{Kind: herdr.HealthClosed})
+	h.rec.awaitCount(t, "resync closed", 2)
+	h.settle()
+	time.Sleep(interval)
+	if n := h.rec.count("resync closed"); n != 2 {
+		t.Errorf("%d resyncs, want 2", n)
+	}
+	times := h.rec.resyncs()
+	if gap := times[1].Sub(times[0]); gap < interval {
+		t.Errorf("the second resync began %v after the first, want at least %v", gap, interval)
+	}
+	h.fake.awaitStatusSubs("w1:p1", 2)
+	h.fake.awaitStatusSubs("w1:p2", 2)
+}
+
+func TestResyncPersistentRejection(t *testing.T) {
+	// herdr lists w1:p2 but rejects every subscribe to it: it is subscribed
+	// again about once per minimum interval, never immediately. Once a
+	// resync's snapshot no longer shows it, it is removed and resyncs stop.
+	const interval = 100 * time.Millisecond
+	setResyncMinInterval(t, interval)
+	fake := newFakeClient(t, twoAgents())
+	fake.reject("w1:p2")
+	h := startEngine(t, fake)
+	time.Sleep(10 * interval)
+	times := fake.subscribeTimes("w1:p2")
+	// At most one per interval, plus the first; at least a few, however slow
+	// the runner.
+	if len(times) < 2 || len(times) > 12 {
+		t.Errorf("w1:p2 subscribed %d times in %v, want about one per %v", len(times), 10*interval, interval)
+	}
+	for i := 1; i < len(times); i++ {
+		if gap := times[i].Sub(times[i-1]); gap < interval/2 {
+			t.Errorf("subscribes %d and %d to w1:p2 %v apart, want about %v", i-1, i, gap, interval)
+		}
+	}
+	if h.rec.count("resync rejected") < 2 {
+		t.Errorf("lines %v, want a resync per attempt", h.rec.all())
+	}
+	if h.fake.statusSub("w1:p1").isClosed() {
+		t.Error("w1:p1's subscription was closed")
+	}
+
+	// Pane gone.
+	s := twoAgents()
+	s.Panes = slices.Delete(s.Panes, 1, 2)
+	h.fake.setSnapshot(s)
+	h.rec.awaitCount(t, "removed w1:p2", 1)
+	h.settle()
+	resyncs, subs := h.rec.count("resync rejected"), len(fake.subscribeTimes("w1:p2"))
+	time.Sleep(3 * interval)
+	if n := h.rec.count("resync rejected"); n != resyncs {
+		t.Errorf("%d resyncs after the pane was removed", n-resyncs)
+	}
+	if n := len(fake.subscribeTimes("w1:p2")); n != subs {
+		t.Errorf("%d subscribes to w1:p2 after it was removed", n-subs)
+	}
+	if lines := h.rec.all(); lines[len(lines)-1] != "removed w1:p2" {
+		t.Errorf("lines end %v, want the removal last", lines[max(0, len(lines)-3):])
+	}
+}
+
+func TestResyncPaneClosedWhileResubscribing(t *testing.T) {
+	// The pane a resync waits on closes: the resync reads at once and ends.
+	h := started(t)
+	hold := h.fake.holdSubscribes("w1:p1")
+	t.Cleanup(func() { close(hold) })
+	h.fake.statusSub("w1:p1").health(&herdr.Health{Kind: herdr.HealthClosed})
+	h.rec.awaitCount(t, "resync closed", 1)
+	h.fake.awaitSubscribe("w1:p1") // held
+	s := twoAgents()
+	s.Panes = s.Panes[1:]
+	h.fake.setSnapshot(s)
+	h.lifecycle(core.LifecycleEvent{Kind: core.LifecycleClosed, PaneID: "w1:p1"})
+	h.fake.awaitSnapshotCall() // the resync's read, without waiting for reconcile
+	h.settle()
+	h.rec.expect(t, "agent w1:p1 claude working", "agent w1:p2 claude idle", "resync closed", "removed w1:p1")
+	// The resync ended: the next signal starts another rather than joining it.
+	h.fake.statusSub("w1:p2").health(&herdr.Health{Kind: herdr.HealthClosed})
+	h.rec.awaitCount(t, "resync closed", 2)
+}
+
+func TestResyncEventsMidRead(t *testing.T) {
+	h := started(t)
+	h.fake.setGated(true)
+	h.fake.statusSub("w1:p1").health(&herdr.Health{Kind: herdr.HealthEventsLost, Code: "events_lost"})
+	h.rec.awaitCount(t, "resync events_lost", 1)
+	sub := h.fake.awaitStatusSubs("w1:p1", 2)
+	h.fake.awaitSnapshotCall() // the resync's read, held; it still says working
+
+	sub.event(core.StatusEvent{PaneID: "w1:p1", Status: core.StatusBlocked, AgentProgram: "claude"})
+	h.rec.expect(t, "agent w1:p1 claude working", "agent w1:p2 claude idle", "resync events_lost",
+		"transition w1:p1 claude working->blocked live")
+	h.fake.noSnapshotCall()
+
+	h.fake.release <- struct{}{} // the stale read is not compared
+	h.fake.awaitSnapshotCall()   // another read follows
+	s := twoAgents()
+	s.Panes[0].Agent.Status = core.StatusBlocked
+	h.fake.setSnapshot(s)
+	h.fake.setGated(false)
+	h.fake.release <- struct{}{}
+	h.settle()
+	h.rec.expect(t, "agent w1:p1 claude working", "agent w1:p2 claude idle", "resync events_lost",
+		"transition w1:p1 claude working->blocked live")
+}
+
+func TestReconcile(t *testing.T) {
+	const interval = 300 * time.Millisecond
+	prev := reconcileInterval
+	reconcileInterval = interval
+	t.Cleanup(func() { reconcileInterval = prev })
+	h := started(t)
+	s := twoAgents()
+	s.Panes[1].Agent.Status = core.StatusDone
+	h.fake.setSnapshot(s)
+	h.fake.awaitSnapshotCall()
+	h.rec.expect(t, "agent w1:p1 claude working", "agent w1:p2 claude idle", "transition w1:p2 claude idle->done snapshot")
+	h.fake.awaitSnapshotCall() // and again, every interval
+	h.rec.expect(t, "agent w1:p1 claude working", "agent w1:p2 claude idle", "transition w1:p2 claude idle->done snapshot")
+
+	// On the connection after a reconnect too.
+	h.loseLifecycle()
+	h.rec.awaitCount(t, "reconnected 0.9.5 epoch 1 kept", 1)
+	h.fake.awaitSubscribe("w1:p1")
+	h.fake.awaitSubscribe("w1:p2")
+	h.settle()
+	s.Panes[0].Agent.Status = core.StatusIdle
+	h.fake.setSnapshot(s)
+	h.rec.awaitCount(t, "transition w1:p1 claude working->idle snapshot", 1)
+}
+
+func TestSubscribeCause(t *testing.T) {
+	tests := []struct {
+		err  error
+		want string
+	}{
+		{fmt.Errorf("herdr: subscribe: %w", &herdr.Health{Kind: herdr.HealthRejected, Code: "pane_not_found"}), "rejected"},
+		{fmt.Errorf("herdr: subscribe: %w", &herdr.Health{Kind: herdr.HealthUndecodable}), "undecodable"},
+		{errBoom, "closed"},
+		{fmt.Errorf("herdr: subscribe: %w", context.DeadlineExceeded), "closed"},
+	}
+	for _, tt := range tests {
+		if got := subscribeCause(tt.err); got != tt.want {
+			t.Errorf("subscribeCause(%v) = %q, want %q", tt.err, got, tt.want)
+		}
+	}
+}
+
+func TestResyncTerminalReplaced(t *testing.T) {
+	// A resync snapshot showing a pane on another terminal reports another
+	// Agent, without deciding the epoch again.
+	h := started(t)
+	s := twoAgents()
+	s.Panes[0].TerminalID = "new-w1:p1"
+	h.fake.setSnapshot(s)
+	h.fake.statusSub("w1:p2").health(&herdr.Health{Kind: herdr.HealthClosed})
+	h.rec.expect(t, "agent w1:p1 claude working", "agent w1:p2 claude idle", "resync closed",
+		"removed w1:p1", "agent w1:p1 claude working")
+	if eps := h.rec.lineEpochs(); eps[len(eps)-1] != 1 {
+		t.Errorf("epoch %d, want 1", eps[len(eps)-1])
+	}
+}
+
+func TestReconnectMidResync(t *testing.T) {
+	const interval = 500 * time.Millisecond
+	setResyncMinInterval(t, interval)
+	h := started(t)
+	// A resync waiting on its resubscribe when herdr goes away.
+	hold := h.fake.holdSubscribes("w1:p1")
+	h.fake.statusSub("w1:p1").health(&herdr.Health{Kind: herdr.HealthClosed})
+	h.rec.awaitCount(t, "resync closed", 1)
+	h.fake.awaitSubscribe("w1:p1")
+	h.loseLifecycle()
+	h.rec.expect(t, "agent w1:p1 claude working", "agent w1:p2 claude idle", "resync closed", "reconnected 0.9.5 epoch 1 kept")
+	h.fake.awaitSubscribe("w1:p1") // the reconnect resubscribes
+	h.fake.awaitSubscribe("w1:p2")
+	close(hold) // the abandoned resync's subscribe returns late, and is ignored
+	h.settle()
+	time.Sleep(interval)
+	h.rec.expect(t, "agent w1:p1 claude working", "agent w1:p2 claude idle", "resync closed", "reconnected 0.9.5 epoch 1 kept")
+	if as := h.agents(); len(as) != 2 {
+		t.Errorf("agents %+v", as)
+	}
+
+	// A resync scheduled when herdr goes away is abandoned too.
+	h.fake.statusSub("w1:p2").health(&herdr.Health{Kind: herdr.HealthClosed})
+	h.rec.awaitCount(t, "resync closed", 2)
+	sub := h.fake.awaitStatusSubs("w1:p2", 3)
+	h.settle() // well inside the interval
+	sub.health(&herdr.Health{Kind: herdr.HealthEventsLost, Code: "events_lost"})
+	h.agents()
+	h.loseLifecycle()
+	h.rec.awaitCount(t, "reconnected 0.9.5 epoch 1 kept", 2)
+	time.Sleep(2 * interval)
+	if n := h.rec.count("resync events_lost"); n != 0 {
+		t.Errorf("%d scheduled resyncs ran after the reconnect, want 0", n)
 	}
 }
