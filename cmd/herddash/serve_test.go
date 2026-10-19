@@ -34,6 +34,12 @@ type fakeHerdr struct {
 	blocked atomic.Bool
 	// instance is prefixed to every terminal id; a restart changes it.
 	instance atomic.Int32
+	// version is what ping answers; unset means 0.9.5.
+	version atomic.Value
+	// snapshots and subscribes count session.snapshot and events.subscribe
+	// requests.
+	snapshots  atomic.Int32
+	subscribes atomic.Int32
 
 	mu    sync.Mutex
 	ln    net.Listener
@@ -141,14 +147,20 @@ func (f *fakeHerdr) serve(t *testing.T, conn net.Conn) {
 	reply := func(result string) { conn.Write([]byte(`{"id":` + string(id) + `,"result":` + result + "}\n")) }
 	switch req.Method {
 	case "ping":
-		reply(`{"type":"pong","version":"0.9.5","protocol":22}`)
+		v, _ := f.version.Load().(string)
+		if v == "" {
+			v = "0.9.5"
+		}
+		reply(`{"type":"pong","version":"` + v + `","protocol":22}`)
 	case "session.snapshot":
+		f.snapshots.Add(1)
 		snap := strings.ReplaceAll(fakeSnapshot, `"terminal_id":"t`, fmt.Sprintf(`"terminal_id":"i%d-t`, f.instance.Load()))
 		if f.blocked.Load() {
 			snap = strings.ReplaceAll(snap, `"agent":"claude","agent_status":"working"`, `"agent":"claude","agent_status":"blocked"`)
 		}
 		reply(snap)
 	case "events.subscribe":
+		f.subscribes.Add(1)
 		reply(`{"type":"subscription_started"}`)
 		status := bytes.Contains(req.Params, []byte("pane.agent_status_changed"))
 		if status {
@@ -226,8 +238,12 @@ func TestServeSignal(t *testing.T) {
 	waitFor(t, "the status subscription", func() bool { return f.statusSubs.Load() >= 1 })
 	time.Sleep(200 * time.Millisecond) // let the read that follows the subscription finish
 	f.push <- struct{}{}
-	change := "transition host=testhost epoch=1 pane=w1:p1 program=claude status=blocked previous=working provenance=live"
+	change := "transition host=testhost epoch=1 pane=w1:p1 program=claude status=blocked previous=working provenance=live herdr=0.9.5"
 	waitFor(t, "the live transition line", func() bool { return strings.Contains(stdout.String(), change) })
+	gate := "gate       herdr=0.9.5 minimum=0.9.5 gate=ok"
+	if out := stdout.String(); strings.Count(out, gate) != 1 || strings.Index(out, gate) > strings.Index(out, "agent ") {
+		t.Errorf("want one gate line before the Agent line:\n%s", out)
+	}
 	if err := syscall.Kill(os.Getpid(), syscall.SIGINT); err != nil {
 		t.Fatal(err)
 	}
@@ -378,7 +394,7 @@ func TestPrinter(t *testing.T) {
 	at := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC).UnixMilli()
 	prev := core.StatusWorking
 	tr, err := core.NewTransition(core.TransitionInput{Key: key, AgentProgram: "claude", Previous: &prev,
-		New: core.StatusBlocked, ObservedAt: at + 1500, Provenance: core.ProvenanceLive})
+		New: core.StatusBlocked, HerdrVersion: "0.8.2", ObservedAt: at + 1500, Provenance: core.ProvenanceLive})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -388,13 +404,99 @@ func TestPrinter(t *testing.T) {
 	p.Reconnected("0.9.5", 1, true, at+4000)
 	p.Reconnected("0.9.5", 2, false, at+5000)
 	p.Resynced("events_lost", at+6000)
+	p.Gate(engine.GateOK, "0.9.5", at+7000)
+	p.Gate(engine.GateRefused, "0.8.2", at+8000)
+	p.Gate(engine.GateAdvisory, "", at+9000)
 	want := "2026-10-16T12:00:00.000Z agent      host=mac epoch=1 pane=w1:p1 program=claude status=working\n" +
-		"2026-10-16T12:00:01.500Z transition host=mac epoch=1 pane=w1:p1 program=claude status=blocked previous=working provenance=live\n" +
+		"2026-10-16T12:00:01.500Z transition host=mac epoch=1 pane=w1:p1 program=claude status=blocked previous=working provenance=live herdr=0.8.2\n" +
 		"2026-10-16T12:00:03.000Z removed    host=mac epoch=1 pane=w1:p1 program=- status=blocked\n" +
 		"2026-10-16T12:00:04.000Z reconnect  herdr=0.9.5 epoch=1 epoch_change=kept\n" +
 		"2026-10-16T12:00:05.000Z reconnect  herdr=0.9.5 epoch=2 epoch_change=incremented\n" +
-		"2026-10-16T12:00:06.000Z resync     cause=events_lost\n"
+		"2026-10-16T12:00:06.000Z resync     cause=events_lost\n" +
+		"2026-10-16T12:00:07.000Z gate       herdr=0.9.5 minimum=0.9.5 gate=ok\n" +
+		"2026-10-16T12:00:08.000Z gate       herdr=0.8.2 minimum=0.9.5 gate=refused\n" +
+		"2026-10-16T12:00:09.000Z gate       herdr=- minimum=0.9.5 gate=advisory\n"
 	if b.String() != want {
 		t.Errorf("printed\n%s\nwant\n%s", b.String(), want)
+	}
+}
+
+// TestServeRefusesUnsupportedHerdr runs serve against a herdr 0.8.2 without
+// the override: one gate line, no Agent, no subscription, and serve keeps
+// running.
+func TestServeRefusesUnsupportedHerdr(t *testing.T) {
+	hermeticEnv(t)
+	f := startFakeHerdr(t)
+	f.version.Store("0.8.2")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var stdout, stderr syncBuffer
+	done := make(chan int, 1)
+	dataDir := filepath.Join(t.TempDir(), "data")
+	go func() { done <- run(ctx, serveArgs(f, dataDir), &stdout, &stderr) }()
+
+	gate := "gate       herdr=0.8.2 minimum=0.9.5 gate=refused"
+	waitFor(t, "the gate line", func() bool { return strings.Contains(stdout.String(), gate) })
+	time.Sleep(200 * time.Millisecond)
+	if out := stdout.String(); strings.Count(out, "gate ") != 1 || strings.Contains(out, "agent ") || strings.Contains(out, "transition ") {
+		t.Errorf("want only the one gate line from a refused herdr:\n%s", out)
+	}
+	if n, m := f.subscribes.Load(), f.snapshots.Load(); n != 0 || m != 0 {
+		t.Errorf("%d events.subscribe and %d session.snapshot requests reached a refused herdr", n, m)
+	}
+	select {
+	case code := <-done:
+		t.Fatalf("serve exited %d, stderr %q", code, stderr.String())
+	default:
+	}
+	cancel()
+	if code := <-done; code != 0 {
+		t.Fatalf("exit code %d, stderr %q", code, stderr.String())
+	}
+	b, err := os.ReadFile(filepath.Join(dataDir, logFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+		var entry map[string]any
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			t.Fatalf("log line %q is not JSON: %v", line, err)
+		}
+		if entry["level"] == "WARN" && entry["herdr_version"] == "0.8.2" && entry["herdr_minimum"] == "0.9.5" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("log has no warning naming herdr 0.8.2 and the 0.9.5 minimum:\n%s", b)
+	}
+}
+
+// TestServeAdvisoryHerdr runs serve against a herdr 0.8.2 with
+// --allow-unsupported-herdr: an advisory gate line, then Agents and
+// Transitions as usual, each Transition naming herdr 0.8.2.
+func TestServeAdvisoryHerdr(t *testing.T) {
+	hermeticEnv(t)
+	f := startFakeHerdr(t)
+	f.version.Store("0.8.2")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var stdout, stderr syncBuffer
+	done := make(chan int, 1)
+	args := append(serveArgs(f, filepath.Join(t.TempDir(), "data")), "--allow-unsupported-herdr")
+	go func() { done <- run(ctx, args, &stdout, &stderr) }()
+
+	waitFor(t, "the gate line", func() bool {
+		return strings.Contains(stdout.String(), "gate       herdr=0.8.2 minimum=0.9.5 gate=advisory")
+	})
+	waitFor(t, "the Agent line", func() bool { return strings.Contains(stdout.String(), "agent      host=testhost epoch=1 pane=w1:p1") })
+	waitFor(t, "the status subscription", func() bool { return f.statusSubs.Load() >= 1 })
+	time.Sleep(200 * time.Millisecond) // let the read that follows the subscription finish
+	f.push <- struct{}{}
+	change := "transition host=testhost epoch=1 pane=w1:p1 program=claude status=blocked previous=working provenance=live herdr=0.8.2"
+	waitFor(t, "the live transition line", func() bool { return strings.Contains(stdout.String(), change) })
+	cancel()
+	if code := <-done; code != 0 {
+		t.Fatalf("exit code %d, stderr %q", code, stderr.String())
 	}
 }

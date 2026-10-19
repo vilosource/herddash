@@ -18,6 +18,17 @@ type Agent struct {
 // graph).
 type Transition = core.Transition
 
+// Gate is core.Gate, named here for the same reason as Transition.
+type Gate = core.Gate
+
+// The Gate outcomes and the minimum supported herdr, as core defines them.
+const (
+	GateOK       = core.GateOK
+	GateAdvisory = core.GateAdvisory
+	GateRefused  = core.GateRefused
+	HerdrMinimum = core.HerdrMinimum
+)
+
 // Sink is where the engine reports what it sees. The engine calls it only from
 // its own goroutine, one call at a time and in the order things happened, so an
 // implementation needs no locking of its own; it must not block for long, since
@@ -41,4 +52,9 @@ type Sink interface {
 	// rejected, closed, undecodable). It comes before any Transition or removal
 	// the resync's snapshot causes.
 	Resynced(cause string, observedAt int64)
+	// Gate reports the version gate's outcome (FR-16) for a connect to herdr
+	// whose outcome or herdr version differs from the last one reported,
+	// including the first. It comes before anything else that connect causes:
+	// the removals a refusal causes, or the Agents a start reports.
+	Gate(gate core.Gate, herdrVersion string, observedAt int64)
 }

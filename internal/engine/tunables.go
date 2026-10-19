@@ -33,6 +33,11 @@ const (
 	// connected, whether or not anything signalled a change: the snapshot is
 	// the truth, and events are only the low-latency signal.
 	defaultReconcileInterval = 60 * time.Second
+	// defaultRefusedRecheckInterval is how often the engine pings a herdr the
+	// version gate refused, to see whether it has been upgraded. It is not a
+	// backoff: a refused herdr is reachable, and it neither grows the wait nor
+	// counts into the reconnect backoff.
+	defaultRefusedRecheckInterval = 30 * time.Second
 	// pingTimeout bounds the ping that reads herdr's version at each start.
 	pingTimeout = 10 * time.Second
 	// subscribeTimeout bounds the setup of a subscription, lifecycle or status,
@@ -49,13 +54,14 @@ const firstEpoch uint64 = 1
 
 // The package variables below are the defaults above; tests lower them.
 var (
-	snapshotMinInterval   = defaultSnapshotMinInterval
-	snapshotRetryDelay    = defaultSnapshotRetryDelay
-	reconnectInitialDelay = defaultReconnectInitialDelay
-	reconnectMaxDelay     = defaultReconnectMaxDelay
-	reconnectStableAfter  = defaultReconnectStableAfter
-	resyncMinInterval     = defaultResyncMinInterval
-	reconcileInterval     = defaultReconcileInterval
+	snapshotMinInterval    = defaultSnapshotMinInterval
+	snapshotRetryDelay     = defaultSnapshotRetryDelay
+	reconnectInitialDelay  = defaultReconnectInitialDelay
+	reconnectMaxDelay      = defaultReconnectMaxDelay
+	reconnectStableAfter   = defaultReconnectStableAfter
+	resyncMinInterval      = defaultResyncMinInterval
+	reconcileInterval      = defaultReconcileInterval
+	refusedRecheckInterval = defaultRefusedRecheckInterval
 )
 
 // reconnectDelay is the wait after the nth consecutive failed attempt to start
