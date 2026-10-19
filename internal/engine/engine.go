@@ -132,6 +132,9 @@ type Engine struct {
 	lifecycle    Subscription[core.LifecycleEvent]
 	// epoch is the server epoch every AgentKey carries (AD-3).
 	epoch uint64
+	// historic is set while the epoch was loaded from the store or kept by a
+	// reconnect, so the record may already hold its Agents' Transitions.
+	historic bool
 	// conn numbers the attempts to start; every message from a connection's
 	// lifecycle stream, snapshot reads and timers carries it, so one from
 	// before a reconnect is ignored. connCancel ends the current attempt's
@@ -246,6 +249,18 @@ type pane struct {
 	// cause is why the pane last lost or failed its subscription: the cause a
 	// resync for it reports.
 	cause cause
+	// fold is the Agent's record folded (FR-2, FR-3): seeded at its first
+	// sight, from the store's history when there is one, and extended by every
+	// Transition since.
+	fold core.FoldResult
+	// seedHistory is set for a pane first tracked by the first snapshot of a
+	// connection whose epoch was loaded or kept: only its first sight reads the
+	// record. A pane tracked later, or after a terminal replacement, is a new
+	// Agent even when it reuses a pane id.
+	seedHistory bool
+	// firstSkipped is set when the Agent's first sight deliberately recorded
+	// nothing (it matched the record), so it was no disagreement.
+	firstSkipped bool
 	// profile is the Agent's Profile, valid once resolved is set. resolving
 	// tags the Profile resolution in flight, 0 when there is none; a result
 	// carrying any other tag is stale and ignored.
@@ -940,6 +955,7 @@ func (e *Engine) decideEpoch(s core.Snapshot) bool {
 	}
 	e.log.Info("reconnected", "herdr_version", e.herdrVersion, "epoch", next, "epoch_kept", kept)
 	e.sink.Reconnected(e.herdrVersion, next, kept, e.now())
+	e.historic = kept
 	if kept {
 		return true
 	}
@@ -970,6 +986,7 @@ func (e *Engine) apply(seq uint64, s core.Snapshot, resubscribe bool) (unsubscri
 		if a == nil {
 			continue
 		}
+		replaced := false
 		present[obs.PaneID] = true
 		p, tracked := e.panes[obs.PaneID]
 		if tracked && !p.known && seq < p.removableFrom {
@@ -982,6 +999,7 @@ func (e *Engine) apply(seq uint64, s core.Snapshot, resubscribe bool) (unsubscri
 			changed = changed || p.known
 			e.remove(obs.PaneID, "terminal replaced")
 			tracked = false
+			replaced = true
 		}
 		fresh := false
 		if !tracked {
@@ -990,6 +1008,7 @@ func (e *Engine) apply(seq uint64, s core.Snapshot, resubscribe bool) (unsubscri
 			}
 			p = e.track(obs.PaneID)
 			p.removableFrom = seq + 1
+			p.seedHistory = resubscribe && e.historic && !replaced
 			fresh = true
 		}
 		if p.context.PaneTitle != obs.Context.PaneTitle {
@@ -998,22 +1017,27 @@ func (e *Engine) apply(seq uint64, s core.Snapshot, resubscribe bool) (unsubscri
 		p.context = obs.Context
 		p.terminalID = obs.TerminalID
 		wasKnown := p.known
+		// firstSeen is an Agent this snapshot shows first: a disagreement,
+		// unless its first sight matched the record and wrote nothing. One
+		// still awaiting its Profile was already seen.
+		firstSeen := false
 		if !wasKnown && p.liveDuring != seq {
 			// The Status first, so a report the program change causes
 			// carries it; unless a live event arrived while this read ran,
 			// which it may predate.
-			// An Agent this snapshot shows first is a disagreement; one
-			// still awaiting its Profile was already seen.
-			changed = changed || p.seenBy == ""
+			firstSeen = p.seenBy == ""
 			e.seen(p, a.Status, core.ProvenanceSnapshot, a.StateChangeSeq)
 		}
-		if e.setProgram(p, a.AgentProgram) {
+		if had := p.program; e.setProgram(p, a.AgentProgram) && had != "" {
 			changed = true // herdr names another program than the engine held
 		}
 		switch {
 		case !wasKnown:
 			if !p.known {
 				e.report(p)
+			}
+			if p.known && p.firstSkipped {
+				firstSeen = false
 			}
 		case p.liveDuring == seq:
 			// A live event arrived while this read ran, and the read may
@@ -1022,6 +1046,7 @@ func (e *Engine) apply(seq uint64, s core.Snapshot, resubscribe bool) (unsubscri
 			e.transition(p, a.Status, core.ProvenanceSnapshot, a.StateChangeSeq)
 			changed = true
 		}
+		changed = changed || firstSeen
 		switch {
 		case p.sub != nil || p.subscribing:
 		case fresh || resubscribe:
@@ -1250,7 +1275,7 @@ func (e *Engine) startSnapshot() {
 
 // track starts tracking a pane, not yet reported and not yet subscribed.
 func (e *Engine) track(id string) *pane {
-	p := &pane{id: id}
+	p := &pane{id: id, fold: core.Fold(nil)}
 	e.panes[id] = p
 	return p
 }
@@ -1308,7 +1333,7 @@ func (e *Engine) report(p *pane) {
 		p.known = true
 		e.log.Info("agent seen", "pane", p.id, "agent_program", p.program, "profile", p.profile, "status", p.status)
 		now := e.now()
-		e.firstSight(p, now)
+		p.firstSkipped = e.firstSight(p, now)
 		p.seenBy, p.seenOrder, p.seenAt = "", nil, 0
 		e.sink.Agent(e.agent(p), now)
 	case p.resolving == 0:
@@ -1447,8 +1472,9 @@ func (e *Engine) transition(p *pane, next core.Status, prov core.Provenance, ord
 		return
 	}
 	p.status = next
+	p.fold = p.fold.Add(t)
 	e.record(t)
-	e.sink.Transition(t)
+	e.sink.Transition(t, e.agent(p))
 }
 
 // seen sets an unreported pane's Status as a snapshot or a status event
@@ -1461,21 +1487,34 @@ func (e *Engine) seen(p *pane, status core.Status, prov core.Provenance, order *
 	p.status, p.seenBy, p.seenOrder = status, prov, order
 }
 
-// firstSight records an Agent's first report as a Transition with no previous
-// Status, so the record holds every Agent's current Status (FR-7): snapshot
-// provenance when a snapshot showed it, live when a status event did, at the
-// time it was observed. reportedAt is the fallback when that is unknown.
-func (e *Engine) firstSight(p *pane, reportedAt int64) {
-	if e.store == nil {
-		return
-	}
+// firstSight seeds an Agent's fold at its first report. For a pane whose
+// first sight reads the record (seedHistory), the fold starts from its
+// history: if the Status and Agent Program seen are the ones last recorded,
+// nothing is written and the class keeps its start, exact if it began live;
+// otherwise the change is recorded with the last stored Status as previous.
+// Otherwise the first sight is a Transition with no previous Status, so the
+// record holds every Agent's current Status (FR-7): snapshot provenance when a
+// snapshot showed it, live when a status event did, at the time it was
+// observed. reportedAt is the fallback when that is unknown. Without a Store
+// nothing is recorded, but the fold is seeded the same way. It reports whether
+// it deliberately recorded nothing: the record matched, or the run is ending.
+func (e *Engine) firstSight(p *pane, reportedAt int64) (skipped bool) {
 	prov, observedAt := p.seenBy, p.seenAt
 	if prov == "" {
-		e.log.Warn("first sight with no known source; recording it as snapshot", "pane", p.id)
+		if e.store != nil {
+			e.log.Warn("first sight with no known source; recording it as snapshot", "pane", p.id)
+		}
 		prov = core.ProvenanceSnapshot
 	}
 	if observedAt == 0 {
 		observedAt = reportedAt
+	}
+	ts, ok := e.history(p)
+	hist := core.Fold(ts)
+	if hist.Known && hist.Status == p.status && ts[len(ts)-1].AgentProgram() == p.program {
+		e.log.Info("agent unchanged since the record", "pane", p.id, "status", p.status, "class", hist.Class, "since", hist.Since)
+		p.fold = hist
+		return true
 	}
 	in := core.TransitionInput{
 		Key:          e.key(p.id),
@@ -1486,15 +1525,25 @@ func (e *Engine) firstSight(p *pane, reportedAt int64) {
 		ObservedAt:   observedAt,
 		Provenance:   prov,
 	}
+	if hist.Known {
+		prev := hist.Status
+		in.Previous = &prev
+	}
 	if prov == core.ProvenanceSnapshot {
 		in.HerdrOrder = p.seenOrder
 	}
 	t, err := core.NewTransition(in)
 	if err != nil {
 		e.log.Warn("first sight not recorded", "pane", p.id, "error", err)
-		return
+		p.fold = hist
+		return false
+	}
+	p.fold = hist.Add(t)
+	if !ok {
+		return true
 	}
 	e.record(t)
+	return false
 }
 
 func (e *Engine) key(paneID string) core.AgentKey {
@@ -1502,7 +1551,14 @@ func (e *Engine) key(paneID string) core.AgentKey {
 }
 
 func (e *Engine) agent(p *pane) Agent {
-	return Agent{Key: e.key(p.id), AgentProgram: p.program, Profile: p.profile, Status: p.status, Context: p.context}
+	a := Agent{Key: e.key(p.id), AgentProgram: p.program, Profile: p.profile, Status: p.status, Context: p.context,
+		Class: core.ClassUnknown}
+	if p.fold.Known {
+		a.Class = p.fold.Class
+		a.WaitingSince = p.fold.Since
+		a.WaitingExact = p.fold.SinceProvenance == core.ProvenanceLive
+	}
+	return a
 }
 
 func (e *Engine) agents() []Agent {
