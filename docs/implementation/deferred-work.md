@@ -40,3 +40,6 @@
 - source_spec: `docs/implementation/spec-1-9-know-which-profile-each-agent-runs-under.md`
   summary: CLAUDE.md's "Repository state" should say internal/procenv is built, golang.org/x/sys v0.49.0 is a dependency, and go.mod declares go 1.26.0.
   evidence: Story 1.9 review; agent-context file, so deferred per the triage rule.
+- source_spec: `docs/implementation/spec-2-1-a-local-database-herddash-owns.md`
+  summary: Persist the server epoch and the pane-to-terminal_id map so a Daemon restart does not restart at epoch 1 and splice a new herdr instance's Agents onto stored epoch-1 history (AD-3 hazard 3).
+  evidence: Story 2.1 review; Story 1.6 keeps both in memory, no Epic 2 story names persisting them, and Story 2.2 starts writing rows keyed by epoch. To be built with Story 2.2.

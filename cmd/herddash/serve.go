@@ -13,6 +13,7 @@ import (
 
 	"github.com/vilosource/herddash/internal/config"
 	"github.com/vilosource/herddash/internal/engine"
+	"github.com/vilosource/herddash/internal/store"
 )
 
 // logFileName is the log file in the data directory.
@@ -20,11 +21,12 @@ const logFileName = "herddash.log"
 
 // runServe is "herddash serve [flags]", also run by "herddash" alone. It loads
 // configuration as "herddash config" does, ensures the data directory, logs
-// JSON to herddash.log there, and prints every version gate outcome, Agent,
+// JSON to herddash.log there, opens the database (so a second serve on the
+// same database fails at once), and prints every version gate outcome, Agent,
 // Transition, removal, Profile change, reconnect and resync to stdout until
 // ctx ends (exit 0). herdr being absent, gone or restarting never ends it: the
-// engine reconnects. Exit 1 is left for configuration and data directory
-// errors before the engine starts.
+// engine reconnects. Exit 1 is left for configuration, data directory and
+// database errors before the engine starts.
 func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("herddash serve", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -53,21 +55,37 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 		fmt.Fprintf(stderr, "herddash: %v\n", err)
 		return 1
 	}
+	// Open the store before the log: a refused second serve must not write
+	// into the running Daemon's log. Nothing is written to the store yet
+	// (Story 2.2); holding it open is what makes this process the database's
+	// only owner.
+	st, err := store.Open(cfg.Database())
+	if err != nil {
+		fmt.Fprintf(stderr, "herddash: %v\n", err)
+		return 1
+	}
 	logPath := filepath.Join(cfg.DataDir(), logFileName)
 	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
+		st.Close()
 		fmt.Fprintf(stderr, "herddash: open log: %v\n", err)
 		return 1
 	}
 	defer logFile.Close()
 	// An existing log keeps its mode on open; make it owner-only (FR-17).
 	if err := logFile.Chmod(0o600); err != nil {
+		st.Close()
 		fmt.Fprintf(stderr, "herddash: log: %v\n", err)
 		return 1
 	}
 	logger := slog.New(slog.NewJSONHandler(logFile, nil))
 	logger.Info("herddash starting", "version", version, "commit", resolveCommit(),
 		"host", cfg.Host(), "server", cfg.Server(), "socket", cfg.SocketPath())
+	defer func() {
+		if err := st.Close(); err != nil {
+			logger.Error("database close", "err", err)
+		}
+	}()
 
 	e := engine.New(engine.Options{
 		Host:   cfg.Host(),

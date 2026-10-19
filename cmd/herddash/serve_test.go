@@ -19,6 +19,7 @@ import (
 
 	"github.com/vilosource/herddash/internal/core"
 	"github.com/vilosource/herddash/internal/engine"
+	"github.com/vilosource/herddash/internal/store"
 )
 
 // fakeHerdr is a minimal herdr on a unix socket: it answers ping and
@@ -567,4 +568,119 @@ func TestServeResolvesProfile(t *testing.T) {
 	if code := <-done; code != 0 {
 		t.Fatalf("exit code %d, stderr %q", code, stderr.String())
 	}
+}
+
+// TestServeTwice runs a second serve on the data directory of a running one:
+// the second exits 1 at once, naming the database's lock, and the first goes
+// on running.
+func TestServeTwice(t *testing.T) {
+	hermeticEnv(t)
+	f := startFakeHerdr(t)
+	dataDir := filepath.Join(t.TempDir(), "data")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var stdout, stderr syncBuffer
+	done := make(chan int, 1)
+	go func() { done <- run(ctx, serveArgs(f, dataDir), &stdout, &stderr) }()
+	waitFor(t, "the Agent line", func() bool { return strings.Contains(stdout.String(), "pane=w1:p1") })
+
+	var stdout2, stderr2 syncBuffer
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel2()
+	if code := run(ctx2, serveArgs(f, dataDir), &stdout2, &stderr2); code != 1 {
+		t.Fatalf("second serve exit code %d, want 1; stderr %q", code, stderr2.String())
+	}
+	lock := filepath.Join(dataDir, "herddash.db.lock")
+	if got := stderr2.String(); !strings.HasPrefix(got, "herddash: ") || !strings.Contains(got, lock) {
+		t.Errorf("second serve stderr %q, want herddash: <err> naming %s", got, lock)
+	}
+	if stdout2.String() != "" {
+		t.Errorf("second serve printed %q", stdout2.String())
+	}
+	for _, name := range []string{"herddash.db", "herddash.db.lock"} {
+		fi, err := os.Stat(filepath.Join(dataDir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fi.Mode().Perm() != 0o600 {
+			t.Errorf("%s mode %#o, want 0600", name, fi.Mode().Perm())
+		}
+	}
+	select {
+	case code := <-done:
+		t.Fatalf("first serve exited %d, stderr %q", code, stderr.String())
+	default:
+	}
+	cancel()
+	if code := <-done; code != 0 {
+		t.Fatalf("exit code %d, stderr %q", code, stderr.String())
+	}
+	b, err := os.ReadFile(filepath.Join(dataDir, logFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(string(b), `"herddash starting"`); n != 1 {
+		t.Errorf("the running Daemon's log has %d start entries, want 1 (the refused serve wrote to it):\n%s", n, b)
+	}
+	// serve closed the store on exit.
+	st, err := store.Open(filepath.Join(dataDir, "herddash.db"))
+	if err != nil {
+		t.Fatalf("Open after serve exited: %v", err)
+	}
+	st.Close()
+}
+
+// TestServeDatabaseFlag runs serve with --database outside the data
+// directory: the database and its lock are created there. Under a directory
+// others can read, serve exits 1 naming that directory.
+func TestServeDatabaseFlag(t *testing.T) {
+	hermeticEnv(t)
+	f := startFakeHerdr(t)
+	dataDir := filepath.Join(t.TempDir(), "data")
+
+	t.Run("elsewhere", func(t *testing.T) {
+		db := filepath.Join(t.TempDir(), "elsewhere", "records.db")
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		var stdout, stderr syncBuffer
+		done := make(chan int, 1)
+		args := append(serveArgs(f, dataDir), "--database", db)
+		go func() { done <- run(ctx, args, &stdout, &stderr) }()
+		waitFor(t, "the Agent line", func() bool { return strings.Contains(stdout.String(), "pane=w1:p1") })
+		for _, p := range []string{db, db + ".lock"} {
+			fi, err := os.Stat(p)
+			if err != nil {
+				t.Errorf("%s: %v", p, err)
+				continue
+			}
+			if fi.Mode().Perm() != 0o600 {
+				t.Errorf("%s mode %#o, want 0600", p, fi.Mode().Perm())
+			}
+		}
+		if _, err := os.Stat(filepath.Join(dataDir, "herddash.db")); err == nil {
+			t.Error("a database was created in the data directory too")
+		}
+		cancel()
+		if code := <-done; code != 0 {
+			t.Fatalf("exit code %d, stderr %q", code, stderr.String())
+		}
+	})
+
+	t.Run("loose parent", func(t *testing.T) {
+		dir := filepath.Join(t.TempDir(), "shared")
+		if err := os.Mkdir(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		var stdout, stderr syncBuffer
+		args := append(serveArgs(f, dataDir), "--database", filepath.Join(dir, "records.db"))
+		if code := run(context.Background(), args, &stdout, &stderr); code != 1 {
+			t.Fatalf("exit code %d, want 1; stderr %q", code, stderr.String())
+		}
+		if got := stderr.String(); !strings.HasPrefix(got, "herddash: ") || !strings.Contains(got, dir) {
+			t.Errorf("stderr %q, want herddash: <err> naming %s", got, dir)
+		}
+	})
 }
