@@ -265,8 +265,11 @@ Arrows are the only permitted import directions. `core` imports only the standar
 - **Binds:** FR-6, FR-9a
 - **Prevents:** the importer and the engine writing differently shaped rows that never join.
 - **Rule:**
-  - **One constructor and one insert.** `core.NewTransition` builds every Transition and
-    `store.Append` writes every one, for serve and import alike.
+  - **One constructor and one insert.** `core.NewTransition` builds every Transition, and one
+    `INSERT` statement in `store` writes every one, for serve and import alike: `store.Append`
+    per row for the engine, and `store.AppendBackfill`, its batch form for the importer, which
+    runs the same statement in one transaction and skips an `import_key` already present
+    (Story 2.6). The importer uses only the batch form; a call-site test keeps each to its caller.
   - **Unknown means NULL.** An unknown value is stored as NULL, never as a string such as
     `unknown`, which is a real Status.
   - **Re-import is safe.** Imported rows carry a unique `import_key`, so running the import twice

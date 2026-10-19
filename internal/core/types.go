@@ -77,6 +77,7 @@ var (
 	ErrInvalidKey        = errors.New("agent key is incomplete")
 	ErrInvalidObservedAt = errors.New("observed time must be positive")
 	ErrInvalidImportKey  = errors.New("import key does not match provenance")
+	ErrInvalidSpurious   = errors.New("only a backfill transition can be possibly spurious")
 )
 
 // TransitionError is the typed error NewTransition returns. Field names the
@@ -118,6 +119,10 @@ type TransitionInput struct {
 	// ImportKey uniquely identifies a backfilled row so re-import adds nothing.
 	// It is required for backfill and must be empty otherwise.
 	ImportKey string
+	// PossiblySpurious flags a backfilled done entry logged before the Host
+	// ran herdr 0.9.2, whose completions may be spurious. Only a backfill
+	// Transition can carry it.
+	PossiblySpurious bool
 }
 
 // Transition is one recorded change of an Agent's Status. It is built only by
@@ -135,6 +140,7 @@ type Transition struct {
 	observedAt   int64
 	provenance   Provenance
 	importKey    string
+	spurious     bool
 }
 
 // NewTransition validates in and returns the Transition it describes.
@@ -149,6 +155,7 @@ type Transition struct {
 //   - a backfill Transition without an ImportKey, and a live or snapshot
 //     Transition with one
 //   - an ObservedAt that is not positive
+//   - PossiblySpurious on a live or snapshot Transition
 //
 // Errors are *TransitionError.
 func NewTransition(in TransitionInput) (Transition, error) {
@@ -187,6 +194,9 @@ func NewTransition(in TransitionInput) (Transition, error) {
 	if in.ObservedAt <= 0 {
 		return Transition{}, &TransitionError{Field: "observed at", Value: fmt.Sprint(in.ObservedAt), Err: ErrInvalidObservedAt}
 	}
+	if in.PossiblySpurious && !backfill {
+		return Transition{}, &TransitionError{Field: "possibly spurious", Value: "true with provenance " + string(in.Provenance), Err: ErrInvalidSpurious}
+	}
 
 	t := Transition{
 		key:          in.Key,
@@ -197,6 +207,7 @@ func NewTransition(in TransitionInput) (Transition, error) {
 		observedAt:   in.ObservedAt,
 		provenance:   in.Provenance,
 		importKey:    in.ImportKey,
+		spurious:     in.PossiblySpurious,
 	}
 	// Copy pointed-to values so the caller cannot mutate the Transition later.
 	if in.Previous != nil {
@@ -251,3 +262,7 @@ func (t Transition) Provenance() Provenance { return t.provenance }
 
 // ImportKey returns the backfill import key, or "" when there is none.
 func (t Transition) ImportKey() string { return t.importKey }
+
+// PossiblySpurious reports whether the Transition is a backfilled entry
+// flagged possibly spurious.
+func (t Transition) PossiblySpurious() bool { return t.spurious }

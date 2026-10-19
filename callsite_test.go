@@ -7,7 +7,9 @@ package herddash_test
 // engine's Recorder. SaveServerState is guarded too because the epoch it saves
 // keys every future row. The Retention sweep, Sweep, is narrower still: only
 // internal/engine (and internal/store, which defines it) may call it, so the
-// importer may not (FR-9).
+// importer may not (FR-9). AppendBackfill, the import's one-transaction
+// write, is narrower the other way: only internal/importer (and
+// internal/store) may call it, so the engine may not (AD-13).
 //
 // It reads syntax, not types, so it is deliberately broad: outside the
 // permitted packages, any selector of a guarded name whose left side is not an
@@ -39,6 +41,9 @@ var recordWriters = []string{"internal/engine", "internal/importer", "internal/s
 // recordSweepers are the module directories whose code may sweep the record.
 var recordSweepers = []string{"internal/engine", "internal/store"}
 
+// recordImporters are the module directories whose code may import history.
+var recordImporters = []string{"internal/importer", "internal/store"}
+
 // guarded maps each method name that writes to the record to what it does and
 // the directories that may call it.
 var guarded = map[string]struct {
@@ -49,6 +54,18 @@ var guarded = map[string]struct {
 	"AppendResyncMarker": {"writes the record", recordWriters},
 	"SaveServerState":    {"writes the record", recordWriters},
 	"Sweep":              {"deletes from the record", recordSweepers},
+	"AppendBackfill":     {"imports into the record", recordImporters},
+}
+
+// mayCallAll reports whether code in dir may call every guarded method, so
+// its files need no reading.
+func mayCallAll(dir string) bool {
+	for _, g := range guarded {
+		if !within(dir, g.allowed) {
+			return false
+		}
+	}
+	return true
 }
 
 // within reports whether dir is one of dirs or below one.
@@ -86,7 +103,7 @@ func checkCallSites(root string) ([]string, error) {
 		}
 		rel = filepath.ToSlash(rel)
 		dir := filepath.ToSlash(filepath.Dir(rel))
-		if within(dir, recordWriters) && within(dir, recordSweepers) {
+		if mayCallAll(dir) {
 			return nil
 		}
 		file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
@@ -141,22 +158,24 @@ func TestRecordCallSites(t *testing.T) {
 // TestCheckCallSitesCatchesViolations runs the checker on a fixture tree: a
 // cmd file that appends or sweeps, through a call and a method value, is
 // reported, and so is the importer sweeping; the engine's own appends and
-// sweep, the importer's appends, a _test.go file and a package-level function
-// are not.
+// sweep, the importer's appends and backfill, a _test.go file and a
+// package-level function are not. The engine importing backfill is reported.
 func TestCheckCallSitesCatchesViolations(t *testing.T) {
 	got, err := checkCallSites(filepath.Join("testdata", "callsite"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := []string{
+		"cmd/herddash/backfill.go:6: AppendBackfill imports into the record; only internal/importer, internal/store may call it",
 		"cmd/herddash/bad.go:11: Append writes the record; only internal/engine, internal/importer, internal/store may call it",
 		"cmd/herddash/bad.go:12: AppendResyncMarker writes the record; only internal/engine, internal/importer, internal/store may call it",
 		"cmd/herddash/bad.go:13: SaveServerState writes the record; only internal/engine, internal/importer, internal/store may call it",
 		"cmd/herddash/bad.go:14: Sweep deletes from the record; only internal/engine, internal/store may call it",
 		"cmd/herddash/bad.go:19: Append writes the record; only internal/engine, internal/importer, internal/store may call it",
 		"cmd/herddash/bad.go:20: Sweep deletes from the record; only internal/engine, internal/store may call it",
+		"internal/engine/backfill.go:5: AppendBackfill imports into the record; only internal/importer, internal/store may call it",
 		"internal/httpapi/bad.go:9: Append writes the record; only internal/engine, internal/importer, internal/store may call it",
-		"internal/importer/bad.go:8: Sweep deletes from the record; only internal/engine, internal/store may call it",
+		"internal/importer/bad.go:9: Sweep deletes from the record; only internal/engine, internal/store may call it",
 	}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Errorf("violations\n got %s\nwant %s", strings.Join(got, "\n     "), strings.Join(want, "\n     "))

@@ -112,6 +112,112 @@ func TestAppendBackfill(t *testing.T) {
 	}
 }
 
+// backfillAt is a backfill Transition for pane at ms with import key ikey.
+func backfillAt(t *testing.T, pane string, at int64, ikey string, spurious bool) core.Transition {
+	t.Helper()
+	return mustTransition(t, core.TransitionInput{
+		Key:          core.AgentKey{Host: "mac", Server: "default", Epoch: core.BackfillEpoch, PaneID: pane},
+		AgentProgram: "claude", Profile: "work", New: core.StatusDone, ObservedAt: at,
+		Provenance: core.ProvenanceBackfill, ImportKey: ikey, PossiblySpurious: spurious})
+}
+
+func TestAppendWritesPossiblySpurious(t *testing.T) {
+	s, _ := openTemp(t)
+	if err := s.Append(backfillAt(t, "w1:p1", 1000, "k1", true)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Append(backfillAt(t, "w1:p1", 2000, "k2", false)); err != nil {
+		t.Fatal(err)
+	}
+	if r := rowOf(t, s, 1); r.spurious != 1 {
+		t.Errorf("flagged row has possibly_spurious %d, want 1", r.spurious)
+	}
+	if r := rowOf(t, s, 2); r.spurious != 0 {
+		t.Errorf("unflagged row has possibly_spurious %d, want 0", r.spurious)
+	}
+	got, err := s.History(context.Background(), core.AgentKey{Host: "mac", Server: "default", Epoch: 0, PaneID: "w1:p1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || !got[0].PossiblySpurious() || got[1].PossiblySpurious() {
+		t.Errorf("History does not read the flag back: %+v", got)
+	}
+}
+
+func count(t *testing.T, s *Store) int {
+	t.Helper()
+	var n int
+	if err := s.db.QueryRow(`SELECT count(*) FROM transitions`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+func TestAppendBackfillIdempotent(t *testing.T) {
+	s, _ := openTemp(t)
+	ctx := context.Background()
+	first := []core.Transition{backfillAt(t, "w1:p1", 1000, "a", true), backfillAt(t, "w1:p2", 2000, "b", false)}
+	if added, flagged, err := s.AppendBackfill(ctx, first); err != nil || added != 2 || flagged != 1 {
+		t.Fatalf("first import added %d (%d flagged), %v; want 2 (1 flagged)", added, flagged, err)
+	}
+	if added, flagged, err := s.AppendBackfill(ctx, first); err != nil || added != 0 || flagged != 0 {
+		t.Fatalf("re-import added %d (%d flagged), %v; want 0", added, flagged, err)
+	}
+	grown := append(first, backfillAt(t, "w1:p1", 3000, "c", false))
+	if added, flagged, err := s.AppendBackfill(ctx, grown); err != nil || added != 1 || flagged != 0 {
+		t.Fatalf("grown import added %d (%d flagged), %v; want 1 (0 flagged)", added, flagged, err)
+	}
+	if n := count(t, s); n != 3 {
+		t.Errorf("%d rows, want 3", n)
+	}
+	if r := rowOf(t, s, 1); r.epoch != 0 || r.provenance != "backfill" || r.previous.Valid || r.seq.Valid ||
+		r.version.Valid || r.spurious != 1 || r.ikey.String != "a" {
+		t.Errorf("row %+v", r)
+	}
+}
+
+func TestAppendBackfillRefusesOtherRows(t *testing.T) {
+	s, _ := openTemp(t)
+	ctx := context.Background()
+	key := core.AgentKey{Host: "mac", Server: "default", Epoch: core.BackfillEpoch, PaneID: "w1:p1"}
+	for name, bad := range map[string]core.Transition{
+		"live": mustTransition(t, core.TransitionInput{Key: keyP1, New: core.StatusDone, ObservedAt: 1000,
+			Provenance: core.ProvenanceLive}),
+		"previous": mustTransition(t, core.TransitionInput{Key: key, Previous: status(core.StatusWorking), New: core.StatusDone,
+			ObservedAt: 1000, Provenance: core.ProvenanceBackfill, ImportKey: "p"}),
+		"order": mustTransition(t, core.TransitionInput{Key: key, HerdrOrder: order(1), New: core.StatusDone,
+			ObservedAt: 1000, Provenance: core.ProvenanceBackfill, ImportKey: "o"}),
+		"version": mustTransition(t, core.TransitionInput{Key: key, HerdrVersion: "0.9.2", New: core.StatusDone,
+			ObservedAt: 1000, Provenance: core.ProvenanceBackfill, ImportKey: "v"}),
+	} {
+		ts := []core.Transition{backfillAt(t, "w1:p1", 1000, "ok", false), bad}
+		if added, _, err := s.AppendBackfill(ctx, ts); err == nil || added != 0 {
+			t.Errorf("%s: added %d, err %v; want an error", name, added, err)
+		}
+	}
+	if n := count(t, s); n != 0 {
+		t.Errorf("%d rows written, want none", n)
+	}
+}
+
+func TestAppendBackfillRollsBack(t *testing.T) {
+	s, _ := openTemp(t)
+	// A test-only trigger fails the third insert, after two have succeeded
+	// inside the transaction: the rollback leaves no row at all.
+	if _, err := s.db.Exec(`CREATE TRIGGER boom BEFORE INSERT ON transitions WHEN NEW.pane_id = 'boom'
+		BEGIN SELECT RAISE(ABORT, 'boom'); END`); err != nil {
+		t.Fatal(err)
+	}
+	ts := []core.Transition{backfillAt(t, "w1:p1", 1000, "a", false), backfillAt(t, "w1:p2", 2000, "b", true),
+		backfillAt(t, "boom", 3000, "c", false)}
+	if added, flagged, err := s.AppendBackfill(context.Background(), ts); err == nil || added != 0 || flagged != 0 {
+		t.Errorf("an import failing part-way returned %d (%d flagged), %v; want an error", added, flagged, err)
+	}
+	if n := count(t, s); n != 0 {
+		t.Errorf("%d rows written, want none", n)
+	}
+}
+
 func TestAppendResyncMarker(t *testing.T) {
 	s, _ := openTemp(t)
 	for _, m := range []ResyncMarker{
@@ -200,13 +306,14 @@ type described struct {
 	ObservedAt                               int64
 	Provenance                               core.Provenance
 	ImportKey                                string
+	Spurious                                 bool
 }
 
 func describe(t core.Transition) described {
 	prev, hasPrev := t.Previous()
 	o, hasOrder := t.HerdrOrder()
 	return described{t.Key(), string(t.AgentProgram()), t.Profile(), string(prev), string(t.New()), t.HerdrVersion(),
-		hasPrev, hasOrder, o, t.ObservedAt(), t.Provenance(), t.ImportKey()}
+		hasPrev, hasOrder, o, t.ObservedAt(), t.Provenance(), t.ImportKey(), t.PossiblySpurious()}
 }
 
 func sameTransition(a, b core.Transition) bool { return describe(a) == describe(b) }
