@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -40,6 +41,9 @@ type fakeHerdr struct {
 	// requests.
 	snapshots  atomic.Int32
 	subscribes atomic.Int32
+	// procPID is the pid pane.process_info reports as the foreground process;
+	// 0 reports none.
+	procPID atomic.Int32
 
 	mu    sync.Mutex
 	ln    net.Listener
@@ -159,6 +163,16 @@ func (f *fakeHerdr) serve(t *testing.T, conn net.Conn) {
 			snap = strings.ReplaceAll(snap, `"agent":"claude","agent_status":"working"`, `"agent":"claude","agent_status":"blocked"`)
 		}
 		reply(snap)
+	case "pane.process_info":
+		// A child process the test started stands in for the Agent's
+		// foreground process; without one, herdr reports none.
+		pid := f.procPID.Load()
+		if pid == 0 {
+			reply(`{"type":"pane_process_info","process_info":{"pane_id":"w1:p1","shell_pid":1,"foreground_processes":[]}}`)
+			return
+		}
+		reply(fmt.Sprintf(`{"type":"pane_process_info","process_info":{"pane_id":"w1:p1","shell_pid":%d,"foreground_process_group_id":%d,`+
+			`"foreground_processes":[{"pid":%d,"name":"claude","argv0":"claude","argv":["claude"],"cmdline":"claude","cwd":"/tmp"}]}}`, pid, pid, pid))
 	case "events.subscribe":
 		f.subscribes.Add(1)
 		reply(`{"type":"subscription_started"}`)
@@ -233,12 +247,12 @@ func TestServeSignal(t *testing.T) {
 	done := make(chan int, 1)
 	go func() { done <- run(ctx, serveArgs(f, dataDir), &stdout, &stderr) }()
 
-	want := "agent      host=testhost epoch=1 pane=w1:p1 program=claude status=working"
+	want := "agent      host=testhost epoch=1 pane=w1:p1 program=claude profile=claude status=working"
 	waitFor(t, "the Agent line", func() bool { return strings.Contains(stdout.String(), want) })
 	waitFor(t, "the status subscription", func() bool { return f.statusSubs.Load() >= 1 })
 	time.Sleep(200 * time.Millisecond) // let the read that follows the subscription finish
 	f.push <- struct{}{}
-	change := "transition host=testhost epoch=1 pane=w1:p1 program=claude status=blocked previous=working provenance=live herdr=0.9.5"
+	change := "transition host=testhost epoch=1 pane=w1:p1 program=claude profile=claude status=blocked previous=working provenance=live herdr=0.9.5"
 	waitFor(t, "the live transition line", func() bool { return strings.Contains(stdout.String(), change) })
 	gate := "gate       herdr=0.9.5 minimum=0.9.5 gate=ok"
 	if out := stdout.String(); strings.Count(out, gate) != 1 || strings.Index(out, gate) > strings.Index(out, "agent ") {
@@ -324,7 +338,7 @@ func TestServeReconnects(t *testing.T) {
 	done := make(chan int, 1)
 	go func() { done <- run(ctx, serveArgs(f, filepath.Join(t.TempDir(), "data")), &stdout, &stderr) }()
 
-	agent := "agent      host=testhost epoch=1 pane=w1:p1 program=claude status=working"
+	agent := "agent      host=testhost epoch=1 pane=w1:p1 program=claude profile=claude status=working"
 	waitFor(t, "the Agent line", func() bool { return strings.Contains(stdout.String(), agent) })
 	waitFor(t, "the status subscription", func() bool { return f.statusSubs.Load() >= 1 })
 	f.restart()
@@ -332,7 +346,7 @@ func TestServeReconnects(t *testing.T) {
 	waitFor(t, "the reconnected line", func() bool {
 		return strings.Contains(stdout.String(), "reconnect  herdr=0.9.5 epoch=2 epoch_change=incremented")
 	})
-	again := "agent      host=testhost epoch=2 pane=w1:p1 program=claude status=working"
+	again := "agent      host=testhost epoch=2 pane=w1:p1 program=claude profile=claude status=working"
 	waitFor(t, "the Agent seen again under epoch 2", func() bool { return strings.Contains(stdout.String(), again) })
 	waitFor(t, "a status subscription to the new instance", func() bool { return f.statusSubs.Load() >= 2 })
 	select {
@@ -393,23 +407,27 @@ func TestPrinter(t *testing.T) {
 	key := core.AgentKey{Host: "mac", Server: "default", Epoch: 1, PaneID: "w1:p1"}
 	at := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC).UnixMilli()
 	prev := core.StatusWorking
-	tr, err := core.NewTransition(core.TransitionInput{Key: key, AgentProgram: "claude", Previous: &prev,
+	tr, err := core.NewTransition(core.TransitionInput{Key: key, AgentProgram: "claude", Profile: "cldw", Previous: &prev,
 		New: core.StatusBlocked, HerdrVersion: "0.8.2", ObservedAt: at + 1500, Provenance: core.ProvenanceLive})
 	if err != nil {
 		t.Fatal(err)
 	}
-	p.Agent(engine.Agent{Key: key, AgentProgram: "claude", Status: core.StatusWorking}, at)
+	p.Agent(engine.Agent{Key: key, AgentProgram: "claude", Profile: "cldw", Status: core.StatusWorking}, at)
 	p.Transition(tr)
 	p.Removed(engine.Agent{Key: key, Status: core.StatusBlocked}, at+3000)
+	p.Profile(engine.Agent{Key: key, AgentProgram: "claude", Profile: "cldp", Status: core.StatusBlocked}, "cldw", at+3500)
+	p.Profile(engine.Agent{Key: key, AgentProgram: "claude", Profile: "cldp"}, "", at+3600)
 	p.Reconnected("0.9.5", 1, true, at+4000)
 	p.Reconnected("0.9.5", 2, false, at+5000)
 	p.Resynced("events_lost", at+6000)
 	p.Gate(engine.GateOK, "0.9.5", at+7000)
 	p.Gate(engine.GateRefused, "0.8.2", at+8000)
 	p.Gate(engine.GateAdvisory, "", at+9000)
-	want := "2026-10-16T12:00:00.000Z agent      host=mac epoch=1 pane=w1:p1 program=claude status=working\n" +
-		"2026-10-16T12:00:01.500Z transition host=mac epoch=1 pane=w1:p1 program=claude status=blocked previous=working provenance=live herdr=0.8.2\n" +
-		"2026-10-16T12:00:03.000Z removed    host=mac epoch=1 pane=w1:p1 program=- status=blocked\n" +
+	want := "2026-10-16T12:00:00.000Z agent      host=mac epoch=1 pane=w1:p1 program=claude profile=cldw status=working\n" +
+		"2026-10-16T12:00:01.500Z transition host=mac epoch=1 pane=w1:p1 program=claude profile=cldw status=blocked previous=working provenance=live herdr=0.8.2\n" +
+		"2026-10-16T12:00:03.000Z removed    host=mac epoch=1 pane=w1:p1 program=- profile=- status=blocked\n" +
+		"2026-10-16T12:00:03.500Z profile    host=mac epoch=1 pane=w1:p1 program=claude profile=cldp previous=cldw\n" +
+		"2026-10-16T12:00:03.600Z profile    host=mac epoch=1 pane=w1:p1 program=claude profile=cldp previous=-\n" +
 		"2026-10-16T12:00:04.000Z reconnect  herdr=0.9.5 epoch=1 epoch_change=kept\n" +
 		"2026-10-16T12:00:05.000Z reconnect  herdr=0.9.5 epoch=2 epoch_change=incremented\n" +
 		"2026-10-16T12:00:06.000Z resync     cause=events_lost\n" +
@@ -493,8 +511,58 @@ func TestServeAdvisoryHerdr(t *testing.T) {
 	waitFor(t, "the status subscription", func() bool { return f.statusSubs.Load() >= 1 })
 	time.Sleep(200 * time.Millisecond) // let the read that follows the subscription finish
 	f.push <- struct{}{}
-	change := "transition host=testhost epoch=1 pane=w1:p1 program=claude status=blocked previous=working provenance=live herdr=0.8.2"
+	change := "transition host=testhost epoch=1 pane=w1:p1 program=claude profile=claude status=blocked previous=working provenance=live herdr=0.8.2"
 	waitFor(t, "the live transition line", func() bool { return strings.Contains(stdout.String(), change) })
+	cancel()
+	if code := <-done; code != 0 {
+		t.Fatalf("exit code %d, stderr %q", code, stderr.String())
+	}
+}
+
+// TestHelperSleep is TestServeResolvesProfile's child process: it only
+// sleeps, and only when run as that child.
+func TestHelperSleep(t *testing.T) {
+	if os.Getenv("HERDDASH_TEST_SLEEP") == "" {
+		t.Skip("run only as TestServeResolvesProfile's child process")
+	}
+	time.Sleep(30 * time.Second)
+}
+
+// TestServeResolvesProfile runs serve with a Profile Map whose claude rule
+// reads a dedicated variable. The Agent's foreground process, as the fake
+// herdr reports it, is a child this test starts with a controlled
+// environment, so the Agent line names the Profile the rule maps it to.
+func TestServeResolvesProfile(t *testing.T) {
+	hermeticEnv(t)
+	// The child is this test binary, not a system binary: macOS withholds
+	// an Apple platform binary's environment from kern.procargs2.
+	child := exec.Command(os.Args[0], "-test.run=^TestHelperSleep$")
+	child.Env = []string{"HERDDASH_TEST_SLEEP=1", "HERDDASH_TEST_PROFILE=/tmp/herddash-test-profile/"}
+	if err := child.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		child.Process.Kill()
+		child.Wait()
+	})
+	f := startFakeHerdr(t)
+	f.procPID.Store(int32(child.Process.Pid))
+	cfg := filepath.Join(t.TempDir(), "config.toml")
+	body := "[profiles.claude]\nrule = \"env\"\nvariable = \"HERDDASH_TEST_PROFILE\"\nabsent = \"none\"\n" +
+		"values = { \"/tmp/herddash-test-profile\" = \"mine\" }\n"
+	if err := os.WriteFile(cfg, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var stdout, stderr syncBuffer
+	done := make(chan int, 1)
+	dataDir := filepath.Join(t.TempDir(), "data")
+	args := append(serveArgs(f, dataDir), "--config", cfg)
+	go func() { done <- run(ctx, args, &stdout, &stderr) }()
+
+	want := "agent      host=testhost epoch=1 pane=w1:p1 program=claude profile=mine status=working"
+	waitFor(t, "the Agent line with its Profile", func() bool { return strings.Contains(stdout.String(), want) })
 	cancel()
 	if code := <-done; code != 0 {
 		t.Fatalf("exit code %d, stderr %q", code, stderr.String())

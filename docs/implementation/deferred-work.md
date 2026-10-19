@@ -31,3 +31,12 @@
 - source_spec: `docs/implementation/spec-1-7-resync-when-the-stream-cannot-be-trusted.md`
   summary: Document the engine tunables (snapshot, reconnect, resync and reconcile intervals) with the configuration, as the spine's Deferred list says.
   evidence: Story 1.7 review; they exist only as commented constants in internal/engine/tunables.go, and Story 1.6's backoff values were not documented either.
+- source_spec: `docs/implementation/spec-1-9-know-which-profile-each-agent-runs-under.md`
+  summary: Run the test suite on a macOS runner in CI so procenv's darwin reader (kern.procargs2) is exercised automatically.
+  evidence: Story 1.9 review; ci.yml tests only on ubuntu-latest, so the reader the operator's Macs depend on is only vetted and cross-compiled there.
+- source_spec: `docs/implementation/spec-1-9-know-which-profile-each-agent-runs-under.md`
+  summary: Decide whether a Profile resolution that failed transiently (timeout, herdr call error) should be retried, rather than leaving the Agent unresolved until the next agent detection.
+  evidence: Story 1.9 review, unverified (medium if real); settle it by counting "profile resolved" debug entries with an error in dogfooding logs.
+- source_spec: `docs/implementation/spec-1-9-know-which-profile-each-agent-runs-under.md`
+  summary: CLAUDE.md's "Repository state" should say internal/procenv is built, golang.org/x/sys v0.49.0 is a dependency, and go.mod declares go 1.26.0.
+  evidence: Story 1.9 review; agent-context file, so deferred per the triage rule.

@@ -38,6 +38,11 @@ const (
 	// backoff: a refused herdr is reachable, and it neither grows the wait nor
 	// counts into the reconnect backoff.
 	defaultRefusedRecheckInterval = 30 * time.Second
+	// defaultProfileTimeout bounds resolving one Agent's Profile: reading its
+	// pane's foreground process from herdr and that process's environment. An
+	// Agent's first report waits for it, and running out gives
+	// core.ProfileUnresolved.
+	defaultProfileTimeout = 2 * time.Second
 	// pingTimeout bounds the ping that reads herdr's version at each start.
 	pingTimeout = 10 * time.Second
 	// subscribeTimeout bounds the setup of a subscription, lifecycle or status,
@@ -62,6 +67,7 @@ var (
 	resyncMinInterval      = defaultResyncMinInterval
 	reconcileInterval      = defaultReconcileInterval
 	refusedRecheckInterval = defaultRefusedRecheckInterval
+	profileTimeout         = defaultProfileTimeout
 )
 
 // reconnectDelay is the wait after the nth consecutive failed attempt to start

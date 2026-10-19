@@ -14,6 +14,9 @@ type Client interface {
 	Snapshot(ctx context.Context) (core.Snapshot, error)
 	SubscribeLifecycle(ctx context.Context) (Subscription[core.LifecycleEvent], error)
 	SubscribeStatus(ctx context.Context, paneID string) (Subscription[core.StatusEvent], error)
+	// ForegroundProcess reads a pane's foreground process (pane.process_info),
+	// whose environment carries the Profile.
+	ForegroundProcess(ctx context.Context, paneID string) (core.ForegroundProcess, error)
 }
 
 // Subscription is one live subscription, as herdr.Subscription provides it:
@@ -50,6 +53,10 @@ func (h herdrClient) SubscribeStatus(ctx context.Context, paneID string) (Subscr
 		return nil, err
 	}
 	return herdrSubscription[core.StatusEvent]{s}, nil
+}
+
+func (h herdrClient) ForegroundProcess(ctx context.Context, paneID string) (core.ForegroundProcess, error) {
+	return h.c.ForegroundProcess(ctx, paneID)
 }
 
 type herdrSubscription[T any] struct{ s *herdr.Subscription[T] }
