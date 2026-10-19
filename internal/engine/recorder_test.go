@@ -8,8 +8,10 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/vilosource/herddash/internal/core"
+	"github.com/vilosource/herddash/internal/herdr"
 	"github.com/vilosource/herddash/internal/store"
 )
 
@@ -233,8 +235,8 @@ func TestRecordRestartNewHerdr(t *testing.T) {
 	if w := st.writeList(); w[0] != "marker daemon_start 3" {
 		t.Errorf("writes %v, want the marker under epoch 3, the one in force at start, first", w)
 	}
-	if w := st.writeList(); !slices.Equal(w[:3], []string{"marker daemon_start 3", "save 4", "row w1:p1 4"}) {
-		t.Errorf("writes %v, want epoch 4 saved before its first row", w)
+	if w := st.writeList(); !slices.Equal(w[:4], []string{"marker daemon_start 3", "save 4", "marker connect 4", "row w1:p1 4"}) {
+		t.Errorf("writes %v, want epoch 4 saved and its connect marker written before its first row", w)
 	}
 	saved, _ := st.savedState()
 	if saved.Epoch != 4 || !maps.Equal(saved.Terminals, terminalsOf(twoAgents())) {
@@ -257,11 +259,12 @@ func TestRecordStateAcrossRuns(t *testing.T) {
 	run(twoAgents(), "agent w1:p1 claude working", "agent w1:p2 claude idle")
 	run(twoAgents(), "reconnected 0.9.5 epoch 1 kept", "agent w1:p1 claude working", "agent w1:p2 claude idle")
 	run(restarted(), "reconnected 0.9.5 epoch 2 incremented", "agent w1:p1 claude working", "agent w1:p2 claude idle")
-	// Each snapshot's state is saved, when it changed, before its rows.
+	// Each snapshot's state is saved, when it changed, and its connect
+	// marker written, before its rows.
 	if w := st.writeList(); !slices.Equal(w, []string{
-		"marker daemon_start 1", "save 1", "row w1:p1 1", "row w1:p2 1",
-		"marker daemon_start 1", "row w1:p1 1", "row w1:p2 1",
-		"marker daemon_start 1", "save 2", "row w1:p1 2", "row w1:p2 2",
+		"marker daemon_start 1", "save 1", "marker connect 1", "row w1:p1 1", "row w1:p2 1",
+		"marker daemon_start 1", "marker connect 1", "row w1:p1 1", "row w1:p2 1",
+		"marker daemon_start 1", "save 2", "marker connect 2", "row w1:p1 2", "row w1:p2 2",
 	}) {
 		t.Errorf("writes %v", w)
 	}
@@ -365,6 +368,13 @@ func TestRecordLoadFails(t *testing.T) {
 	h.settle()
 	h.fake.statusSub("w1:p1").event(core.StatusEvent{PaneID: "w1:p1", Status: core.StatusBlocked, AgentProgram: "claude"})
 	h.rec.expect(t, "agent w1:p1 claude working", "agent w1:p2 claude idle", "transition w1:p1 claude working->blocked live")
+	// A resync and a reconnect write no markers either.
+	h.fake.statusSub("w1:p1").health(&herdr.Health{Kind: herdr.HealthEventsLost, Code: "events_lost"})
+	h.rec.awaitCount(t, "resync events_lost", 1)
+	h.fake.awaitSubscribe("w1:p1")
+	h.settle()
+	h.loseLifecycle()
+	h.rec.awaitCount(t, "reconnected 0.9.5 epoch 1 kept", 1)
 	h.settle()
 	if w := st.writeList(); len(w) != 0 {
 		t.Errorf("writes %v, want none", w)
@@ -426,9 +436,499 @@ func TestRecordFirstSightAfterHeldResolution(t *testing.T) {
 	reported := h.rec.observedTimes()[0]
 	tr := rows[0]
 	order, ok := tr.HerdrOrder()
-	// Clock readings: the marker (1), the gate (2), the snapshot showing the
-	// Agent (3), then the report.
-	if tr.Provenance() != core.ProvenanceSnapshot || !ok || order != 7 || tr.ObservedAt() != clockAt(3) || reported <= tr.ObservedAt() {
-		t.Errorf("first sight %s at %d (reported at %d), want snapshot seq 7 at %d", row(tr), tr.ObservedAt(), reported, clockAt(3))
+	// Clock readings: the daemon_start marker (1), the gate (2), the connect
+	// marker (3), the snapshot showing the Agent (4), then the report.
+	if tr.Provenance() != core.ProvenanceSnapshot || !ok || order != 7 || tr.ObservedAt() != clockAt(4) || reported <= tr.ObservedAt() {
+		t.Errorf("first sight %s at %d (reported at %d), want snapshot seq 7 at %d", row(tr), tr.ObservedAt(), reported, clockAt(4))
 	}
+}
+
+// startMarkers are the markers every recorded start on a fresh store writes.
+var startMarkers = []string{"daemon_start 1 -", "connect 1 -"}
+
+// startedRecording starts an engine on twoAgents that records into a fresh
+// fake store, and waits for it to settle.
+func startedRecording(t *testing.T) (*harness, *fakeStore) {
+	t.Helper()
+	fake := newFakeClient(t, twoAgents())
+	st := newFakeStore(fake)
+	h := startRecording(t, fake, st, nil)
+	h.rec.expect(t, "agent w1:p1 claude working", "agent w1:p2 claude idle")
+	h.fake.awaitSubscribe("w1:p1")
+	h.fake.awaitSubscribe("w1:p2")
+	h.settle()
+	if got := st.markerList(); !slices.Equal(got, startMarkers) {
+		t.Fatalf("markers at start %v, want %v", got, startMarkers)
+	}
+	return h, st
+}
+
+func expectMarkers(t *testing.T, st *fakeStore, want ...string) {
+	t.Helper()
+	if got := st.awaitMarkers(t, len(want)); !slices.Equal(got, want) {
+		t.Fatalf("markers\n got %v\nwant %v", got, want)
+	}
+}
+
+// latestStatus is the New Status of the last row recorded for each pane.
+func latestStatus(st *fakeStore) map[string]core.Status {
+	out := map[string]core.Status{}
+	for _, tr := range st.rowList() {
+		out[tr.Key().PaneID] = tr.New()
+	}
+	return out
+}
+
+func TestMarkerEventsLost(t *testing.T) {
+	// The marker comes before the resync snapshot's rows, and afterwards the
+	// record agrees with that snapshot for every Agent.
+	h, st := startedRecording(t)
+	s := twoAgents()
+	s.Panes[0].Agent.Status = core.StatusIdle
+	s.Panes[1].Agent.Status = core.StatusDone
+	h.fake.setSnapshot(s)
+	h.fake.statusSub("w1:p1").health(&herdr.Health{Kind: herdr.HealthEventsLost, Code: "events_lost", Message: "fell behind"})
+	h.rec.expect(t, "agent w1:p1 claude working", "agent w1:p2 claude idle", "resync events_lost",
+		"transition w1:p1 claude working->idle snapshot", "transition w1:p2 claude idle->done snapshot")
+	h.settle()
+	expectMarkers(t, st, append(slices.Clone(startMarkers), "events_lost 1 events_lost")...)
+	w := st.writeList()
+	if !slices.Equal(w[len(w)-3:], []string{"marker events_lost 1", "row w1:p1 1", "row w1:p2 1"}) {
+		t.Errorf("writes %v, want the marker before the resync snapshot's rows", w)
+	}
+	// Consistency (FR-7): the latest row per Agent is the snapshot's Status.
+	if got := latestStatus(st); got["w1:p1"] != core.StatusIdle || got["w1:p2"] != core.StatusDone {
+		t.Errorf("latest rows %v, want w1:p1 idle and w1:p2 done as the snapshot showed", got)
+	}
+}
+
+func TestMarkerUnknownErrorCode(t *testing.T) {
+	h, st := startedRecording(t)
+	h.fake.statusSub("w1:p2").health(&herdr.Health{Kind: herdr.HealthError, Code: "weird_new", Message: "?"})
+	h.rec.awaitCount(t, "resync error", 1)
+	h.fake.awaitSubscribe("w1:p2")
+	h.settle()
+	expectMarkers(t, st, append(slices.Clone(startMarkers), "error 1 weird_new")...)
+}
+
+func TestMarkerClosed(t *testing.T) {
+	h, st := startedRecording(t)
+	h.fake.statusSub("w1:p1").health(&herdr.Health{Kind: herdr.HealthClosed, Err: errors.New("EOF")})
+	h.rec.awaitCount(t, "resync closed", 1)
+	h.fake.awaitSubscribe("w1:p1")
+	h.settle()
+	expectMarkers(t, st, append(slices.Clone(startMarkers), "closed 1 -")...)
+	if n := len(st.rowList()); n != 2 {
+		t.Errorf("%d rows, want only the two first sights: the snapshot agreed", n)
+	}
+}
+
+func TestMarkerRejected(t *testing.T) {
+	fake := newFakeClient(t, twoAgents())
+	fake.reject("w1:p2")
+	st := newFakeStore(fake)
+	h := startRecording(t, fake, st, nil)
+	h.rec.expect(t, "agent w1:p1 claude working", "agent w1:p2 claude idle", "resync rejected")
+	fake.mu.Lock()
+	delete(fake.rejected, "w1:p2")
+	fake.mu.Unlock()
+	h.fake.awaitStatusSubs("w1:p2", 1)
+	// Once w1:p2 is subscribed, the resync that did it ends and no other
+	// follows: every resync reported has completed.
+	h.settle()
+	h.settle()
+	ms := st.markerList()
+	if len(ms) < 3 || !slices.Equal(ms[:3], append(slices.Clone(startMarkers), "rejected 1 pane_not_found")) {
+		t.Fatalf("markers %v, want the start's, then rejected with herdr's code", ms)
+	}
+	for _, m := range ms[3:] {
+		if m != "rejected 1 pane_not_found" {
+			t.Fatalf("markers %v, want every resync rejected", ms)
+		}
+	}
+	if n := len(ms) - 2; n != h.rec.count("resync rejected") {
+		t.Errorf("%d resync markers, %d resyncs reported", n, h.rec.count("resync rejected"))
+	}
+}
+
+func TestMarkerStartedWithHerdrDown(t *testing.T) {
+	fake := newFakeClient(t, twoAgents())
+	fake.fail("ping", 2)
+	st := newFakeStore(fake)
+	h := startRecording(t, fake, st, nil)
+	h.rec.expect(t, "agent w1:p1 claude working", "agent w1:p2 claude idle")
+	h.settle()
+	if n := len(fake.pings()); n != 3 {
+		t.Errorf("%d pings, want 3", n)
+	}
+	expectMarkers(t, st, startMarkers...)
+	expectRows(t, st, firstP1, firstP2)
+	if w := st.writeList(); !slices.Equal(w, []string{"marker daemon_start 1", "save 1", "marker connect 1", "row w1:p1 1", "row w1:p2 1"}) {
+		t.Errorf("writes %v", w)
+	}
+}
+
+func TestMarkerReconnect(t *testing.T) {
+	h, st := startedRecording(t)
+	// The same herdr: the epoch is kept and nothing changed, so no row.
+	h.loseLifecycle()
+	h.rec.awaitCount(t, "reconnected 0.9.5 epoch 1 kept", 1)
+	h.fake.awaitSubscribe("w1:p1")
+	h.fake.awaitSubscribe("w1:p2")
+	h.settle()
+	expectMarkers(t, st, append(slices.Clone(startMarkers), "reconnect 1 epoch kept")...)
+	if n := len(st.rowList()); n != 2 {
+		t.Errorf("%d rows, want only the first sights", n)
+	}
+	if as := h.agents(); as[0].Key.Epoch != 1 {
+		t.Errorf("epoch %d, want 1", as[0].Key.Epoch)
+	}
+
+	// A restarted herdr: the epoch increments, and the marker carries the new
+	// one, before the new epoch's rows.
+	h.fake.setSnapshot(restarted())
+	h.loseLifecycle()
+	h.rec.awaitCount(t, "reconnected 0.9.5 epoch 2 incremented", 1)
+	st.awaitRows(t, 4)
+	h.settle()
+	expectMarkers(t, st, append(slices.Clone(startMarkers), "reconnect 1 epoch kept", "reconnect 2 epoch incremented")...)
+	w := st.writeList()
+	if !slices.Equal(w[len(w)-4:], []string{"save 2", "marker reconnect 2", "row w1:p1 2", "row w1:p2 2"}) {
+		t.Errorf("writes %v, want the epoch saved and marked before its rows", w)
+	}
+}
+
+func TestMarkerRestartNewHerdr(t *testing.T) {
+	fake := newFakeClient(t, twoAgents())
+	st := newFakeStore(fake)
+	st.setState(store.ServerState{Epoch: 3, Terminals: map[string]string{"w1:p1": "old-1"}})
+	h := startRecording(t, fake, st, nil)
+	h.rec.expect(t, "reconnected 0.9.5 epoch 4 incremented", "agent w1:p1 claude working", "agent w1:p2 claude idle")
+	h.settle()
+	expectMarkers(t, st, "daemon_start 3 -", "connect 4 epoch incremented")
+}
+
+func TestMarkerRestartSameHerdr(t *testing.T) {
+	fake := newFakeClient(t, twoAgents())
+	st := newFakeStore(fake)
+	st.setState(store.ServerState{Epoch: 3, Terminals: terminalsOf(twoAgents())})
+	h := startRecording(t, fake, st, nil)
+	h.rec.expect(t, "reconnected 0.9.5 epoch 3 kept", "agent w1:p1 claude working", "agent w1:p2 claude idle")
+	h.settle()
+	expectMarkers(t, st, "daemon_start 3 -", "connect 3 epoch kept")
+}
+
+// setReconcileInterval sets reconcileInterval for one test, restoring it after.
+func setReconcileInterval(t *testing.T, d time.Duration) {
+	t.Helper()
+	prev := reconcileInterval
+	reconcileInterval = d
+	t.Cleanup(func() { reconcileInterval = prev })
+}
+
+// reconcileTick delivers one reconcile timer tick to the engine, as the
+// timer would. The Agents round trip orders the read of conn after the
+// engine's last write of it.
+func (h *harness) reconcileTick() {
+	h.t.Helper()
+	h.agents()
+	h.engine.inbox <- reconcileDueMsg{conn: h.engine.conn}
+}
+
+// startedReconciling is startedRecording with the reconcile timer out of the
+// way, so the test delivers each tick itself.
+func startedReconciling(t *testing.T) (*harness, *fakeStore) {
+	t.Helper()
+	setReconcileInterval(t, time.Hour)
+	return startedRecording(t)
+}
+
+func TestMarkerReconcileAgrees(t *testing.T) {
+	h, st := startedReconciling(t)
+	for range 2 {
+		h.reconcileTick()
+		h.fake.awaitSnapshotCall()
+		h.settle()
+	}
+	if got := st.markerList(); !slices.Equal(got, startMarkers) {
+		t.Errorf("markers %v, want none after the start's", got)
+	}
+}
+
+func TestMarkerReconcileDisagrees(t *testing.T) {
+	h, st := startedReconciling(t)
+	s := twoAgents()
+	s.Panes[0].Agent.Status = core.StatusIdle
+	h.fake.setSnapshot(s)
+	h.reconcileTick()
+	h.rec.expect(t, "agent w1:p1 claude working", "agent w1:p2 claude idle", "transition w1:p1 claude working->idle snapshot")
+	h.settle()
+	expectMarkers(t, st, append(slices.Clone(startMarkers), "reconcile 1 -")...)
+	w := st.writeList()
+	if !slices.Equal(w[len(w)-2:], []string{"row w1:p1 1", "marker reconcile 1"}) {
+		t.Errorf("writes %v, want the snapshot row, then the marker", w)
+	}
+	// A later reconcile agrees.
+	h.reconcileTick()
+	h.fake.awaitSnapshotCall()
+	h.settle()
+	if got := st.markerList(); len(got) != 3 {
+		t.Errorf("markers %v, want no more", got)
+	}
+}
+
+func TestMarkerReconcileRemoval(t *testing.T) {
+	// A reconcile read that only removes an Agent disagreed too.
+	h, st := startedReconciling(t)
+	s := twoAgents()
+	s.Panes = s.Panes[1:]
+	h.fake.setSnapshot(s)
+	h.reconcileTick()
+	h.rec.awaitCount(t, "removed w1:p1", 1)
+	h.settle()
+	expectMarkers(t, st, append(slices.Clone(startMarkers), "reconcile 1 -")...)
+}
+
+func TestMarkerReconcileFirstSight(t *testing.T) {
+	// A reconcile read whose only difference is a new Agent disagreed.
+	h, st := startedReconciling(t)
+	s := twoAgents()
+	s.Panes = append(s.Panes, agentPane("w1:p4", core.StatusBlocked))
+	h.fake.setSnapshot(s)
+	h.reconcileTick()
+	h.rec.awaitCount(t, "agent w1:p4 claude blocked", 1)
+	h.settle()
+	expectMarkers(t, st, append(slices.Clone(startMarkers), "reconcile 1 -")...)
+}
+
+func TestMarkerReconcileProgramChanged(t *testing.T) {
+	// A reconcile read that only corrects an Agent's program disagreed.
+	h, st := startedReconciling(t)
+	s := twoAgents()
+	s.Panes[0].Agent.AgentProgram = "codex"
+	h.fake.setSnapshot(s)
+	h.reconcileTick()
+	h.fake.awaitSnapshotCall()
+	h.settle()
+	expectMarkers(t, st, append(slices.Clone(startMarkers), "reconcile 1 -")...)
+}
+
+func TestMarkerReconcileHeldProfile(t *testing.T) {
+	// An Agent whose Profile resolution is held was seen by the first
+	// snapshot; reconcile reads that show it again find no disagreement.
+	setReconcileInterval(t, time.Hour)
+	setProfileTimeout(t, wait)
+	st := newFakeStore(nil)
+	fake := newFakeClient(t, oneAgent("claude", core.StatusWorking))
+	fake.setProc("w1:p1", p1PID)
+	env := newFakeEnviron(t)
+	env.set(p1PID, claudeVar, "/h/.claude-cldw")
+	env.hold()
+	h := startRecording(t, fake, st, func(o *Options, r *recorder) {
+		o.Profiles = map[core.AgentProgram]core.ProfileRule{"claude": claudeRule()}
+		o.Environ = env.lookup
+		r.profileLines = true
+	})
+	h.fake.awaitSubscribe("w1:p1")
+	h.settle()
+	for range 3 {
+		h.reconcileTick()
+		h.fake.awaitSnapshotCall()
+		h.settle()
+	}
+	if len(h.rec.all()) != 0 {
+		t.Fatalf("reported before the Profile resolved: %v", h.rec.all())
+	}
+	if got := st.markerList(); !slices.Equal(got, startMarkers) {
+		t.Errorf("markers %v, want none after the start's", got)
+	}
+	env.unblock()
+	h.rec.expect(t, "agent w1:p1 claude working profile=cldw")
+}
+
+func TestMarkerReconcileDuringRead(t *testing.T) {
+	// A tick while another read is in flight tags the read after it: the
+	// read in flight writes no reconcile marker even though it disagrees,
+	// and the tagged one writes one only because it disagrees.
+	h, st := startedReconciling(t)
+	h.fake.setGated(true)
+	h.lifecycle(core.LifecycleEvent{Kind: core.LifecycleContextChanged, PaneID: "w1:p1"})
+	h.fake.awaitSnapshotCall() // held
+	h.reconcileTick()
+	s := twoAgents()
+	s.Panes[0].Agent.Status = core.StatusIdle
+	h.fake.setSnapshot(s)
+	h.fake.release <- struct{}{}
+	h.rec.awaitCount(t, "transition w1:p1 claude working->idle snapshot", 1)
+	h.fake.awaitSnapshotCall() // the tagged read, held
+	if got := st.markerList(); !slices.Equal(got, startMarkers) {
+		t.Errorf("markers %v, want none for the untagged read", got)
+	}
+	s.Panes[1].Agent.Status = core.StatusDone
+	h.fake.setSnapshot(s)
+	h.fake.setGated(false)
+	h.fake.release <- struct{}{}
+	h.rec.awaitCount(t, "transition w1:p2 claude idle->done snapshot", 1)
+	h.settle()
+	expectMarkers(t, st, append(slices.Clone(startMarkers), "reconcile 1 -")...)
+	w := st.writeList()
+	if !slices.Equal(w[len(w)-2:], []string{"row w1:p2 1", "marker reconcile 1"}) {
+		t.Errorf("writes %v", w)
+	}
+}
+
+func TestMarkerResyncAndReconcileOneRead(t *testing.T) {
+	// One read both ends a resync and serves a reconcile: the resync marker,
+	// the rows, then the reconcile marker.
+	h, st := startedReconciling(t)
+	h.fake.setGated(true)
+	h.lifecycle(core.LifecycleEvent{Kind: core.LifecycleContextChanged, PaneID: "w1:p1"})
+	h.fake.awaitSnapshotCall() // read N, held
+	h.fake.statusSub("w1:p1").health(&herdr.Health{Kind: herdr.HealthEventsLost, Code: "events_lost"})
+	h.rec.awaitCount(t, "resync events_lost", 1)
+	h.fake.awaitSubscribe("w1:p1")
+	h.settle() // the resubscribe settles: the resync's read is N+1
+	h.reconcileTick()
+	h.fake.release <- struct{}{} // N agrees
+	h.fake.awaitSnapshotCall()   // N+1, held
+	s := twoAgents()
+	s.Panes[0].Agent.Status = core.StatusIdle
+	h.fake.setSnapshot(s)
+	h.fake.setGated(false)
+	h.fake.release <- struct{}{}
+	h.rec.awaitCount(t, "transition w1:p1 claude working->idle snapshot", 1)
+	h.settle()
+	expectMarkers(t, st, append(slices.Clone(startMarkers), "events_lost 1 events_lost", "reconcile 1 -")...)
+	w := st.writeList()
+	if !slices.Equal(w[len(w)-3:], []string{"marker events_lost 1", "row w1:p1 1", "marker reconcile 1"}) {
+		t.Errorf("writes %v, want the resync marker, the row, then the reconcile marker", w)
+	}
+}
+
+func TestMarkerDisconnectDropsReconcile(t *testing.T) {
+	// A reconcile request outstanding when the lifecycle stream is lost is
+	// abandoned: the reconnect to a restarted herdr, which disagrees with
+	// everything, writes the reconnect marker alone.
+	h, st := startedReconciling(t)
+	hold := h.fake.holdNext()
+	h.reconcileTick()
+	h.fake.awaitSnapshotCall() // held
+	h.fake.setSnapshot(restarted())
+	h.loseLifecycle()
+	h.rec.awaitCount(t, "reconnected 0.9.5 epoch 2 incremented", 1)
+	close(hold) // the stale read is ignored
+	st.awaitRows(t, 4)
+	h.settle()
+	expectMarkers(t, st, append(slices.Clone(startMarkers), "reconnect 2 epoch incremented")...)
+}
+
+func TestMarkerOtherReadsWriteNone(t *testing.T) {
+	// A read that is not a resync, a connection's first or a reconcile writes
+	// no marker, even when it disagrees.
+	h, st := startedRecording(t)
+	s := twoAgents()
+	s.Panes[0].Agent.Status = core.StatusIdle
+	h.fake.setSnapshot(s)
+	h.lifecycle(core.LifecycleEvent{Kind: core.LifecycleContextChanged, PaneID: "w1:p1"})
+	h.rec.awaitCount(t, "transition w1:p1 claude working->idle snapshot", 1)
+	h.settle()
+	if got := st.markerList(); !slices.Equal(got, startMarkers) {
+		t.Errorf("markers %v, want none after the start's", got)
+	}
+}
+
+func TestMarkerReasonsAreHerdrs(t *testing.T) {
+	for _, tt := range []struct {
+		kind   herdr.HealthKind
+		reason string
+	}{
+		{herdr.HealthEventsLost, store.ReasonEventsLost},
+		{herdr.HealthError, store.ReasonError},
+		{herdr.HealthRejected, store.ReasonRejected},
+		{herdr.HealthClosed, store.ReasonClosed},
+		{herdr.HealthUndecodable, store.ReasonUndecodable},
+	} {
+		if string(tt.kind) != tt.reason {
+			t.Errorf("herdr's %q is recorded as %q", tt.kind, tt.reason)
+		}
+	}
+}
+
+func TestMarkerUndecodable(t *testing.T) {
+	h, st := startedRecording(t)
+	h.fake.statusSub("w1:p1").health(&herdr.Health{Kind: herdr.HealthUndecodable, Err: errors.New("bad json")})
+	h.rec.awaitCount(t, "resync undecodable", 1)
+	h.fake.awaitSubscribe("w1:p1")
+	h.settle()
+	expectMarkers(t, st, append(slices.Clone(startMarkers), "undecodable 1 -")...)
+}
+
+func TestMarkerJoinedCauses(t *testing.T) {
+	// Triggers that join a running resync are each marked when it ends, once
+	// per distinct cause; the Sink still sees one resync.
+	three := twoAgents()
+	three.Panes = append(three.Panes, agentPane("w1:p4", core.StatusBlocked))
+	fake := newFakeClient(t, three)
+	st := newFakeStore(fake)
+	h := startRecording(t, fake, st, nil)
+	h.rec.expect(t, "agent w1:p1 claude working", "agent w1:p2 claude idle", "agent w1:p4 claude blocked")
+	for _, id := range []string{"w1:p1", "w1:p2", "w1:p4"} {
+		h.fake.awaitSubscribe(id)
+	}
+	h.settle()
+	release := h.fake.holdSubscribes("w1:p1")
+	h.fake.statusSub("w1:p1").health(&herdr.Health{Kind: herdr.HealthEventsLost, Code: "events_lost"})
+	h.rec.awaitCount(t, "resync events_lost", 1)
+	h.fake.awaitSubscribe("w1:p1") // held: the resync's read waits
+	h.fake.statusSub("w1:p2").health(&herdr.Health{Kind: herdr.HealthError, Code: "weird_new"})
+	h.fake.awaitSubscribe("w1:p2")
+	h.fake.statusSub("w1:p4").health(&herdr.Health{Kind: herdr.HealthEventsLost, Code: "events_lost"})
+	h.fake.awaitSubscribe("w1:p4")
+	close(release)
+	h.settle()
+	expectMarkers(t, st, append(slices.Clone(startMarkers), "events_lost 1 events_lost", "error 1 weird_new")...)
+	if got := st.markerList(); len(got) != 4 {
+		t.Errorf("markers %v, want one per distinct cause", got)
+	}
+	h.rec.expect(t, "agent w1:p1 claude working", "agent w1:p2 claude idle", "agent w1:p4 claude blocked", "resync events_lost")
+}
+
+func TestMarkerResyncCutShort(t *testing.T) {
+	// A resync already reported but cut short by a lost lifecycle stream is
+	// still marked, before the reconnect.
+	h, st := startedRecording(t)
+	release := h.fake.holdSubscribes("w1:p1")
+	t.Cleanup(func() { close(release) })
+	h.fake.statusSub("w1:p1").health(&herdr.Health{Kind: herdr.HealthEventsLost, Code: "events_lost"})
+	h.rec.awaitCount(t, "resync events_lost", 1)
+	h.fake.awaitSubscribe("w1:p1") // held
+	h.loseLifecycle()
+	h.rec.awaitCount(t, "reconnected 0.9.5 epoch 1 kept", 1)
+	h.settle()
+	expectMarkers(t, st, append(slices.Clone(startMarkers), "events_lost 1 events_lost", "reconnect 1 epoch kept")...)
+}
+
+func TestMarkerWriteFails(t *testing.T) {
+	logs := &logSink{}
+	fake := newFakeClient(t, twoAgents())
+	st := newFakeStore(fake)
+	h := startRecording(t, fake, st, func(o *Options, _ *recorder) {
+		o.Logger = slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	})
+	h.rec.expect(t, "agent w1:p1 claude working", "agent w1:p2 claude idle")
+	h.fake.awaitSubscribe("w1:p1")
+	h.settle()
+	st.mu.Lock()
+	st.markerErr = errors.New("disk full")
+	st.mu.Unlock()
+	h.fake.statusSub("w1:p1").health(&herdr.Health{Kind: herdr.HealthEventsLost, Code: "events_lost"})
+	h.rec.awaitCount(t, "resync events_lost", 1)
+	sub := h.fake.awaitStatusSubs("w1:p1", 2)
+	h.settle()
+	e := logs.entries(t, "ERROR", "resync marker not recorded")
+	if len(e) != 1 || e[0]["reason"] != "events_lost" || e[0]["detail"] != "events_lost" || e[0]["epoch"] != float64(1) || e[0]["error"] != "disk full" {
+		t.Errorf("error entries %v, want one naming the reason, detail, epoch and error", e)
+	}
+	sub.event(core.StatusEvent{PaneID: "w1:p1", Status: core.StatusBlocked, AgentProgram: "claude"})
+	h.rec.awaitCount(t, "transition w1:p1 claude working->blocked live", 1)
 }

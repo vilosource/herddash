@@ -1264,16 +1264,35 @@ func TestReconcile(t *testing.T) {
 func TestSubscribeCause(t *testing.T) {
 	tests := []struct {
 		err  error
-		want string
+		want cause
 	}{
-		{fmt.Errorf("herdr: subscribe: %w", &herdr.Health{Kind: herdr.HealthRejected, Code: "pane_not_found"}), "rejected"},
-		{fmt.Errorf("herdr: subscribe: %w", &herdr.Health{Kind: herdr.HealthUndecodable}), "undecodable"},
-		{errBoom, "closed"},
-		{fmt.Errorf("herdr: subscribe: %w", context.DeadlineExceeded), "closed"},
+		{fmt.Errorf("herdr: subscribe: %w", &herdr.Health{Kind: herdr.HealthRejected, Code: "pane_not_found"}), cause{"rejected", "pane_not_found"}},
+		{fmt.Errorf("herdr: subscribe: %w", &herdr.Health{Kind: herdr.HealthUndecodable}), cause{reason: "undecodable"}},
+		{errBoom, cause{reason: "closed"}},
+		{fmt.Errorf("herdr: subscribe: %w", context.DeadlineExceeded), cause{reason: "closed"}},
 	}
 	for _, tt := range tests {
 		if got := subscribeCause(tt.err); got != tt.want {
-			t.Errorf("subscribeCause(%v) = %q, want %q", tt.err, got, tt.want)
+			t.Errorf("subscribeCause(%v) = %+v, want %+v", tt.err, got, tt.want)
+		}
+	}
+}
+
+func TestHealthCause(t *testing.T) {
+	// herdr's code is the detail only for the kinds that carry one.
+	tests := []struct {
+		h    herdr.Health
+		want cause
+	}{
+		{herdr.Health{Kind: herdr.HealthEventsLost, Code: "events_lost"}, cause{"events_lost", "events_lost"}},
+		{herdr.Health{Kind: herdr.HealthError, Code: "weird_new"}, cause{"error", "weird_new"}},
+		{herdr.Health{Kind: herdr.HealthRejected, Code: "pane_not_found"}, cause{"rejected", "pane_not_found"}},
+		{herdr.Health{Kind: herdr.HealthClosed, Code: "ignored"}, cause{reason: "closed"}},
+		{herdr.Health{Kind: herdr.HealthUndecodable}, cause{reason: "undecodable"}},
+	}
+	for _, tt := range tests {
+		if got := healthCause(&tt.h); got != tt.want {
+			t.Errorf("healthCause(%+v) = %+v, want %+v", tt.h, got, tt.want)
 		}
 	}
 }

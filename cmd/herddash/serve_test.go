@@ -688,8 +688,9 @@ func TestServeDatabaseFlag(t *testing.T) {
 
 // TestServeRecords runs serve against the fake herdr twice on one data
 // directory, with herdr restarted in between: each run leaves a daemon_start
-// marker, every Agent's first sight and the live change are rows in the
-// database, and the second run resumes from the persisted epoch.
+// marker and a connect marker (the second saying the epoch incremented), every
+// Agent's first sight and the live change are rows in the database, and the
+// second run resumes from the persisted epoch.
 func TestServeRecords(t *testing.T) {
 	hermeticEnv(t)
 	f := startFakeHerdr(t)
@@ -761,7 +762,7 @@ func TestServeRecords(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	rows, err := db.Query("SELECT host, server, epoch, reason FROM resync_markers ORDER BY id")
+	rows, err := db.Query("SELECT host, server, epoch, reason, detail FROM resync_markers ORDER BY id")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -769,13 +770,19 @@ func TestServeRecords(t *testing.T) {
 	var markers []string
 	for rows.Next() {
 		var host, server, reason string
+		var detail sql.NullString
 		var epoch int
-		if err := rows.Scan(&host, &server, &epoch, &reason); err != nil {
+		if err := rows.Scan(&host, &server, &epoch, &reason, &detail); err != nil {
 			t.Fatal(err)
 		}
-		markers = append(markers, fmt.Sprintf("%s/%s %d %s", host, server, epoch, reason))
+		d := "NULL"
+		if detail.Valid {
+			d = detail.String
+		}
+		markers = append(markers, fmt.Sprintf("%s/%s %d %s %s", host, server, epoch, reason, d))
 	}
-	if got, want := strings.Join(markers, "; "), "testhost/test 1 daemon_start; testhost/test 1 daemon_start"; got != want {
+	if got, want := strings.Join(markers, "; "), "testhost/test 1 daemon_start NULL; testhost/test 1 connect NULL; "+
+		"testhost/test 1 daemon_start NULL; testhost/test 2 connect epoch incremented"; got != want {
 		t.Errorf("markers %q, want %q", got, want)
 	}
 }
