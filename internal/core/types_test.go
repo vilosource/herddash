@@ -31,6 +31,22 @@ func TestNewTransition(t *testing.T) {
 			in:   TransitionInput{Key: backfill, New: StatusIdle, Provenance: ProvenanceBackfill, ImportKey: "k", ObservedAt: at},
 		},
 		{
+			name: "possibly spurious backfill",
+			in:   TransitionInput{Key: backfill, New: StatusDone, Provenance: ProvenanceBackfill, ImportKey: "k", ObservedAt: at, PossiblySpurious: true},
+		},
+		{
+			name:    "possibly spurious live",
+			in:      TransitionInput{Key: live, New: StatusDone, Provenance: ProvenanceLive, ObservedAt: at, PossiblySpurious: true},
+			wantErr: ErrInvalidSpurious,
+			field:   "possibly spurious",
+		},
+		{
+			name:    "possibly spurious snapshot",
+			in:      TransitionInput{Key: live, New: StatusDone, Provenance: ProvenanceSnapshot, ObservedAt: at, PossiblySpurious: true},
+			wantErr: ErrInvalidSpurious,
+			field:   "possibly spurious",
+		},
+		{
 			name: "previous unknown status is a real status",
 			in:   TransitionInput{Key: live, Previous: statusPtr(StatusUnknown), New: StatusWorking, Provenance: ProvenanceLive, ObservedAt: at},
 		},
@@ -165,6 +181,8 @@ func TestTransitionRoundTrip(t *testing.T) {
 		ObservedAt:   1_760_000_000_123,
 		Provenance:   ProvenanceBackfill,
 		ImportKey:    "plugin-log:17",
+
+		PossiblySpurious: true,
 	}
 	tr, err := NewTransition(in)
 	if err != nil {
@@ -199,6 +217,9 @@ func TestTransitionRoundTrip(t *testing.T) {
 	}
 	if got := tr.ImportKey(); got != in.ImportKey {
 		t.Errorf("ImportKey() = %q, want %q", got, in.ImportKey)
+	}
+	if !tr.PossiblySpurious() {
+		t.Error("PossiblySpurious() = false, want true")
 	}
 }
 

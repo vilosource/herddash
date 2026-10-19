@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 10-16-2026 09:40
-last_updated: 10-19-2026 15:48
+last_updated: 10-19-2026 16:22
 project: herddash
 project_key: NOKEY
 tracking_system: file-system
@@ -47,13 +47,13 @@ development_status:
   1-9-know-which-profile-each-agent-runs-under: done
   epic-1-retrospective: optional
 
-  epic-2: in-progress
+  epic-2: done
   2-1-a-local-database-herddash-owns: done
   2-2-record-every-transition: done
   2-3-gaps-are-recorded-not-hidden: done
   2-4-waiting-time-that-survives-restarts: done
   2-5-retention-keeps-the-database-bounded: done
-  2-6-import-the-plugin-s-log-as-history: backlog
+  2-6-import-the-plugin-s-log-as-history: done
   epic-2-retrospective: optional
 
   epic-3: backlog
@@ -88,7 +88,7 @@ action_items:
   - epic: 2
     action: "Story 2.6: operator supplies a plugin-log sample and the date the Host reached herdr 0.9.2"
     owner: "operator"
-    status: open
+    status: done
   - epic: 2
     action: "Story 2.4 may be split at story creation (S-7)"
     owner: "dev"

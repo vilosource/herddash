@@ -1,0 +1,21 @@
+2026-09-10 17:59:05 posted blocked for w1:pW -> 204
+2026-09-10 18:01:10 posted blocked for w1:p15 -> 204
+2026-09-10 18:01:56 no url configured; would have sent {"agent": "claude", "status": "done", "pane_id": "w1:pE", "workspace_id": "w1", "title": null}
+2026-09-10 18:02:56 no url configured; would have sent {"agent": "claude", "status": "done", "pane_id": "w1:pK", "workspace_id": "w1", "title": null}
+2026-09-10 18:03:56 no url configured; would have sent {"agent": "claude", "status": "done", "pane_id": "w1:p11", "workspace_id": "w1", "title": null}
+2026-09-10 18:08:32 no url configured; would have sent {"agent": "claude", "status": "done", "pane_id": "w1:pE", "workspace_id": "w1", "title": null}
+2026-09-10 18:16:13 no url configured; would have sent {"agent": "claude", "status": "done", "pane_id": "w1:pC", "workspace_id": "w1", "title": null}
+2026-09-10 18:23:18 no url configured; would have sent {"agent": "claude", "status": "done", "pane_id": "w1:pK", "workspace_id": "w1", "title": null}
+2026-09-10 18:25:00 no url configured; would have sent {"agent": "claude", "status": "done", "pane_id": "w1:pK", "workspace_id": "w1", "title": null}
+2026-09-10 18:27:57 posted blocked for w1:pE -> 204
+2026-09-10 18:28:00 posted done for w1:pC -> 204
+2026-09-10 18:30:21 no url configured; would have sent {"agent": "claude", "profile": "personal", "status": "done", "pane_id": "w1:pE", "workspace_id": "w1", "title": null}
+2026-09-10 20:37:07 no url configured; would have sent {"agent": "claude", "profile": "personal", "status": "done", "pane_id": "w1:pC", "workspace_id": "w1", "title": null}
+2026-09-10 21:31:49 no url configured; would have sent {"agent": "claude", "profile": "personal", "status": "blocked", "pane_id": "w1:pE", "workspace_id": "w1", "title": null}
+2026-09-11 09:02:34 no url configured; would have sent {"agent": "claude", "profile": null, "status": "blocked", "pane_id": "w1:p1", "workspace_id": "w1", "title": null}
+2026-09-11 09:15:15 no url configured; would have sent {"agent": "claude", "profile": "other", "status": "blocked", "pane_id": "w1:pW", "workspace_id": "w1", "title": null}
+2026-09-14 06:45:39 no url configured; would have sent {"agent": "claude", "profile": "work", "status": "blocked", "pane_id": "wA:p7", "workspace_id": "wA", "title": null}
+2026-09-14 06:48:53 no url configured; would have sent {"agent": "claude", "profile": "work", "status": "blocked", "pane_id": "wA:p7", "workspace_id": "wA", "title": null}
+2026-09-14 09:22:06 no url configured; would have sent {"agent": "agy", "profile": null, "status": "done", "pane_id": "wA:p3", "workspace_id": "wA", "title": null}
+2026-09-14 11:12:34 no url configured; would have sent {"agent": "codex", "profile": null, "status": "blocked", "pane_id": "wA:p3", "workspace_id": "wA", "title": null}
+2026-09-14 11:17:57 no url configured; would have sent {"agent": "codex", "profile": null, "status": "done", "pane_id": "wA:p3", "workspace_id": "wA", "title": null}

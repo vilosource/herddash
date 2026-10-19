@@ -1,6 +1,7 @@
 // Command herddash records every herdr agent status transition and serves a
-// read-only view of them. So far it has the serve, config and version
-// subcommands; serve prints every Agent and Status change to stdout.
+// read-only view of them. So far it has the serve, import-plugin-log, config
+// and version subcommands; serve prints every Agent and Status change to
+// stdout.
 package main
 
 import (
@@ -27,11 +28,17 @@ var (
 const usage = `usage: herddash [command]
 
 commands:
-  serve     watch every agent's status and print each change (the default)
-  config    print the effective configuration as JSON
-  version   print the version and commit
+  serve               watch every agent's status and print each change (the default)
+  import-plugin-log   import the agent-webhook plugin's log as history, with no serve
+                      running: import-plugin-log <file> --herdr-0.9.2-since <YYYY-MM-DD>
+  config              print the effective configuration as JSON
+  version             print the version and commit
 
-Run "herddash serve -h" or "herddash config -h" for the configuration flags.
+Run "herddash serve -h" or "herddash config -h" for the configuration flags, and
+"herddash import-plugin-log -h" for the import: it takes serve's configuration
+flags (its rows' Host and Server come from them), reads the log's times in this
+machine's local time zone, and flags done entries before the date, so a Host that
+never ran herdr 0.9.2 or newer passes a date after the last entry (e.g. tomorrow).
 `
 
 func main() {
@@ -71,6 +78,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return 0
 	case "config":
 		return runConfig(args[1:], stdout, stderr)
+	case "import-plugin-log":
+		return runImport(ctx, args[1:], stdout, stderr)
 	case "help", "-h", "-help", "--help":
 		fmt.Fprint(stdout, usage)
 		return 0
