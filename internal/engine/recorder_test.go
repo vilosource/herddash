@@ -260,10 +260,11 @@ func TestRecordStateAcrossRuns(t *testing.T) {
 	run(twoAgents(), "reconnected 0.9.5 epoch 1 kept", "agent w1:p1 claude working", "agent w1:p2 claude idle")
 	run(restarted(), "reconnected 0.9.5 epoch 2 incremented", "agent w1:p1 claude working", "agent w1:p2 claude idle")
 	// Each snapshot's state is saved, when it changed, and its connect
-	// marker written, before its rows.
+	// marker written, before its rows. The second run keeps the epoch and
+	// finds every Status as last recorded, so it writes no row (Story 2.4).
 	if w := st.writeList(); !slices.Equal(w, []string{
 		"marker daemon_start 1", "save 1", "marker connect 1", "row w1:p1 1", "row w1:p2 1",
-		"marker daemon_start 1", "marker connect 1", "row w1:p1 1", "row w1:p2 1",
+		"marker daemon_start 1", "marker connect 1",
 		"marker daemon_start 1", "save 2", "marker connect 2", "row w1:p1 2", "row w1:p2 2",
 	}) {
 		t.Errorf("writes %v", w)

@@ -15,6 +15,14 @@ type Agent struct {
 	// Context is the tracked context from the latest snapshot that showed the
 	// Agent; the zero value until a snapshot has.
 	Context core.PaneContext
+	// Class is the Agent's Attention Class, folded from its Transitions
+	// (FR-2), including those recorded before this Daemon started.
+	Class AttentionClass
+	// WaitingSince is when Class began (UTC Unix ms), 0 when unknown.
+	// WaitingExact says the Class began with a live Transition; otherwise
+	// WaitingSince bounds the Waiting Time from below (FR-3, FR-8).
+	WaitingSince int64
+	WaitingExact bool
 }
 
 // Transition is core.Transition, named here so that a Sink outside the engine
@@ -25,6 +33,9 @@ type Transition = core.Transition
 // Gate is core.Gate, named here for the same reason as Transition.
 type Gate = core.Gate
 
+// AttentionClass is core.AttentionClass, named here for the same reason.
+type AttentionClass = core.AttentionClass
+
 // The Gate outcomes and the minimum supported herdr, as core defines them.
 const (
 	GateOK       = core.GateOK
@@ -34,6 +45,11 @@ const (
 	// ProfileUnresolved is the Profile of an Agent whose rule could not be
 	// applied.
 	ProfileUnresolved = core.ProfileUnresolved
+
+	ClassNeedsYou = core.ClassNeedsYou
+	ClassFinished = core.ClassFinished
+	ClassWorking  = core.ClassWorking
+	ClassUnknown  = core.ClassUnknown
 )
 
 // Sink is where the engine reports what it sees. The engine calls it only from
@@ -44,8 +60,9 @@ type Sink interface {
 	// Agent reports an Agent seen for the first time, at observedAt (UTC Unix
 	// milliseconds, from the engine's clock).
 	Agent(a Agent, observedAt int64)
-	// Transition reports a change of an Agent's Status.
-	Transition(t Transition)
+	// Transition reports a change of an Agent's Status, with the Agent as it
+	// is after it, so its Class and Waiting Time account for t.
+	Transition(t Transition, a Agent)
 	// Removed reports an Agent that is gone, as it last was.
 	Removed(a Agent, observedAt int64)
 	// Reconnected reports that the engine reached herdr again after losing it:

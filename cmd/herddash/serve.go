@@ -106,22 +106,24 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 
 // printer is the engine Sink that prints one line per gate outcome, per Agent
 // first seen, per Transition, per removal, per Profile change, per reconnect
-// and per resync. The engine calls it from one goroutine.
+// and per resync. Agent and Transition lines carry the Agent's Attention Class
+// and Waiting Time at the line's time. The engine calls it from one goroutine.
 type printer struct{ w io.Writer }
 
 func (p printer) Agent(a engine.Agent, observedAt int64) {
-	fmt.Fprintf(p.w, "%s agent      host=%s epoch=%d pane=%s program=%s profile=%s status=%s\n",
-		stamp(observedAt), a.Key.Host, a.Key.Epoch, a.Key.PaneID, orDash(string(a.AgentProgram)), orDash(a.Profile), a.Status)
+	fmt.Fprintf(p.w, "%s agent      host=%s epoch=%d pane=%s program=%s profile=%s status=%s %s\n",
+		stamp(observedAt), a.Key.Host, a.Key.Epoch, a.Key.PaneID, orDash(string(a.AgentProgram)), orDash(a.Profile), a.Status,
+		waiting(a, observedAt))
 }
 
-func (p printer) Transition(t engine.Transition) {
+func (p printer) Transition(t engine.Transition, a engine.Agent) {
 	prev, ok := t.Previous()
 	if !ok {
 		prev = "-"
 	}
-	fmt.Fprintf(p.w, "%s transition host=%s epoch=%d pane=%s program=%s profile=%s status=%s previous=%s provenance=%s herdr=%s\n",
+	fmt.Fprintf(p.w, "%s transition host=%s epoch=%d pane=%s program=%s profile=%s status=%s previous=%s provenance=%s herdr=%s %s\n",
 		stamp(t.ObservedAt()), t.Key().Host, t.Key().Epoch, t.Key().PaneID, orDash(string(t.AgentProgram())), orDash(t.Profile()),
-		t.New(), prev, t.Provenance(), orDash(t.HerdrVersion()))
+		t.New(), prev, t.Provenance(), orDash(t.HerdrVersion()), waiting(a, t.ObservedAt()))
 }
 
 func (p printer) Removed(a engine.Agent, observedAt int64) {
@@ -148,6 +150,39 @@ func (p printer) Resynced(cause string, observedAt int64) {
 
 func (p printer) Gate(gate engine.Gate, herdrVersion string, observedAt int64) {
 	fmt.Fprintf(p.w, "%s gate       herdr=%s minimum=%s gate=%s\n", stamp(observedAt), orDash(herdrVersion), engine.HerdrMinimum, gate)
+}
+
+// waiting formats an Agent's Attention Class and its Waiting Time at the
+// line's own time at (UTC Unix ms): "class=<class> waiting=<d>", with "≥"
+// before <d> when it is a lower bound and "-" when it is not known.
+func waiting(a engine.Agent, at int64) string {
+	class := a.Class
+	if class == "" {
+		class = engine.ClassUnknown
+	}
+	if a.WaitingSince == 0 {
+		return fmt.Sprintf("class=%s waiting=-", class)
+	}
+	bound := "≥"
+	if a.WaitingExact {
+		bound = ""
+	}
+	return fmt.Sprintf("class=%s waiting=%s%s", class, bound, compact(max(at-a.WaitingSince, 0)))
+}
+
+// compact formats ms as a short duration, truncated to its two largest units:
+// "0s", "45s", "12m", "1h05m", "2d03h".
+func compact(ms int64) string {
+	s := ms / 1000
+	switch {
+	case s < 60:
+		return fmt.Sprintf("%ds", s)
+	case s < 3600:
+		return fmt.Sprintf("%dm", s/60)
+	case s < 86400:
+		return fmt.Sprintf("%dh%02dm", s/3600, s%3600/60)
+	}
+	return fmt.Sprintf("%dd%02dh", s/86400, s%86400/3600)
 }
 
 // stamp formats UTC Unix milliseconds for a line.

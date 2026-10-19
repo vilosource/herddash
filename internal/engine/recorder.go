@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"maps"
 
 	"github.com/vilosource/herddash/internal/core"
@@ -8,10 +9,12 @@ import (
 )
 
 // Recorder is what the engine needs from the store (AD-4, AD-9): the record's
-// two appends and the engine's own state across Daemon restarts. *store.Store
-// provides it; tests provide a fake. Only the engine goroutine calls it.
+// two appends, one Agent's history to fold, and the engine's own state across
+// Daemon restarts. *store.Store provides it; tests provide a fake. Only the
+// engine goroutine calls it.
 type Recorder interface {
 	Append(t core.Transition) error
+	History(ctx context.Context, key core.AgentKey) ([]core.Transition, error)
 	AppendResyncMarker(m store.ResyncMarker) error
 	LoadServerState(host, server string) (store.ServerState, bool, error)
 	SaveServerState(host, server string, st store.ServerState) error
@@ -39,6 +42,8 @@ func (e *Engine) restore() {
 	case found:
 		e.epoch = st.Epoch
 		e.terminals = st.Terminals
+		// The record may hold this epoch's Agents: their first sights read it.
+		e.historic = true
 		// The first snapshot decides the epoch as after a reconnect. No Agent
 		// is tracked yet, so an increment removes nothing.
 		e.everReady = true
@@ -95,4 +100,26 @@ func (e *Engine) saveState() {
 		return
 	}
 	e.saved, e.savedEpoch, e.savedTerminals = true, st.Epoch, st.Terminals
+}
+
+// history reads the record of the Agent in p under the epoch now in force,
+// when p's first sight is to be seeded from it (seedHistory). A failed read is
+// logged, and the record is then treated as holding nothing. It returns false
+// when the first sight must not be recorded at all: the read failed because
+// the run is ending, and recording the Agent as new would reset its Waiting
+// Time at the next start.
+func (e *Engine) history(p *pane) ([]core.Transition, bool) {
+	if e.store == nil || !p.seedHistory {
+		return nil, true
+	}
+	ts, err := e.store.History(e.runCtx, e.key(p.id))
+	if err != nil {
+		if e.runCtx.Err() != nil {
+			e.log.Info("history not read as the engine stops; first sight not recorded", "pane", p.id)
+			return nil, false
+		}
+		e.log.Error("history not read; recording the first sight as new", "pane", p.id, "error", err.Error())
+		return nil, true
+	}
+	return ts, true
 }

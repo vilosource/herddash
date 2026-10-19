@@ -414,8 +414,10 @@ func TestPrinter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p.Agent(engine.Agent{Key: key, AgentProgram: "claude", Profile: "cldw", Status: core.StatusWorking}, at)
-	p.Transition(tr)
+	p.Agent(engine.Agent{Key: key, AgentProgram: "claude", Profile: "cldw", Status: core.StatusWorking,
+		Class: engine.ClassWorking, WaitingSince: at - 12*60*1000 - 59000}, at)
+	p.Transition(tr, engine.Agent{Key: key, AgentProgram: "claude", Profile: "cldw", Status: core.StatusBlocked,
+		Class: engine.ClassNeedsYou, WaitingSince: at + 1500, WaitingExact: true})
 	p.Removed(engine.Agent{Key: key, Status: core.StatusBlocked}, at+3000)
 	p.Profile(engine.Agent{Key: key, AgentProgram: "claude", Profile: "cldp", Status: core.StatusBlocked}, "cldw", at+3500)
 	p.Profile(engine.Agent{Key: key, AgentProgram: "claude", Profile: "cldp"}, "", at+3600)
@@ -425,8 +427,9 @@ func TestPrinter(t *testing.T) {
 	p.Gate(engine.GateOK, "0.9.5", at+7000)
 	p.Gate(engine.GateRefused, "0.8.2", at+8000)
 	p.Gate(engine.GateAdvisory, "", at+9000)
-	want := "2026-10-16T12:00:00.000Z agent      host=mac epoch=1 pane=w1:p1 program=claude profile=cldw status=working\n" +
-		"2026-10-16T12:00:01.500Z transition host=mac epoch=1 pane=w1:p1 program=claude profile=cldw status=blocked previous=working provenance=live herdr=0.8.2\n" +
+	p.Agent(engine.Agent{Key: key, Status: core.StatusUnknown}, at+10000)
+	want := "2026-10-16T12:00:00.000Z agent      host=mac epoch=1 pane=w1:p1 program=claude profile=cldw status=working class=working waiting=≥12m\n" +
+		"2026-10-16T12:00:01.500Z transition host=mac epoch=1 pane=w1:p1 program=claude profile=cldw status=blocked previous=working provenance=live herdr=0.8.2 class=needs_you waiting=0s\n" +
 		"2026-10-16T12:00:03.000Z removed    host=mac epoch=1 pane=w1:p1 program=- profile=- status=blocked\n" +
 		"2026-10-16T12:00:03.500Z profile    host=mac epoch=1 pane=w1:p1 program=claude profile=cldp previous=cldw\n" +
 		"2026-10-16T12:00:03.600Z profile    host=mac epoch=1 pane=w1:p1 program=claude profile=cldp previous=-\n" +
@@ -435,7 +438,8 @@ func TestPrinter(t *testing.T) {
 		"2026-10-16T12:00:06.000Z resync     cause=events_lost\n" +
 		"2026-10-16T12:00:07.000Z gate       herdr=0.9.5 minimum=0.9.5 gate=ok\n" +
 		"2026-10-16T12:00:08.000Z gate       herdr=0.8.2 minimum=0.9.5 gate=refused\n" +
-		"2026-10-16T12:00:09.000Z gate       herdr=- minimum=0.9.5 gate=advisory\n"
+		"2026-10-16T12:00:09.000Z gate       herdr=- minimum=0.9.5 gate=advisory\n" +
+		"2026-10-16T12:00:10.000Z agent      host=mac epoch=1 pane=w1:p1 program=- profile=- status=unknown class=unknown waiting=-\n"
 	if b.String() != want {
 		t.Errorf("printed\n%s\nwant\n%s", b.String(), want)
 	}
@@ -784,5 +788,99 @@ func TestServeRecords(t *testing.T) {
 	if got, want := strings.Join(markers, "; "), "testhost/test 1 daemon_start NULL; testhost/test 1 connect NULL; "+
 		"testhost/test 1 daemon_start NULL; testhost/test 2 connect epoch incremented"; got != want {
 		t.Errorf("markers %q, want %q", got, want)
+	}
+}
+
+func TestCompact(t *testing.T) {
+	const s, m, h, d = 1000, 60 * 1000, 3600 * 1000, 24 * 3600 * 1000
+	for _, c := range []struct {
+		ms   int64
+		want string
+	}{
+		{0, "0s"}, {999, "0s"}, {45 * s, "45s"}, {m, "1m"}, {12*m + 30*s, "12m"},
+		{h, "1h00m"}, {h + 5*m + 59*s, "1h05m"}, {23*h + 59*m, "23h59m"},
+		{d, "1d00h"}, {2*d + 3*h + 40*m, "2d03h"}, {3*d + 23*h, "3d23h"}, {400 * d, "400d00h"},
+	} {
+		if got := compact(c.ms); got != c.want {
+			t.Errorf("compact(%d) = %q, want %q", c.ms, got, c.want)
+		}
+	}
+	// A line timestamped before the class began never prints a negative wait.
+	a := engine.Agent{Class: engine.ClassNeedsYou, WaitingSince: 5000}
+	if got := waiting(a, 1000); got != "class=needs_you waiting=≥0s" {
+		t.Errorf("waiting %q", got)
+	}
+}
+
+// TestServeRestartKeepsWaiting runs serve twice on one data directory and one
+// herdr that does not restart. The first run sees w1:p1 go blocked live. The
+// second finds it still blocked: it writes no second first-sight row, and its
+// Agent line shows the Waiting Time from the live row, exact.
+func TestServeRestartKeepsWaiting(t *testing.T) {
+	hermeticEnv(t)
+	f := startFakeHerdr(t)
+	dataDir := filepath.Join(t.TempDir(), "data")
+	serveOnce := func(want string, push bool) string {
+		t.Helper()
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		var stdout, stderr syncBuffer
+		done := make(chan int, 1)
+		go func() { done <- run(ctx, serveArgs(f, dataDir), &stdout, &stderr) }()
+		waitFor(t, want, func() bool { return strings.Contains(stdout.String(), want) })
+		if push {
+			waitFor(t, "the status subscription", func() bool { return f.statusSubs.Load() >= 1 })
+			waitFor(t, "the read after the subscription", func() bool { return f.snapshots.Load() >= 2 })
+			f.push <- struct{}{}
+			waitFor(t, "the live transition line", func() bool { return strings.Contains(stdout.String(), "provenance=live") })
+		}
+		cancel()
+		if code := <-done; code != 0 {
+			t.Fatalf("exit code %d, stderr %q", code, stderr.String())
+		}
+		return stdout.String()
+	}
+	first := serveOnce("agent      host=testhost epoch=1 pane=w1:p1", true)
+	if !strings.Contains(first, "status=working class=working waiting=≥0s") {
+		t.Errorf("first run's Agent line is not a lower bound from its first sight:\n%s", first)
+	}
+	if !strings.Contains(first, "provenance=live herdr=0.9.5 class=needs_you waiting=0s") {
+		t.Errorf("first run's transition line is not exact from itself:\n%s", first)
+	}
+	second := serveOnce("agent      host=testhost epoch=1 pane=w1:p1", false)
+	var line string
+	for l := range strings.SplitSeq(second, "\n") {
+		if strings.Contains(l, " agent ") {
+			line = l
+		}
+	}
+	if !strings.Contains(line, "status=blocked class=needs_you waiting=") || strings.Contains(line, "≥") {
+		t.Errorf("second run's Agent line %q, want needs_you with an exact Waiting Time", line)
+	}
+
+	st, err := store.Open(filepath.Join(dataDir, "herddash.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	trs, err := st.History(context.Background(), core.AgentKey{Host: "testhost", Server: "test", Epoch: 1, PaneID: "w1:p1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(trs) != 2 {
+		t.Fatalf("%d rows for w1:p1, want the first sight and the live change only", len(trs))
+	}
+	f1 := core.Fold(trs)
+	if f1.Class != core.ClassNeedsYou || f1.SinceProvenance != core.ProvenanceLive || f1.Since != trs[1].ObservedAt() {
+		t.Errorf("fold %+v, want needs_you since the live row", f1)
+	}
+	// The printed Waiting Time runs from the live row to the line's own time.
+	at, err := time.Parse("2006-01-02T15:04:05.000Z", strings.Fields(line)[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	gap := at.UnixMilli() - trs[1].ObservedAt()
+	if want := "waiting=" + compact(gap); gap < 0 || !strings.HasSuffix(line, want) {
+		t.Errorf("second run's Agent line %q, want it to end %q (%d ms after the live row)", line, want, gap)
 	}
 }

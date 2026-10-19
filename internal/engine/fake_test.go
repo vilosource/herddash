@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -548,7 +549,9 @@ type recorder struct {
 	times       []int64  // observed_at of each line
 	epochs      []uint64 // the epoch of each line's key, or of a reconnect
 	transitions []core.Transition
-	resyncTimes []time.Time
+	// transitionAgents is the Agent reported with each Transition.
+	transitionAgents []Agent
+	resyncTimes      []time.Time
 	// gates holds one "gate <gate> <version>" per Gate report. With
 	// gateLines set, each is also one of the lines; tests from before the
 	// gate leave it unset.
@@ -637,10 +640,11 @@ func (r *recorder) lineEpochs() []uint64 {
 	return slices.Clone(r.epochs)
 }
 
-func (r *recorder) Transition(t core.Transition) {
+func (r *recorder) Transition(t core.Transition, a Agent) {
 	prev, _ := t.Previous()
 	r.mu.Lock()
 	r.transitions = append(r.transitions, t)
+	r.transitionAgents = append(r.transitionAgents, a)
 	r.mu.Unlock()
 	line := fmt.Sprintf("transition %s %s %s->%s %s", t.Key().PaneID, t.AgentProgram(), prev, t.New(), t.Provenance())
 	r.add(r.withProfile(line, t.Profile()), t.ObservedAt(), t.Key().Epoch)
@@ -861,7 +865,8 @@ type fakeStore struct {
 	// written, or -1.
 	callsAtMarker int
 
-	appendErr, markerErr, loadErr, saveErr error
+	appendErr, markerErr, loadErr, saveErr, historyErr error
+	historyReads                                       int
 	// failSaves fails the next n saves with saveErr.
 	failSaves int
 	notify    chan struct{}
@@ -888,6 +893,25 @@ func (f *fakeStore) Append(t core.Transition) error {
 	f.rows = append(f.rows, t)
 	f.writes = append(f.writes, fmt.Sprintf("row %s %d", t.Key().PaneID, t.Key().Epoch))
 	return nil
+}
+
+// History is every row appended for key, in the store's order: by observed
+// time, then by append order. historyErr fails it.
+func (f *fakeStore) History(ctx context.Context, key core.AgentKey) ([]core.Transition, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.historyReads++
+	if f.historyErr != nil {
+		return nil, f.historyErr
+	}
+	var out []core.Transition
+	for _, t := range f.rows {
+		if t.Key() == key {
+			out = append(out, t)
+		}
+	}
+	slices.SortStableFunc(out, func(a, b core.Transition) int { return cmp.Compare(a.ObservedAt(), b.ObservedAt()) })
+	return out, nil
 }
 
 func (f *fakeStore) AppendResyncMarker(m store.ResyncMarker) error {
