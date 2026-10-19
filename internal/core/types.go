@@ -13,10 +13,10 @@ import (
 // only on evidence that herdr reassigned pane ids. Epoch 0 is reserved for
 // backfilled history, so live and snapshot Transitions always carry Epoch >= 1.
 type AgentKey struct {
-	Host   string
-	Server string
-	Epoch  uint64
-	PaneID string
+	Host   string `json:"host"`
+	Server string `json:"server"`
+	Epoch  uint64 `json:"epoch"`
+	PaneID string `json:"pane_id"`
 }
 
 // BackfillEpoch is the Epoch reserved for imported history (AD-3, AD-13).

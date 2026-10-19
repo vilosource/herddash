@@ -121,6 +121,11 @@ needs no runtime, no package manager and no root, and it requires herdr 0.9.5 or
 - **A browser on the same machine only.** There is no phone access until authentication is designed.
 - **Profiles for Claude Code only.** Codex and Antigravity show their program name until their
   profile signal is known.
+- **Context Lines for Claude Code only.** A box's one-line context comes from the title the agent
+  program sets on its pane, by a rule per program. For Claude Code it is the session's name; its
+  placeholder title `Claude Code` and an empty title show nothing. Every other program shows
+  nothing until it has a rule. Adding one is a single entry in the rule table in
+  `internal/core/view.go`; the board and the API need no change.
 
 ## For contributors
 
