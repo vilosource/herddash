@@ -53,8 +53,8 @@ const (
 	snapshotTimeout = 30 * time.Second
 )
 
-// firstEpoch is the epoch a Daemon starts at. It lives only in memory until
-// milestone 2 persists it (AD-3).
+// firstEpoch is the epoch a Daemon starts at when its Store holds no saved
+// state for its Host and Server, or it has no Store (AD-3).
 const firstEpoch uint64 = 1
 
 // The package variables below are the defaults above; tests lower them.

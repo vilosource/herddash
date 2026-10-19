@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -683,4 +684,98 @@ func TestServeDatabaseFlag(t *testing.T) {
 			t.Errorf("stderr %q, want herddash: <err> naming %s", got, dir)
 		}
 	})
+}
+
+// TestServeRecords runs serve against the fake herdr twice on one data
+// directory, with herdr restarted in between: each run leaves a daemon_start
+// marker, every Agent's first sight and the live change are rows in the
+// database, and the second run resumes from the persisted epoch.
+func TestServeRecords(t *testing.T) {
+	hermeticEnv(t)
+	f := startFakeHerdr(t)
+	dataDir := filepath.Join(t.TempDir(), "data")
+	serveOnce := func(want string, push bool) {
+		t.Helper()
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		var stdout, stderr syncBuffer
+		done := make(chan int, 1)
+		go func() { done <- run(ctx, serveArgs(f, dataDir), &stdout, &stderr) }()
+		waitFor(t, want, func() bool { return strings.Contains(stdout.String(), want) })
+		if push {
+			waitFor(t, "the status subscription", func() bool { return f.statusSubs.Load() >= 1 })
+			// The read that follows the subscription has been served.
+			waitFor(t, "the read after the subscription", func() bool { return f.snapshots.Load() >= 2 })
+			f.push <- struct{}{}
+			waitFor(t, "the live transition line", func() bool { return strings.Contains(stdout.String(), "provenance=live") })
+		}
+		cancel()
+		if code := <-done; code != 0 {
+			t.Fatalf("exit code %d, stderr %q", code, stderr.String())
+		}
+	}
+	serveOnce("agent      host=testhost epoch=1 pane=w1:p1", true)
+	f.blocked.Store(false)
+	f.restart()
+	serveOnce("agent      host=testhost epoch=2 pane=w1:p1", false)
+
+	path := filepath.Join(dataDir, "herddash.db")
+	st, err := store.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	history := func(epoch uint64) []string {
+		t.Helper()
+		trs, err := st.History(context.Background(), core.AgentKey{Host: "testhost", Server: "test", Epoch: epoch, PaneID: "w1:p1"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, tr := range trs {
+			prev, ok := tr.Previous()
+			if !ok {
+				prev = "nil"
+			}
+			order := "-"
+			if o, ok := tr.HerdrOrder(); ok {
+				order = fmt.Sprint(o)
+			}
+			out = append(out, fmt.Sprintf("%s->%s %s seq=%s herdr=%s profile=%s", prev, tr.New(), tr.Provenance(), order, tr.HerdrVersion(), tr.Profile()))
+		}
+		return out
+	}
+	if got, want := strings.Join(history(1), "; "),
+		"nil->working snapshot seq=3 herdr=0.9.5 profile=claude; working->blocked live seq=- herdr=0.9.5 profile=claude"; got != want {
+		t.Errorf("epoch 1 history %q, want %q", got, want)
+	}
+	if got, want := strings.Join(history(2), "; "), "nil->working snapshot seq=3 herdr=0.9.5 profile=claude"; got != want {
+		t.Errorf("epoch 2 history %q, want %q", got, want)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// The markers have no read API yet; read them directly.
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	rows, err := db.Query("SELECT host, server, epoch, reason FROM resync_markers ORDER BY id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var markers []string
+	for rows.Next() {
+		var host, server, reason string
+		var epoch int
+		if err := rows.Scan(&host, &server, &epoch, &reason); err != nil {
+			t.Fatal(err)
+		}
+		markers = append(markers, fmt.Sprintf("%s/%s %d %s", host, server, epoch, reason))
+	}
+	if got, want := strings.Join(markers, "; "), "testhost/test 1 daemon_start; testhost/test 1 daemon_start"; got != want {
+		t.Errorf("markers %q, want %q", got, want)
+	}
 }

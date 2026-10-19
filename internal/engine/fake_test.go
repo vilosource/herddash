@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"slices"
 	"strings"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/vilosource/herddash/internal/core"
 	"github.com/vilosource/herddash/internal/herdr"
+	"github.com/vilosource/herddash/internal/store"
 )
 
 // wait bounds every wait in these tests; quiet is how long "nothing more
@@ -842,4 +844,140 @@ func TestMain(m *testing.M) {
 	refusedRecheckInterval = 10 * time.Millisecond
 	profileTimeout = 200 * time.Millisecond
 	os.Exit(m.Run())
+}
+
+// fakeStore is a Recorder kept in memory. It notes every write in order, and
+// how many herdr calls the client had made when the first marker was written.
+// Errors set on it fail the matching call.
+type fakeStore struct {
+	mu      sync.Mutex
+	client  *fakeClient
+	writes  []string // "marker <reason> <epoch>", "row <pane> <epoch>" or "save <epoch>"
+	rows    []core.Transition
+	markers []store.ResyncMarker
+	state   map[string]store.ServerState
+	saves   int
+	// callsAtMarker is len(client.callList()) when the first marker was
+	// written, or -1.
+	callsAtMarker int
+
+	appendErr, markerErr, loadErr, saveErr error
+	// failSaves fails the next n saves with saveErr.
+	failSaves int
+	notify    chan struct{}
+}
+
+func newFakeStore(client *fakeClient) *fakeStore {
+	return &fakeStore{client: client, state: map[string]store.ServerState{}, callsAtMarker: -1, notify: make(chan struct{}, 1024)}
+}
+
+func (f *fakeStore) poke() {
+	select {
+	case f.notify <- struct{}{}:
+	default:
+	}
+}
+
+func (f *fakeStore) Append(t core.Transition) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	defer f.poke()
+	if f.appendErr != nil {
+		return f.appendErr
+	}
+	f.rows = append(f.rows, t)
+	f.writes = append(f.writes, fmt.Sprintf("row %s %d", t.Key().PaneID, t.Key().Epoch))
+	return nil
+}
+
+func (f *fakeStore) AppendResyncMarker(m store.ResyncMarker) error {
+	calls := -1
+	if f.client != nil {
+		calls = len(f.client.callList())
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	defer f.poke()
+	if f.markerErr != nil {
+		return f.markerErr
+	}
+	if len(f.markers) == 0 {
+		f.callsAtMarker = calls
+	}
+	f.markers = append(f.markers, m)
+	f.writes = append(f.writes, fmt.Sprintf("marker %s %d", m.Reason, m.Epoch))
+	return nil
+}
+
+func (f *fakeStore) LoadServerState(host, server string) (store.ServerState, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.loadErr != nil {
+		return store.ServerState{}, false, f.loadErr
+	}
+	st, ok := f.state[host+"/"+server]
+	st.Terminals = maps.Clone(st.Terminals)
+	return st, ok, nil
+}
+
+func (f *fakeStore) SaveServerState(host, server string, st store.ServerState) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	defer f.poke()
+	if f.failSaves > 0 {
+		f.failSaves--
+		return f.saveErr
+	}
+	if f.saveErr != nil {
+		return f.saveErr
+	}
+	f.saves++
+	f.writes = append(f.writes, fmt.Sprintf("save %d", st.Epoch))
+	st.Terminals = maps.Clone(st.Terminals)
+	f.state[host+"/"+server] = st
+	return nil
+}
+
+// setState stores st as the state a previous run saved for mac/default.
+func (f *fakeStore) setState(st store.ServerState) {
+	f.mu.Lock()
+	f.state["mac/default"] = st
+	f.mu.Unlock()
+}
+
+func (f *fakeStore) savedState() (store.ServerState, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	st, ok := f.state["mac/default"]
+	return st, ok
+}
+
+func (f *fakeStore) rowList() []core.Transition {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.rows)
+}
+
+func (f *fakeStore) writeList() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.writes)
+}
+
+// awaitRows waits until n rows have been appended.
+func (f *fakeStore) awaitRows(t *testing.T, n int) []core.Transition {
+	t.Helper()
+	deadline := time.After(wait)
+	for {
+		rows := f.rowList()
+		if len(rows) >= n {
+			return rows
+		}
+		select {
+		case <-f.notify:
+		case <-time.After(10 * time.Millisecond):
+		case <-deadline:
+			t.Fatalf("%d rows appended, want %d", len(rows), n)
+		}
+	}
 }
