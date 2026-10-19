@@ -45,9 +45,26 @@ func (e *Engine) restore() {
 		e.saved, e.savedEpoch, e.savedTerminals = true, st.Epoch, maps.Clone(st.Terminals)
 		e.log.Info("server state loaded", "epoch", st.Epoch, "panes", len(st.Terminals))
 	}
-	m := store.ResyncMarker{Host: e.host, Server: e.server, Epoch: e.epoch, ObservedAt: e.now(), Reason: store.ReasonDaemonStart}
+	e.mark(store.ReasonDaemonStart, "")
+}
+
+// mark appends a resync marker for reason, with detail ("" for none), under
+// the epoch now in force (FR-7). With no Recorder it does nothing and reads no
+// clock. A failed write is logged and dropped: it never stops the engine.
+func (e *Engine) mark(reason, detail string) {
+	if e.store == nil {
+		return
+	}
+	m := store.ResyncMarker{Host: e.host, Server: e.server, Epoch: e.epoch, ObservedAt: e.now(), Reason: reason, Detail: detail}
 	if err := e.store.AppendResyncMarker(m); err != nil {
-		e.log.Error("resync marker not recorded", "reason", m.Reason, "error", err.Error())
+		e.log.Error("resync marker not recorded", "reason", reason, "detail", detail, "epoch", m.Epoch, "error", err.Error())
+	}
+}
+
+// markCauses marks each of a resync's causes.
+func (e *Engine) markCauses(cs []cause) {
+	for _, c := range cs {
+		e.mark(c.reason, c.detail)
 	}
 }
 

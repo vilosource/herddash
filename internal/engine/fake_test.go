@@ -981,3 +981,37 @@ func (f *fakeStore) awaitRows(t *testing.T, n int) []core.Transition {
 		}
 	}
 }
+
+// markerList describes every marker written, in order, as
+// "<reason> <epoch> <detail>", with "-" for no detail.
+func (f *fakeStore) markerList() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]string, len(f.markers))
+	for i, m := range f.markers {
+		d := m.Detail
+		if d == "" {
+			d = "-"
+		}
+		out[i] = fmt.Sprintf("%s %d %s", m.Reason, m.Epoch, d)
+	}
+	return out
+}
+
+// awaitMarkers waits until n markers have been written.
+func (f *fakeStore) awaitMarkers(t *testing.T, n int) []string {
+	t.Helper()
+	deadline := time.After(wait)
+	for {
+		ms := f.markerList()
+		if len(ms) >= n {
+			return ms
+		}
+		select {
+		case <-f.notify:
+		case <-time.After(10 * time.Millisecond):
+		case <-deadline:
+			t.Fatalf("%d markers written (%v), want %d", len(ms), ms, n)
+		}
+	}
+}

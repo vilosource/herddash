@@ -11,12 +11,33 @@ import (
 	"github.com/vilosource/herddash/internal/core"
 )
 
-// The resync marker reasons this package knows of. Story 2.2 writes only
-// ReasonDaemonStart.
+// The resync marker reasons. Each marks a span the record may not have seen
+// (FR-7).
 const (
 	// ReasonDaemonStart marks a Daemon start, so downtime is in the record
 	// rather than absent from it (ADR-0005).
 	ReasonDaemonStart = "daemon_start"
+	// ReasonConnect marks the first connection of a Daemon run becoming
+	// ready; ReasonReconnect a later one. Their detail says whether the epoch
+	// rule kept or incremented the epoch, when it ran.
+	ReasonConnect   = "connect"
+	ReasonReconnect = "reconnect"
+	// The resync causes, as the engine reports them (Story 1.7). For
+	// events_lost, error and rejected the detail is herdr's error code.
+	ReasonEventsLost  = "events_lost"
+	ReasonError       = "error"
+	ReasonRejected    = "rejected"
+	ReasonClosed      = "closed"
+	ReasonUndecodable = "undecodable"
+	// ReasonReconcile marks a reconcile read that disagreed with what the
+	// engine held.
+	ReasonReconcile = "reconcile"
+)
+
+// The detail of a connect or reconnect marker when the epoch rule ran.
+const (
+	DetailEpochKept        = "epoch kept"
+	DetailEpochIncremented = "epoch incremented"
 )
 
 // ResyncMarker is one row of resync_markers: when, for which Host, Server and
