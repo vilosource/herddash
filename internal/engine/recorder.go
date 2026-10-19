@@ -117,7 +117,8 @@ func (e *Engine) history(p *pane) ([]core.Transition, bool) {
 	if e.store == nil || !p.seedHistory {
 		return nil, true
 	}
-	ts, err := e.store.History(e.runCtx, e.key(p.id))
+	// Not cancelled by shutdown, for the reason Sweep is not (retention.go).
+	ts, err := e.store.History(context.WithoutCancel(e.runCtx), e.key(p.id))
 	if err != nil {
 		p.unrecorded = true // its fold may not match the record
 		if e.runCtx.Err() != nil {

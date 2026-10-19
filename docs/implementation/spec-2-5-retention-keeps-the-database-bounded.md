@@ -152,3 +152,10 @@ Class began, plus its latest `working` Transition. Resync markers are swept by a
 - `go build ./... && go vet ./... && go test -race -count=3 ./...` -- expected: all pass
 - `test -z "$(gofmt -l .)"` -- expected: exit 0
 - `for t in darwin/arm64 darwin/amd64 linux/amd64 linux/arm64; do GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0 go vet ./...; done` -- expected: all pass
+
+- **CI fix after review (2026-10-19).** `TestServeTwice` failed on Linux CI: after serve
+  exited, reopening the database got `SQLITE_BUSY`. Likely cause, consistent with but not
+  reproduced on macOS: `Sweep` (and `History`) ran under the run context, which shutdown
+  cancels; `database/sql` rolls back a cancelled transaction in the background, after
+  `Store.Close` has returned, so the connection briefly kept SQLite's lock. Both now run under
+  `context.WithoutCancel(runCtx)`, so they finish before `Run` returns.

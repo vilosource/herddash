@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"time"
 
 	"github.com/vilosource/herddash/internal/store"
@@ -69,7 +70,10 @@ func (e *Engine) sweep() {
 		}
 		present = append(present, store.Present{Key: e.key(id), Since: since})
 	}
-	r, err := e.store.Sweep(e.runCtx, cutoff, present)
+	// Not cancelled by shutdown: a cancelled transaction is rolled back by
+	// database/sql in the background, after Store.Close has returned, which
+	// leaves the database locked for the next opener.
+	r, err := e.store.Sweep(context.WithoutCancel(e.runCtx), cutoff, present)
 	if err != nil {
 		if e.runCtx.Err() != nil {
 			e.log.Info("retention sweep interrupted as the engine stops")
