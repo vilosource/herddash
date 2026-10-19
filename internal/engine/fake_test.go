@@ -127,6 +127,10 @@ type fakeClient struct {
 	// subTimes is when each status subscribe for a pane was called.
 	subTimes map[string][]time.Time
 
+	// procs is each pane's foreground process; a pane with none answers
+	// herdr.ErrNoForegroundProcess.
+	procs map[string]core.ForegroundProcess
+
 	release   chan struct{}
 	snapCalls chan struct{}
 	awaited   map[string]int
@@ -145,7 +149,101 @@ func newFakeClient(t *testing.T, snap core.Snapshot) *fakeClient {
 		snapCalls: make(chan struct{}, 1024),
 		awaited:   map[string]int{},
 		subTimes:  map[string][]time.Time{},
+		procs:     map[string]core.ForegroundProcess{},
 	}
+}
+
+func (f *fakeClient) ForegroundProcess(ctx context.Context, paneID string) (core.ForegroundProcess, error) {
+	f.record("process " + paneID)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	fp, ok := f.procs[paneID]
+	if !ok {
+		return core.ForegroundProcess{}, fmt.Errorf("herdr: pane.process_info %s: %w", paneID, herdr.ErrNoForegroundProcess)
+	}
+	return fp, nil
+}
+
+// setProc makes pid the foreground process of paneID.
+func (f *fakeClient) setProc(paneID string, pid int) {
+	f.mu.Lock()
+	f.procs[paneID] = core.ForegroundProcess{PID: pid, Name: "claude"}
+	f.mu.Unlock()
+}
+
+// processCalls counts the ForegroundProcess calls so far.
+func (f *fakeClient) processCalls() int {
+	n := 0
+	for _, c := range f.callList() {
+		if strings.HasPrefix(c, "process ") {
+			n++
+		}
+	}
+	return n
+}
+
+// fakeEnviron is a scripted process environment table, standing in for
+// procenv so no engine test reads a real process.
+type fakeEnviron struct {
+	mu   sync.Mutex
+	vars map[int]map[string]string
+	errs map[int]error
+	// block, while set, holds every read until it closes.
+	block chan struct{}
+}
+
+func newFakeEnviron(t *testing.T) *fakeEnviron {
+	f := &fakeEnviron{vars: map[int]map[string]string{}, errs: map[int]error{}}
+	t.Cleanup(func() { f.unblock() })
+	return f
+}
+
+func (f *fakeEnviron) lookup(pid int, name string) (string, bool, error) {
+	f.mu.Lock()
+	block := f.block
+	f.mu.Unlock()
+	if block != nil {
+		<-block
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.errs[pid]; err != nil {
+		return "", false, err
+	}
+	v, ok := f.vars[pid][name]
+	return v, ok, nil
+}
+
+// set sets name in pid's environment; unset removes it.
+func (f *fakeEnviron) set(pid int, name, value string) {
+	f.mu.Lock()
+	if f.vars[pid] == nil {
+		f.vars[pid] = map[string]string{}
+	}
+	f.vars[pid][name] = value
+	f.mu.Unlock()
+}
+
+func (f *fakeEnviron) fail(pid int, err error) {
+	f.mu.Lock()
+	f.errs[pid] = err
+	f.mu.Unlock()
+}
+
+// hold makes every read from now on block until unblock.
+func (f *fakeEnviron) hold() {
+	f.mu.Lock()
+	f.block = make(chan struct{})
+	f.mu.Unlock()
+}
+
+func (f *fakeEnviron) unblock() {
+	f.mu.Lock()
+	if f.block != nil {
+		close(f.block)
+		f.block = nil
+	}
+	f.mu.Unlock()
 }
 
 func (f *fakeClient) record(call string) {
@@ -454,7 +552,11 @@ type recorder struct {
 	// gate leave it unset.
 	gates     []string
 	gateLines bool
-	notify    chan struct{}
+	// profileLines adds each Agent's or Transition's Profile to its line;
+	// tests from before Profiles leave it unset. Profile changes are always
+	// lines.
+	profileLines bool
+	notify       chan struct{}
 }
 
 func newRecorder() *recorder { return &recorder{notify: make(chan struct{}, 256)} }
@@ -468,8 +570,21 @@ func (r *recorder) add(line string, observedAt int64, epoch uint64) {
 	r.notify <- struct{}{}
 }
 
+func (r *recorder) withProfile(line, profile string) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.profileLines {
+		return line + " profile=" + profile
+	}
+	return line
+}
+
 func (r *recorder) Agent(a Agent, observedAt int64) {
-	r.add(fmt.Sprintf("agent %s %s %s", a.Key.PaneID, a.AgentProgram, a.Status), observedAt, a.Key.Epoch)
+	r.add(r.withProfile(fmt.Sprintf("agent %s %s %s", a.Key.PaneID, a.AgentProgram, a.Status), a.Profile), observedAt, a.Key.Epoch)
+}
+
+func (r *recorder) Profile(a Agent, previous string, observedAt int64) {
+	r.add(fmt.Sprintf("profile %s %s previous %s", a.Key.PaneID, a.Profile, previous), observedAt, a.Key.Epoch)
 }
 
 func (r *recorder) Reconnected(version string, epoch uint64, kept bool, observedAt int64) {
@@ -525,11 +640,12 @@ func (r *recorder) Transition(t core.Transition) {
 	r.mu.Lock()
 	r.transitions = append(r.transitions, t)
 	r.mu.Unlock()
-	r.add(fmt.Sprintf("transition %s %s %s->%s %s", t.Key().PaneID, t.AgentProgram(), prev, t.New(), t.Provenance()), t.ObservedAt(), t.Key().Epoch)
+	line := fmt.Sprintf("transition %s %s %s->%s %s", t.Key().PaneID, t.AgentProgram(), prev, t.New(), t.Provenance())
+	r.add(r.withProfile(line, t.Profile()), t.ObservedAt(), t.Key().Epoch)
 }
 
 func (r *recorder) Removed(a Agent, observedAt int64) {
-	r.add(fmt.Sprintf("removed %s", a.Key.PaneID), observedAt, a.Key.Epoch)
+	r.add(r.withProfile(fmt.Sprintf("removed %s", a.Key.PaneID), a.Profile), observedAt, a.Key.Epoch)
 }
 
 func (r *recorder) all() []string {
@@ -724,5 +840,6 @@ func TestMain(m *testing.M) {
 	reconnectMaxDelay = 50 * time.Millisecond
 	resyncMinInterval = 10 * time.Millisecond
 	refusedRecheckInterval = 10 * time.Millisecond
+	profileTimeout = 200 * time.Millisecond
 	os.Exit(m.Run())
 }

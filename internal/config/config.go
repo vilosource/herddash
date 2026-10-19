@@ -35,7 +35,7 @@ const (
 	DatabaseName = "herddash.db"
 	// ProfileUnresolved is the Profile shown when resolution fails. It is
 	// reserved, so the Profile Map cannot name a Profile "unresolved".
-	ProfileUnresolved = "unresolved"
+	ProfileUnresolved = core.ProfileUnresolved
 	// RuleEnv is the only Profile rule type: the Profile is chosen by the value
 	// of one environment variable in the Agent's process.
 	RuleEnv = "env"
@@ -190,6 +190,16 @@ func (c Config) AllowUnsupportedHerdr() bool { return c.allowUnsupportedHerdr }
 func (c Config) Profile(p core.AgentProgram) (ProfileRule, bool) {
 	r, ok := c.profiles[p]
 	return r, ok
+}
+
+// ProfileRules returns the Profile Map as core's rules, one per Agent Program,
+// for the engine. The result is a fresh copy.
+func (c Config) ProfileRules() map[core.AgentProgram]core.ProfileRule {
+	out := make(map[core.AgentProgram]core.ProfileRule, len(c.profiles))
+	for p, r := range c.profiles {
+		out[p] = core.ProfileRule{Variable: r.variable, Absent: r.absent, Values: r.Values()}
+	}
+	return out
 }
 
 // AgentPrograms returns the Agent Programs the Profile Map has rules for, sorted.

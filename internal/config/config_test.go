@@ -468,6 +468,23 @@ absent = "codex"
 	if _, ok := c.Profile("antigravity"); ok {
 		t.Fatal("unexpected antigravity profile")
 	}
+
+	rules := c.ProfileRules()
+	want := map[core.AgentProgram]core.ProfileRule{
+		"claude": {Variable: "CLAUDE_CONFIG_DIR", Absent: "claude",
+			Values: map[string]string{filepath.Join(env.Home, ".claude-cldw"): "cldw", "/opt/claude": "opt"}},
+		"codex": {Variable: "CODEX_HOME", Absent: "codex", Values: map[string]string{}},
+	}
+	if !reflect.DeepEqual(rules, want) {
+		t.Fatalf("ProfileRules = %+v, want %+v", rules, want)
+	}
+	rules["claude"].Values["/evil"] = "x"
+	if len(c.ProfileRules()["claude"].Values) != 2 {
+		t.Fatal("ProfileRules returned the internal map")
+	}
+	if ProfileUnresolved != core.ProfileUnresolved {
+		t.Fatal("ProfileUnresolved is not core's")
+	}
 }
 
 func TestExampleConfigParses(t *testing.T) {

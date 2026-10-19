@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"math"
 	"sort"
 	"sync"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/vilosource/herddash/internal/core"
 	"github.com/vilosource/herddash/internal/herdr"
+	"github.com/vilosource/herddash/internal/procenv"
 )
 
 // Options configures an Engine.
@@ -29,7 +31,16 @@ type Options struct {
 	// core.HerdrMinimum is observed, with a warning (advisory), instead of
 	// refused.
 	AllowUnsupportedHerdr bool
+	// Profiles is the Profile Map: the Profile rule for each Agent Program
+	// that has one (FR-10). A program with none is its own Profile.
+	Profiles map[core.AgentProgram]core.ProfileRule
+	// Environ reads one variable from a process's environment, as
+	// procenv.Lookup does, which is the default. Tests inject a fake.
+	Environ EnvironFunc
 }
+
+// EnvironFunc is the type of Options.Environ.
+type EnvironFunc = func(pid int, name string) (value string, set bool, err error)
 
 // Engine is the single-writer actor (AD-2). Only its Run goroutine holds the
 // pane set, each Agent's Status and its tracked context. Subscription readers
@@ -73,6 +84,16 @@ type Options struct {
 // engine pings it again every refusedRecheckInterval, forever, outside the
 // reconnect backoff. An advisory herdr is observed as a supported one is, with
 // a warning at each start.
+//
+// Profile (FR-10, FR-11, AD-14): an Agent is reported first only once its
+// Profile is resolved. For an Agent Program with a rule, its pane's foreground
+// process is read from herdr and that process's environment through Environ,
+// in a goroutine bounded by profileTimeout; a Status change meanwhile updates
+// the Status silently, so the first report carries the latest one. Any
+// failure gives core.ProfileUnresolved. A program with no rule is its own
+// Profile, read from nothing. The Profile is resolved again when herdr detects
+// an agent in a tracked pane, or when an Agent's Agent Program changes; a
+// different result is reported to the Sink as a Profile change.
 type Engine struct {
 	host, server string
 	client       Client
@@ -81,6 +102,10 @@ type Engine struct {
 	log          *slog.Logger
 	// allowUnsupported is Options.AllowUnsupportedHerdr; read-only after New.
 	allowUnsupported bool
+	// profiles and environ are Options.Profiles and Options.Environ;
+	// read-only after New.
+	profiles map[core.AgentProgram]core.ProfileRule
+	environ  EnvironFunc
 
 	inbox chan any
 	// stopped closes when Run returns.
@@ -188,6 +213,12 @@ type pane struct {
 	// cause is why the pane last lost or failed its subscription: the cause a
 	// resync for it reports.
 	cause string
+	// profile is the Agent's Profile, valid once resolved is set. resolving
+	// tags the Profile resolution in flight, 0 when there is none; a result
+	// carrying any other tag is stale and ignored.
+	profile   string
+	resolved  bool
+	resolving uint64
 }
 
 // Inbox messages.
@@ -243,6 +274,16 @@ type (
 	agentsQuery struct {
 		reply chan []Agent
 	}
+	// profileMsg is the outcome of one Profile resolution for a pane. matched
+	// is the variable's value when it matched a Profile Map entry, the only
+	// environment value ever logged; err is why resolution failed.
+	profileMsg struct {
+		paneID  string
+		gen     uint64
+		profile string
+		matched string
+		err     error
+	}
 )
 
 // New returns an Engine. Run starts it.
@@ -256,6 +297,8 @@ func New(o Options) *Engine {
 		log:    o.Logger,
 
 		allowUnsupported: o.AllowUnsupportedHerdr,
+		profiles:         maps.Clone(o.Profiles),
+		environ:          o.Environ,
 		inbox:            make(chan any),
 		stopped:          make(chan struct{}),
 		panes:            map[string]*pane{},
@@ -266,6 +309,9 @@ func New(o Options) *Engine {
 	}
 	if e.log == nil {
 		e.log = slog.New(slog.DiscardHandler)
+	}
+	if e.environ == nil {
+		e.environ = procenv.Lookup
 	}
 	return e
 }
@@ -565,6 +611,8 @@ func (e *Engine) handle(m any) {
 		}
 	case agentsQuery:
 		m.reply <- e.agents()
+	case profileMsg:
+		e.onProfile(m)
 	}
 }
 
@@ -592,8 +640,13 @@ func (e *Engine) onLifecycle(d herdr.Delivery[core.LifecycleEvent]) {
 		e.remove(ev.PaneID, string(ev.Kind))
 		e.resyncSettle()
 	case core.LifecycleAgentDetected:
-		if _, tracked := e.panes[ev.PaneID]; tracked {
-			// Perhaps another program in the same pane: read it again.
+		if p, tracked := e.panes[ev.PaneID]; tracked {
+			// Perhaps another program in the same pane, or the same one
+			// started again under another Profile: resolve it again, and read
+			// the pane again.
+			if !e.setProgram(p, ev.AgentProgram) && p.known {
+				e.resolve(p)
+			}
 			e.requestSnapshot()
 			return
 		}
@@ -627,14 +680,16 @@ func (e *Engine) onStatus(m statusMsg) {
 	if e.inFlight {
 		p.liveDuring = e.snapSeq
 	}
-	if ev.AgentProgram != "" {
-		p.program = ev.AgentProgram
-	}
 	if !p.known {
+		// The Status first, so a report the program change causes carries it.
 		p.status = ev.Status
-		e.report(p)
+		e.setProgram(p, ev.AgentProgram)
+		if !p.known {
+			e.report(p)
+		}
 		return
 	}
+	e.setProgram(p, ev.AgentProgram)
 	if ev.Status == p.status {
 		return
 	}
@@ -814,9 +869,10 @@ func (e *Engine) apply(seq uint64, s core.Snapshot, resubscribe bool) string {
 		if tracked && !p.known && seq < p.removableFrom {
 			continue // detected by an event; this read may predate its subscription
 		}
-		if tracked && p.known && p.terminalID != "" && obs.TerminalID != p.terminalID {
+		if tracked && p.terminalID != "" && obs.TerminalID != p.terminalID {
 			// The same pane id on another terminal is another Agent: never
-			// join the two.
+			// join the two. An unreported pane is replaced too, so a
+			// resolution in flight, read from the old terminal, is dropped.
 			e.remove(obs.PaneID, "terminal replaced")
 			tracked = false
 		}
@@ -834,13 +890,19 @@ func (e *Engine) apply(seq uint64, s core.Snapshot, resubscribe bool) string {
 		}
 		p.context = obs.Context
 		p.terminalID = obs.TerminalID
-		if a.AgentProgram != "" {
-			p.program = a.AgentProgram
-		}
-		switch {
-		case !p.known:
+		wasKnown := p.known
+		if !wasKnown && p.liveDuring != seq {
+			// The Status first, so a report the program change causes
+			// carries it; unless a live event arrived while this read ran,
+			// which it may predate.
 			p.status = a.Status
-			e.report(p)
+		}
+		e.setProgram(p, a.AgentProgram)
+		switch {
+		case !wasKnown:
+			if !p.known {
+				e.report(p)
+			}
 		case p.liveDuring == seq:
 			// A live event arrived while this read ran, and the read may
 			// predate it. The read that follows settles the Status.
@@ -1108,17 +1170,136 @@ func (e *Engine) remove(id, reason string) {
 	}
 }
 
-// report reports a pane's Agent for the first time.
+// report reports a pane's Agent for the first time, once its Profile is
+// resolved: at once when it is, otherwise when the resolution it starts, or
+// the one in flight, ends. Until then the pane's Status is kept up to date
+// without being reported.
 func (e *Engine) report(p *pane) {
-	p.known = true
-	e.log.Info("agent seen", "pane", p.id, "agent_program", p.program, "status", p.status)
-	e.sink.Agent(e.agent(p), e.now())
+	switch {
+	case p.resolved:
+		p.known = true
+		e.log.Info("agent seen", "pane", p.id, "agent_program", p.program, "profile", p.profile, "status", p.status)
+		e.sink.Agent(e.agent(p), e.now())
+	case p.resolving == 0:
+		e.resolve(p) // which reports p when it ends
+	}
+}
+
+// setProgram records the Agent Program herdr named for p, and says whether it
+// changed. A change resolves the Profile again for an Agent already reported
+// or being resolved.
+func (e *Engine) setProgram(p *pane, program core.AgentProgram) bool {
+	if program == "" || program == p.program {
+		return false
+	}
+	p.program = program
+	if p.known || p.resolving != 0 {
+		e.resolve(p)
+	}
+	return true
+}
+
+// resolve starts resolving p's Profile, superseding any resolution in flight.
+// A program with no rule is its own Profile, settled now without reading
+// anything; otherwise the reads run in a goroutine and the result arrives as
+// a profileMsg.
+func (e *Engine) resolve(p *pane) {
+	rule, ok := e.profiles[p.program]
+	if !ok {
+		p.resolving = 0
+		e.settleProfile(p, profileMsg{paneID: p.id, profile: core.ResolveProfile(p.program, nil, "", false)})
+		return
+	}
+	e.nextGen++
+	p.resolving = e.nextGen
+	id, gen, program := p.id, p.resolving, p.program
+	e.wg.Add(1)
+	go func() {
+		defer e.wg.Done()
+		m := e.readProfile(id, program, rule)
+		m.paneID, m.gen = id, gen
+		e.send(m)
+	}()
+}
+
+// readProfile reads the foreground process of a pane and the rule's variable
+// from that process's environment, and applies the rule, within
+// profileTimeout. Every failure gives core.ProfileUnresolved, with the reason.
+func (e *Engine) readProfile(paneID string, program core.AgentProgram, rule core.ProfileRule) profileMsg {
+	ctx, cancel := context.WithTimeout(e.runCtx, profileTimeout)
+	defer cancel()
+	// The environment read cannot be cancelled, so the reads run apart and
+	// a read that outlives the timeout is abandoned; done is buffered so it
+	// never blocks.
+	done := make(chan profileMsg, 1)
+	go func() {
+		fp, err := e.client.ForegroundProcess(ctx, paneID)
+		if err != nil {
+			done <- profileMsg{err: fmt.Errorf("engine: foreground process: %w", err)}
+			return
+		}
+		value, set, err := e.environ(fp.PID, rule.Variable)
+		if err != nil {
+			done <- profileMsg{err: fmt.Errorf("engine: environment of pid %d: %w", fp.PID, err)}
+			return
+		}
+		m := profileMsg{profile: core.ResolveProfile(program, &rule, value, set)}
+		if set && m.profile != core.ProfileUnresolved {
+			m.matched = value
+		}
+		done <- m
+	}()
+	select {
+	case m := <-done:
+		if m.err != nil {
+			m.profile = core.ProfileUnresolved
+		}
+		return m
+	case <-ctx.Done():
+		return profileMsg{profile: core.ProfileUnresolved,
+			err: fmt.Errorf("engine: profile not resolved within %s: %w", profileTimeout, ctx.Err())}
+	}
+}
+
+func (e *Engine) onProfile(m profileMsg) {
+	p, ok := e.panes[m.paneID]
+	if !ok || m.gen == 0 || p.resolving != m.gen {
+		return // for a pane gone since, or a resolution superseded
+	}
+	p.resolving = 0
+	e.settleProfile(p, m)
+}
+
+// settleProfile records a resolved Profile for p: an Agent not yet reported is
+// reported now, and a reported one whose Profile differs is reported as a
+// Profile change.
+func (e *Engine) settleProfile(p *pane, m profileMsg) {
+	attrs := []any{"pane", p.id, "agent_program", p.program, "profile", m.profile}
+	if m.matched != "" {
+		if rule, ok := e.profiles[p.program]; ok {
+			attrs = append(attrs, "variable", rule.Variable, "value", m.matched)
+		}
+	}
+	if m.err != nil {
+		attrs = append(attrs, "error", m.err.Error())
+	}
+	e.log.Debug("profile resolved", attrs...)
+	previous, had := p.profile, p.resolved
+	p.profile, p.resolved = m.profile, true
+	switch {
+	case !p.known:
+		e.report(p)
+	case had && previous != m.profile:
+		e.log.Info("profile changed", "pane", p.id, "agent_program", p.program, "profile", m.profile, "previous", previous)
+		e.sink.Profile(e.agent(p), previous, e.now())
+	}
 }
 
 func (e *Engine) transition(p *pane, next core.Status, prov core.Provenance, order *uint64) {
 	in := core.TransitionInput{
 		Key:          e.key(p.id),
 		AgentProgram: p.program,
+		Profile:      p.profile,
 		New:          next,
 		HerdrOrder:   order,
 		HerdrVersion: e.herdrVersion,
@@ -1143,7 +1324,7 @@ func (e *Engine) key(paneID string) core.AgentKey {
 }
 
 func (e *Engine) agent(p *pane) Agent {
-	return Agent{Key: e.key(p.id), AgentProgram: p.program, Status: p.status, Context: p.context}
+	return Agent{Key: e.key(p.id), AgentProgram: p.program, Profile: p.profile, Status: p.status, Context: p.context}
 }
 
 func (e *Engine) agents() []Agent {

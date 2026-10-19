@@ -90,7 +90,7 @@ func TestLiveChange(t *testing.T) {
 	if tr.Key() != (core.AgentKey{Host: "mac", Server: "default", Epoch: 1, PaneID: "w1:p1"}) {
 		t.Errorf("key %+v", tr.Key())
 	}
-	if tr.HerdrVersion() != "0.9.5" || tr.Profile() != "" {
+	if tr.HerdrVersion() != "0.9.5" || tr.Profile() != "claude" {
 		t.Errorf("version %q profile %q", tr.HerdrVersion(), tr.Profile())
 	}
 	if _, ok := tr.HerdrOrder(); ok {
@@ -1639,4 +1639,394 @@ func TestGateRecoveryAfterRefusal(t *testing.T) {
 
 func TestGateRecoveryAfterRefusalRestarted(t *testing.T) {
 	recoverAfterRefusal(t, restarted(), "reconnected 0.9.5 epoch 2 incremented", 2)
+}
+
+// Profile resolution (Story 1.9).
+
+const (
+	claudeVar = "CLAUDE_CONFIG_DIR"
+	p1PID     = 101
+)
+
+func claudeRule() core.ProfileRule {
+	return core.ProfileRule{Variable: claudeVar, Absent: "claude",
+		Values: map[string]string{"/h/.claude-cldw": "cldw", "/h/.claude-cldp": "cldp"}}
+}
+
+// oneAgent is a snapshot of one Agent pane, w1:p1, running program.
+func oneAgent(program core.AgentProgram, status core.Status) core.Snapshot {
+	p := agentPane("w1:p1", status)
+	p.Agent.AgentProgram = program
+	return core.Snapshot{HerdrVersion: "0.9.5", Panes: []core.PaneObservation{p, shellPane("w1:p3")}}
+}
+
+// startProfiled starts an engine on snap with the claude rule, a fake
+// environment, w1:p1's foreground process p1PID, Profiles on the lines and
+// the log collected. prepare, when not nil, runs before the engine starts.
+func startProfiled(t *testing.T, snap core.Snapshot, prepare func(*fakeClient, *fakeEnviron)) (*harness, *fakeEnviron, *logSink) {
+	t.Helper()
+	fake := newFakeClient(t, snap)
+	fake.setProc("w1:p1", p1PID)
+	env := newFakeEnviron(t)
+	if prepare != nil {
+		prepare(fake, env)
+	}
+	logs := &logSink{}
+	h := startEngineWith(t, fake, func(o *Options, r *recorder) {
+		o.Profiles = map[core.AgentProgram]core.ProfileRule{"claude": claudeRule()}
+		o.Environ = env.lookup
+		o.Logger = slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+		r.profileLines = true
+	})
+	return h, env, logs
+}
+
+// setProfileTimeout sets profileTimeout for one test, restoring it after.
+func setProfileTimeout(t *testing.T, d time.Duration) {
+	t.Helper()
+	prev := profileTimeout
+	profileTimeout = d
+	t.Cleanup(func() { profileTimeout = prev })
+}
+
+func (l *logSink) text() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
+}
+
+func TestProfileResolved(t *testing.T) {
+	cases := []struct {
+		name    string
+		value   *string
+		profile string
+	}{
+		{"mapped", new("/h/.claude-cldw"), "cldw"},
+		{"trailing slash", new("/h/.claude-cldw/"), "cldw"},
+		{"absent", nil, "claude"},
+		{"unmatched", new("/h/.other"), core.ProfileUnresolved},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			h, _, logs := startProfiled(t, oneAgent("claude", core.StatusWorking), func(_ *fakeClient, env *fakeEnviron) {
+				if c.value != nil {
+					env.set(p1PID, claudeVar, *c.value)
+				}
+				env.set(p1PID, "SECRET", "do-not-log")
+			})
+			h.rec.expect(t, "agent w1:p1 claude working profile="+c.profile)
+			h.fake.awaitSubscribe("w1:p1")
+			h.settle()
+			h.fake.statusSub("w1:p1").event(core.StatusEvent{PaneID: "w1:p1", Status: core.StatusBlocked, AgentProgram: "claude"})
+			h.rec.expect(t, "agent w1:p1 claude working profile="+c.profile, "transition w1:p1 claude working->blocked live profile="+c.profile)
+			if as := h.agents(); len(as) != 1 || as[0].Profile != c.profile {
+				t.Errorf("agents %+v", as)
+			}
+
+			entries := logs.entries(t, "DEBUG", "profile resolved")
+			if len(entries) != 1 || entries[0]["profile"] != c.profile {
+				t.Fatalf("profile resolved entries %v", entries)
+			}
+			text := logs.text()
+			if strings.Contains(text, "do-not-log") {
+				t.Error("the log holds an environment value of another variable")
+			}
+			switch c.profile {
+			case "cldw":
+				if entries[0]["value"] != *c.value || entries[0]["variable"] != claudeVar {
+					t.Errorf("a matched value is logged with its variable: %v", entries[0])
+				}
+			case core.ProfileUnresolved:
+				if strings.Contains(text, *c.value) {
+					t.Errorf("the log holds the unmatched value %q:\n%s", *c.value, text)
+				}
+			}
+		})
+	}
+}
+
+func TestProfileFailures(t *testing.T) {
+	cases := []struct {
+		name    string
+		prepare func(*fakeClient, *fakeEnviron)
+	}{
+		{"timeout", func(_ *fakeClient, env *fakeEnviron) {
+			env.set(p1PID, claudeVar, "/h/.claude-cldw")
+			env.hold()
+		}},
+		{"no foreground process", func(f *fakeClient, _ *fakeEnviron) {
+			f.mu.Lock()
+			delete(f.procs, "w1:p1")
+			f.mu.Unlock()
+		}},
+		{"environment unreadable", func(_ *fakeClient, env *fakeEnviron) {
+			env.fail(p1PID, errors.New("operation not permitted"))
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			begin := time.Now()
+			h, _, logs := startProfiled(t, oneAgent("claude", core.StatusWorking), c.prepare)
+			h.rec.expect(t, "agent w1:p1 claude working profile=unresolved")
+			if c.name == "timeout" {
+				if d := time.Since(begin); d < profileTimeout {
+					t.Errorf("reported after %v, before the timeout %v", d, profileTimeout)
+				}
+			}
+			entries := logs.entries(t, "DEBUG", "profile resolved")
+			if len(entries) != 1 || entries[0]["error"] == nil || entries[0]["value"] != nil {
+				t.Errorf("want one debug entry naming the error and no value: %v", entries)
+			}
+		})
+	}
+}
+
+func TestProfileNoRule(t *testing.T) {
+	h, _, _ := startProfiled(t, oneAgent("codex", core.StatusWorking), nil)
+	h.rec.expect(t, "agent w1:p1 codex working profile=codex")
+	h.fake.awaitSubscribe("w1:p1")
+	h.settle()
+	if n := h.fake.processCalls(); n != 0 {
+		t.Errorf("%d process_info calls for a program with no rule", n)
+	}
+	if got := core.Heading(h.agents()[0].Profile, "codex"); got != "codex" {
+		t.Errorf("heading %q", got)
+	}
+}
+
+// TestProfileStatusDuringResolve: a live Status change while the Profile is
+// being resolved updates the Status silently, so the first report carries it
+// and no Transition is reported.
+func TestProfileStatusDuringResolve(t *testing.T) {
+	setProfileTimeout(t, wait)
+	h, env, _ := startProfiled(t, oneAgent("claude", core.StatusWorking), func(_ *fakeClient, env *fakeEnviron) {
+		env.set(p1PID, claudeVar, "/h/.claude-cldw")
+		env.hold()
+	})
+	h.fake.awaitSubscribe("w1:p1")
+	h.settle()
+	h.fake.setSnapshot(oneAgent("claude", core.StatusBlocked))
+	sub := h.fake.statusSub("w1:p1")
+	sub.event(core.StatusEvent{PaneID: "w1:p1", Status: core.StatusBlocked, AgentProgram: "claude"})
+	sub.awaitDelivered(t, 1)
+	h.settle()
+	if got := h.rec.all(); len(got) != 0 {
+		t.Fatalf("reported before the Profile was resolved: %v", got)
+	}
+	env.unblock()
+	h.rec.expect(t, "agent w1:p1 claude blocked profile=cldw")
+	h.settle()
+	h.rec.expect(t, "agent w1:p1 claude blocked profile=cldw")
+}
+
+// startedProfiled runs an engine whose w1:p1 resolved to cldw, settled.
+func startedProfiled(t *testing.T) (*harness, *fakeEnviron, *logSink) {
+	t.Helper()
+	h, env, logs := startProfiled(t, oneAgent("claude", core.StatusWorking), func(_ *fakeClient, env *fakeEnviron) {
+		env.set(p1PID, claudeVar, "/h/.claude-cldw")
+	})
+	h.rec.expect(t, "agent w1:p1 claude working profile=cldw")
+	h.fake.awaitSubscribe("w1:p1")
+	h.settle()
+	return h, env, logs
+}
+
+// awaitResolved waits until n Profile resolutions have been logged, and the
+// engine has finished handling the last.
+func (h *harness) awaitResolved(logs *logSink, n int) {
+	h.t.Helper()
+	deadline := time.Now().Add(wait)
+	for len(logs.entries(h.t, "DEBUG", "profile resolved")) < n {
+		if time.Now().After(deadline) {
+			h.t.Fatalf("fewer than %d Profile resolutions", n)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	h.settle()
+}
+
+func TestProfileRedetected(t *testing.T) {
+	h, env, _ := startedProfiled(t)
+	env.set(p1PID, claudeVar, "/h/.claude-cldp")
+	h.lifecycle(core.LifecycleEvent{Kind: core.LifecycleAgentDetected, PaneID: "w1:p1", AgentProgram: "claude"})
+	h.rec.expect(t, "agent w1:p1 claude working profile=cldw", "profile w1:p1 cldp previous cldw")
+	h.settle()
+	h.fake.statusSub("w1:p1").event(core.StatusEvent{PaneID: "w1:p1", Status: core.StatusIdle, AgentProgram: "claude"})
+	h.rec.expect(t, "agent w1:p1 claude working profile=cldw", "profile w1:p1 cldp previous cldw",
+		"transition w1:p1 claude working->idle live profile=cldp")
+	if p := h.rec.lastTransition().Profile(); p != "cldp" {
+		t.Errorf("transition profile %q", p)
+	}
+}
+
+func TestProfileRedetectedSame(t *testing.T) {
+	h, _, logs := startedProfiled(t)
+	h.lifecycle(core.LifecycleEvent{Kind: core.LifecycleAgentDetected, PaneID: "w1:p1", AgentProgram: "claude"})
+	h.awaitResolved(logs, 2)
+	h.rec.expect(t, "agent w1:p1 claude working profile=cldw")
+}
+
+func TestProfileProgramChanged(t *testing.T) {
+	h, _, _ := startedProfiled(t)
+	h.fake.setSnapshot(oneAgent("codex", core.StatusWorking))
+	h.lifecycle(core.LifecycleEvent{Kind: core.LifecycleContextChanged})
+	h.rec.expect(t, "agent w1:p1 claude working profile=cldw", "profile w1:p1 codex previous cldw")
+
+	// A status event naming another program resolves again too.
+	h.settle()
+	h.fake.statusSub("w1:p1").event(core.StatusEvent{PaneID: "w1:p1", Status: core.StatusWorking, AgentProgram: "claude"})
+	h.rec.expect(t, "agent w1:p1 claude working profile=cldw", "profile w1:p1 codex previous cldw", "profile w1:p1 cldw previous codex")
+}
+
+// TestProfileStaleResult: a resolution superseded by another, or for a pane
+// gone since, is ignored.
+func TestProfileStaleResult(t *testing.T) {
+	t.Run("superseded", func(t *testing.T) {
+		setProfileTimeout(t, wait)
+		h, env, _ := startProfiled(t, oneAgent("claude", core.StatusWorking), func(_ *fakeClient, env *fakeEnviron) {
+			env.set(p1PID, claudeVar, "/h/.claude-cldw")
+			env.hold()
+		})
+		h.fake.awaitSubscribe("w1:p1")
+		h.settle()
+		// The program changes to one with no rule while the claude rule is
+		// still being read: that settles it, and the claude result is stale.
+		h.fake.setSnapshot(oneAgent("codex", core.StatusWorking))
+		h.fake.statusSub("w1:p1").event(core.StatusEvent{PaneID: "w1:p1", Status: core.StatusWorking, AgentProgram: "codex"})
+		h.rec.expect(t, "agent w1:p1 codex working profile=codex")
+		env.unblock()
+		h.settle()
+		h.rec.expect(t, "agent w1:p1 codex working profile=codex")
+	})
+	t.Run("pane gone", func(t *testing.T) {
+		setProfileTimeout(t, wait)
+		h, env, _ := startProfiled(t, oneAgent("claude", core.StatusWorking), func(_ *fakeClient, env *fakeEnviron) {
+			env.set(p1PID, claudeVar, "/h/.claude-cldw")
+			env.hold()
+		})
+		h.fake.awaitSubscribe("w1:p1")
+		h.settle()
+		h.fake.setSnapshot(core.Snapshot{HerdrVersion: "0.9.5", Panes: []core.PaneObservation{shellPane("w1:p3")}})
+		h.lifecycle(core.LifecycleEvent{Kind: core.LifecycleClosed, PaneID: "w1:p1"})
+		h.settle()
+		if as := h.agents(); len(as) != 0 {
+			t.Fatalf("agents %+v", as)
+		}
+		env.unblock()
+		h.settle()
+		if got := h.rec.all(); len(got) != 0 {
+			t.Fatalf("a stale result was reported: %v", got)
+		}
+	})
+}
+
+// TestProfileProgramChangedDuringResolve: a status event that changes an
+// unreported pane's program to one with no rule settles its Profile at once;
+// the one Agent line carries the event's Status, and no Transition follows.
+func TestProfileProgramChangedDuringResolve(t *testing.T) {
+	setProfileTimeout(t, wait)
+	h, env, _ := startProfiled(t, oneAgent("claude", core.StatusWorking), func(_ *fakeClient, env *fakeEnviron) {
+		env.set(p1PID, claudeVar, "/h/.claude-cldw")
+		env.hold()
+	})
+	h.fake.awaitSubscribe("w1:p1")
+	h.settle()
+	h.fake.setSnapshot(oneAgent("codex", core.StatusBlocked))
+	h.fake.statusSub("w1:p1").event(core.StatusEvent{PaneID: "w1:p1", Status: core.StatusBlocked, AgentProgram: "codex"})
+	h.rec.expect(t, "agent w1:p1 codex blocked profile=codex")
+	env.unblock()
+	h.settle()
+	h.rec.expect(t, "agent w1:p1 codex blocked profile=codex")
+}
+
+// TestProfileTerminalReplacedDuringResolve: an unreported pane whose terminal
+// is replaced while its Profile is resolved is another Agent; the resolution
+// read from the old terminal's process is dropped.
+func TestProfileTerminalReplacedDuringResolve(t *testing.T) {
+	setProfileTimeout(t, wait)
+	h, env, _ := startProfiled(t, oneAgent("claude", core.StatusWorking), func(_ *fakeClient, env *fakeEnviron) {
+		env.set(p1PID, claudeVar, "/h/.claude-cldw")
+		env.set(202, claudeVar, "/h/.claude-cldp")
+		env.hold()
+	})
+	h.fake.awaitSubscribe("w1:p1")
+	h.settle()
+	s := oneAgent("claude", core.StatusWorking)
+	s.Panes[0].TerminalID = "t-new"
+	h.fake.setSnapshot(s)
+	h.fake.setProc("w1:p1", 202)
+	h.lifecycle(core.LifecycleEvent{Kind: core.LifecycleContextChanged})
+	deadline := time.Now().Add(wait)
+	for h.fake.processCalls() < 2 {
+		if time.Now().After(deadline) {
+			t.Fatal("the new terminal's Profile was not resolved")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	h.settle()
+	env.unblock()
+	h.rec.expect(t, "agent w1:p1 claude working profile=cldp")
+	h.settle()
+	h.rec.expect(t, "agent w1:p1 claude working profile=cldp")
+}
+
+// TestProfileSnapshotDuringResolve: a read in flight when a live event
+// arrives does not overwrite that event's Status on a pane not yet reported.
+func TestProfileSnapshotDuringResolve(t *testing.T) {
+	setProfileTimeout(t, wait)
+	h, env, _ := startProfiled(t, oneAgent("claude", core.StatusWorking), func(_ *fakeClient, env *fakeEnviron) {
+		env.set(p1PID, claudeVar, "/h/.claude-cldw")
+		env.hold()
+	})
+	h.fake.awaitSubscribe("w1:p1")
+	h.settle()
+	h.fake.setGated(true)
+	h.lifecycle(core.LifecycleEvent{Kind: core.LifecycleContextChanged})
+	h.fake.awaitSnapshotCall() // held; it still says working
+	sub := h.fake.statusSub("w1:p1")
+	// The second event is taken only once the engine has taken the first.
+	sub.event(core.StatusEvent{PaneID: "w1:p1", Status: core.StatusBlocked, AgentProgram: "claude"})
+	sub.event(core.StatusEvent{PaneID: "w1:p1", Status: core.StatusBlocked, AgentProgram: "claude"})
+	sub.awaitDelivered(t, 2)
+	h.agents()
+
+	h.fake.release <- struct{}{} // the stale read is applied
+	h.fake.awaitSnapshotCall()   // the read the event caused, held
+	env.unblock()
+	h.rec.expect(t, "agent w1:p1 claude blocked profile=cldw")
+
+	h.fake.setSnapshot(oneAgent("claude", core.StatusBlocked))
+	h.fake.setGated(false)
+	h.fake.release <- struct{}{}
+	h.settle()
+	h.rec.expect(t, "agent w1:p1 claude blocked profile=cldw")
+}
+
+// TestProfileReconnectDuringRedetect: a reconnect that keeps the epoch while
+// a reported Agent's Profile is resolved again leaves that resolution intact.
+func TestProfileReconnectDuringRedetect(t *testing.T) {
+	setProfileTimeout(t, wait)
+	h, env, _ := startedProfiled(t)
+	env.set(p1PID, claudeVar, "/h/.claude-cldp")
+	env.hold()
+	h.lifecycle(core.LifecycleEvent{Kind: core.LifecycleAgentDetected, PaneID: "w1:p1", AgentProgram: "claude"})
+	deadline := time.Now().Add(wait)
+	for h.fake.processCalls() < 2 {
+		if time.Now().After(deadline) {
+			t.Fatal("not resolved again")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	h.loseLifecycle()
+	h.rec.expect(t, "agent w1:p1 claude working profile=cldw", "reconnected 0.9.5 epoch 1 kept")
+	h.fake.awaitSubscribe("w1:p1")
+	h.settle()
+	env.unblock()
+	h.rec.expect(t, "agent w1:p1 claude working profile=cldw", "reconnected 0.9.5 epoch 1 kept", "profile w1:p1 cldp previous cldw")
+	h.settle()
+	for _, l := range h.rec.all() {
+		if strings.Contains(l, core.ProfileUnresolved) {
+			t.Errorf("line %q", l)
+		}
+	}
 }

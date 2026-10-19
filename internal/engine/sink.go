@@ -6,6 +6,10 @@ import "github.com/vilosource/herddash/internal/core"
 type Agent struct {
 	Key          core.AgentKey
 	AgentProgram core.AgentProgram
+	// Profile is the Profile the Agent runs under (FR-10): its rule's result,
+	// core.ProfileUnresolved when that could not be applied, or the Agent
+	// Program's name for a program with no rule.
+	Profile string
 	// Status is herdr's string verbatim.
 	Status core.Status
 	// Context is the tracked context from the latest snapshot that showed the
@@ -27,6 +31,9 @@ const (
 	GateAdvisory = core.GateAdvisory
 	GateRefused  = core.GateRefused
 	HerdrMinimum = core.HerdrMinimum
+	// ProfileUnresolved is the Profile of an Agent whose rule could not be
+	// applied.
+	ProfileUnresolved = core.ProfileUnresolved
 )
 
 // Sink is where the engine reports what it sees. The engine calls it only from
@@ -57,4 +64,8 @@ type Sink interface {
 	// including the first. It comes before anything else that connect causes:
 	// the removals a refusal causes, or the Agents a start reports.
 	Gate(gate core.Gate, herdrVersion string, observedAt int64)
+	// Profile reports that resolving an Agent's Profile again gave another
+	// Profile: a carries the new one, and previous is the one it replaces.
+	// Transitions after it carry the new one.
+	Profile(a Agent, previous string, observedAt int64)
 }
