@@ -1,0 +1,301 @@
+package store
+
+import (
+	"context"
+	"database/sql"
+	"maps"
+	"net/url"
+	"testing"
+
+	"github.com/vilosource/herddash/internal/core"
+)
+
+func status(s core.Status) *core.Status { return &s }
+
+func order(v uint64) *uint64 { return &v }
+
+var keyP1 = core.AgentKey{Host: "mac", Server: "default", Epoch: 1, PaneID: "w1:p1"}
+
+func mustTransition(t *testing.T, in core.TransitionInput) core.Transition {
+	t.Helper()
+	tr, err := core.NewTransition(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tr
+}
+
+// storedRow is one transitions row, every column; rowOf reads back the row
+// with the given id.
+type storedRow struct {
+	host, server, paneID, newStatus, provenance string
+	epoch, observedAt, spurious                 int64
+	program, profile, previous, version, ikey   sql.NullString
+	seq                                         sql.NullInt64
+}
+
+func rowOf(t *testing.T, s *Store, id int64) storedRow {
+	t.Helper()
+	var r storedRow
+	err := s.db.QueryRow(`SELECT host, server, epoch, pane_id, agent_program, profile, previous_status, new_status,
+		state_change_seq, herdr_version, provenance, possibly_spurious, observed_at, import_key FROM transitions WHERE id = ?`, id).
+		Scan(&r.host, &r.server, &r.epoch, &r.paneID, &r.program, &r.profile, &r.previous, &r.newStatus,
+			&r.seq, &r.version, &r.provenance, &r.spurious, &r.observedAt, &r.ikey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+func TestAppendLive(t *testing.T) {
+	s, _ := openTemp(t)
+	tr := mustTransition(t, core.TransitionInput{Key: keyP1, AgentProgram: "claude", Profile: "cldw",
+		Previous: status(core.StatusWorking), New: core.StatusBlocked, HerdrVersion: "0.9.5",
+		ObservedAt: 1000, Provenance: core.ProvenanceLive})
+	if err := s.Append(tr); err != nil {
+		t.Fatal(err)
+	}
+	r := rowOf(t, s, 1)
+	if r.host != "mac" || r.server != "default" || r.epoch != 1 || r.paneID != "w1:p1" ||
+		r.program.String != "claude" || r.profile.String != "cldw" ||
+		r.previous.String != "working" || r.newStatus != "blocked" || r.seq.Valid ||
+		r.version.String != "0.9.5" || r.provenance != "live" || r.spurious != 0 || r.observedAt != 1000 || r.ikey.Valid {
+		t.Errorf("row %+v", r)
+	}
+}
+
+func TestAppendSnapshotOrder(t *testing.T) {
+	s, _ := openTemp(t)
+	tr := mustTransition(t, core.TransitionInput{Key: keyP1, AgentProgram: "claude", Profile: "claude",
+		Previous: status(core.StatusWorking), New: core.StatusIdle, HerdrOrder: order(7), HerdrVersion: "0.9.5",
+		ObservedAt: 1000, Provenance: core.ProvenanceSnapshot})
+	if err := s.Append(tr); err != nil {
+		t.Fatal(err)
+	}
+	if r := rowOf(t, s, 1); !r.seq.Valid || r.seq.Int64 != 7 || r.provenance != "snapshot" {
+		t.Errorf("row %+v, want snapshot with state_change_seq 7", r)
+	}
+}
+
+func TestAppendFirstSightAndNulls(t *testing.T) {
+	s, _ := openTemp(t)
+	// First sight: no previous Status; nothing else known either.
+	tr := mustTransition(t, core.TransitionInput{Key: keyP1, New: core.StatusWorking,
+		ObservedAt: 1000, Provenance: core.ProvenanceSnapshot})
+	if err := s.Append(tr); err != nil {
+		t.Fatal(err)
+	}
+	r := rowOf(t, s, 1)
+	if r.previous.Valid || r.program.Valid || r.profile.Valid || r.version.Valid || r.seq.Valid || r.ikey.Valid {
+		t.Errorf("unknown values not NULL: %+v", r)
+	}
+	if r.newStatus != "working" || r.provenance != "snapshot" {
+		t.Errorf("row %+v", r)
+	}
+}
+
+func TestAppendBackfill(t *testing.T) {
+	s, _ := openTemp(t)
+	key := keyP1
+	key.Epoch = core.BackfillEpoch
+	tr := mustTransition(t, core.TransitionInput{Key: key, AgentProgram: "claude", Profile: "cldp",
+		New: core.StatusDone, ObservedAt: 1000, Provenance: core.ProvenanceBackfill, ImportKey: "log:1"})
+	if err := s.Append(tr); err != nil {
+		t.Fatal(err)
+	}
+	if r := rowOf(t, s, 1); r.epoch != 0 || r.ikey.String != "log:1" || r.provenance != "backfill" {
+		t.Errorf("row %+v", r)
+	}
+	// The unique import key: a second import of the same entry is refused.
+	if err := s.Append(tr); err == nil {
+		t.Error("a repeated import key was appended")
+	}
+}
+
+func TestAppendResyncMarker(t *testing.T) {
+	s, _ := openTemp(t)
+	for _, m := range []ResyncMarker{
+		{Host: "mac", Server: "default", Epoch: 3, ObservedAt: 500, Reason: ReasonDaemonStart},
+		{Host: "mac", Server: "default", Epoch: 3, ObservedAt: 600, Reason: "error", Detail: "code x"},
+	} {
+		if err := s.AppendResyncMarker(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows, err := s.db.Query(`SELECT host, server, epoch, observed_at, reason, detail FROM resync_markers ORDER BY id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var got []ResyncMarker
+	for rows.Next() {
+		var m ResyncMarker
+		var detail sql.NullString
+		if err := rows.Scan(&m.Host, &m.Server, &m.Epoch, &m.ObservedAt, &m.Reason, &detail); err != nil {
+			t.Fatal(err)
+		}
+		if m.Reason == ReasonDaemonStart && detail.Valid {
+			t.Error("an empty detail was stored, not NULL")
+		}
+		m.Detail = detail.String
+		got = append(got, m)
+	}
+	want := []ResyncMarker{
+		{Host: "mac", Server: "default", Epoch: 3, ObservedAt: 500, Reason: "daemon_start"},
+		{Host: "mac", Server: "default", Epoch: 3, ObservedAt: 600, Reason: "error", Detail: "code x"},
+	}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("markers %+v, want %+v", got, want)
+	}
+}
+
+func TestHistoryOrderAndRoundTrip(t *testing.T) {
+	s, _ := openTemp(t)
+	other := keyP1
+	other.PaneID = "w1:p2"
+	otherEpoch := keyP1
+	otherEpoch.Epoch = 2
+	in := []core.TransitionInput{
+		// observed_at 20, then 10, then 10 again: History gives 10 (lower
+		// id), 10, 20.
+		{Key: keyP1, AgentProgram: "claude", Profile: "cldw", New: core.StatusWorking, HerdrOrder: order(4),
+			HerdrVersion: "0.9.5", ObservedAt: 20, Provenance: core.ProvenanceSnapshot},
+		{Key: keyP1, AgentProgram: "claude", Profile: "cldw", Previous: status(core.StatusIdle), New: core.StatusBlocked,
+			HerdrVersion: "0.9.5", ObservedAt: 10, Provenance: core.ProvenanceLive},
+		{Key: other, New: core.StatusIdle, ObservedAt: 15, Provenance: core.ProvenanceLive},
+		{Key: otherEpoch, New: core.StatusIdle, ObservedAt: 15, Provenance: core.ProvenanceLive},
+		{Key: keyP1, Previous: status(core.StatusBlocked), New: core.StatusDone, ObservedAt: 10, Provenance: core.ProvenanceLive},
+	}
+	var trs []core.Transition
+	for _, i := range in {
+		tr := mustTransition(t, i)
+		trs = append(trs, tr)
+		if err := s.Append(tr); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := s.History(context.Background(), keyP1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []core.Transition{trs[1], trs[4], trs[0]}
+	if len(got) != len(want) {
+		t.Fatalf("%d rows, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if !sameTransition(got[i], want[i]) {
+			t.Errorf("row %d is %+v, want %+v", i, describe(got[i]), describe(want[i]))
+		}
+	}
+	if h, err := s.History(context.Background(), core.AgentKey{Host: "mac", Server: "default", Epoch: 9, PaneID: "w1:p1"}); err != nil || len(h) != 0 {
+		t.Errorf("history of an unknown Agent %v, %v; want none", h, err)
+	}
+}
+
+type described struct {
+	Key                                      core.AgentKey
+	Program, Profile, Previous, New, Version string
+	HasPrevious, HasOrder                    bool
+	Order                                    uint64
+	ObservedAt                               int64
+	Provenance                               core.Provenance
+	ImportKey                                string
+}
+
+func describe(t core.Transition) described {
+	prev, hasPrev := t.Previous()
+	o, hasOrder := t.HerdrOrder()
+	return described{t.Key(), string(t.AgentProgram()), t.Profile(), string(prev), string(t.New()), t.HerdrVersion(),
+		hasPrev, hasOrder, o, t.ObservedAt(), t.Provenance(), t.ImportKey()}
+}
+
+func sameTransition(a, b core.Transition) bool { return describe(a) == describe(b) }
+
+func TestServerState(t *testing.T) {
+	path := dbPath(t)
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := s.LoadServerState("mac", "default"); err != nil || ok {
+		t.Fatalf("fresh database: found %v, err %v; want nothing", ok, err)
+	}
+	st := ServerState{Epoch: 3, Terminals: map[string]string{"w1:p1": "t1", "w1:p3": "t3"}}
+	if err := s.SaveServerState("mac", "default", st); err != nil {
+		t.Fatal(err)
+	}
+	// Another Server on the same Host is kept apart.
+	if err := s.SaveServerState("mac", "work", ServerState{Epoch: 1}); err != nil {
+		t.Fatal(err)
+	}
+	// Upserted: the latest save wins.
+	st = ServerState{Epoch: 4, Terminals: map[string]string{"w1:p1": "t9"}}
+	if err := s.SaveServerState("mac", "default", st); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+
+	s, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	got, ok, err := s.LoadServerState("mac", "default")
+	if err != nil || !ok || got.Epoch != 4 || !maps.Equal(got.Terminals, st.Terminals) {
+		t.Errorf("loaded %+v, %v, %v; want %+v", got, ok, err, st)
+	}
+	got, ok, err = s.LoadServerState("mac", "work")
+	if err != nil || !ok || got.Epoch != 1 || got.Terminals == nil || len(got.Terminals) != 0 {
+		t.Errorf("loaded %+v, %v, %v; want epoch 1 with no terminals", got, ok, err)
+	}
+	var n int
+	if err := s.db.QueryRow("SELECT count(*) FROM server_state").Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Errorf("%d server_state rows, want 2", n)
+	}
+	if err := s.SaveServerState("mac", "default", ServerState{Epoch: 0}); err == nil {
+		t.Error("epoch 0 saved as server state")
+	}
+}
+
+// TestUpgradeFromSchema1 opens a database Story 2.1's binary left, at schema
+// version 1 with a marker in it: migration 0002 is applied and the record is
+// untouched.
+func TestUpgradeFromSchema1(t *testing.T) {
+	path := dbPath(t)
+	ms, err := migrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := sql.Open("sqlite", (&url.URL{Scheme: "file", Path: path}).String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw.SetMaxOpenConns(1)
+	old := &Store{db: raw}
+	if err := old.prepare(context.Background(), path, ms[:1]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`INSERT INTO resync_markers (host, server, epoch, observed_at, reason) VALUES ('h', 's', 1, 1, 'daemon_start')`); err != nil {
+		t.Fatal(err)
+	}
+	raw.Close()
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if v := userVersion(t, s.db); v != schemaVersion {
+		t.Errorf("user_version %d, want %d", v, schemaVersion)
+	}
+	var n int
+	if err := s.db.QueryRow("SELECT count(*) FROM resync_markers").Scan(&n); err != nil || n != 1 {
+		t.Errorf("%d markers (%v), want the 1 written before", n, err)
+	}
+	if err := s.SaveServerState("h", "s", ServerState{Epoch: 1}); err != nil {
+		t.Errorf("server_state after the upgrade: %v", err)
+	}
+}

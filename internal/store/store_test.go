@@ -49,8 +49,8 @@ func TestOpenFresh(t *testing.T) {
 	if mode != "wal" {
 		t.Errorf("journal_mode %q, want wal", mode)
 	}
-	if v := userVersion(t, s.db); v != 1 {
-		t.Errorf("user_version %d, want 1", v)
+	if v := userVersion(t, s.db); v != schemaVersion {
+		t.Errorf("user_version %d, want %d", v, schemaVersion)
 	}
 	var tables []string
 	rows, err := s.db.Query("SELECT name FROM sqlite_schema WHERE type = 'table' ORDER BY name")
@@ -65,8 +65,8 @@ func TestOpenFresh(t *testing.T) {
 		}
 		tables = append(tables, n)
 	}
-	if got := strings.Join(tables, ","); got != "resync_markers,transitions" {
-		t.Errorf("tables %s, want resync_markers,transitions", got)
+	if got := strings.Join(tables, ","); got != "resync_markers,server_state,transitions" {
+		t.Errorf("tables %s, want resync_markers,server_state,transitions", got)
 	}
 }
 
@@ -87,8 +87,8 @@ func TestReopenKeepsDataAndVersion(t *testing.T) {
 		t.Fatalf("reopen: %v", err)
 	}
 	defer s.Close()
-	if v := userVersion(t, s.db); v != 1 {
-		t.Errorf("user_version %d after reopen, want 1", v)
+	if v := userVersion(t, s.db); v != schemaVersion {
+		t.Errorf("user_version %d after reopen, want %d", v, schemaVersion)
 	}
 	var n int
 	if err := s.db.QueryRow("SELECT count(*) FROM resync_markers").Scan(&n); err != nil {
@@ -181,8 +181,8 @@ func TestOpenAfterHolderCrashed(t *testing.T) {
 		t.Fatalf("Open after the holder was killed: %v", err)
 	}
 	defer s.Close()
-	if v := userVersion(t, s.db); v != 1 {
-		t.Errorf("user_version %d, want 1", v)
+	if v := userVersion(t, s.db); v != schemaVersion {
+		t.Errorf("user_version %d, want %d", v, schemaVersion)
 	}
 }
 
@@ -207,8 +207,8 @@ func TestOpenRefusesNewerSchema(t *testing.T) {
 		s.Close()
 		t.Fatal("Open accepted schema version 99")
 	}
-	if !errors.Is(err, ErrSchemaNewer) || !strings.Contains(err.Error(), "99") || !strings.Contains(err.Error(), "up to 1") {
-		t.Errorf("error %q: want ErrSchemaNewer naming 99 and 1", err)
+	if !errors.Is(err, ErrSchemaNewer) || !strings.Contains(err.Error(), "99") || !strings.Contains(err.Error(), "up to 2") {
+		t.Errorf("error %q: want ErrSchemaNewer naming 99 and 2", err)
 	}
 	after, err := os.ReadFile(path)
 	if err != nil {
@@ -395,6 +395,12 @@ func TestColumns(t *testing.T) {
 			{"reason", "TEXT", true, false},
 			{"detail", "TEXT", false, false},
 		},
+		"server_state": {
+			{"host", "TEXT", true, true},
+			{"server", "TEXT", true, true},
+			{"epoch", "INTEGER", true, false},
+			{"terminals", "TEXT", true, false},
+		},
 	}
 	for table, cols := range want {
 		got := tableInfo(t, s.db, table)
@@ -461,6 +467,7 @@ func TestColumns(t *testing.T) {
 			"observed_at": "index/c",
 		},
 		"resync_markers": {"observed_at": "index/c"},
+		"server_state":   {"host,server": "unique/pk"},
 	}
 	for table, w := range wantIdx {
 		got := indexes(table)
@@ -544,7 +551,20 @@ func TestMigrationsNumbered(t *testing.T) {
 			t.Errorf("migration %d is %s (version %d), want version %d", i, m.name, m.version, i+1)
 		}
 	}
+	var names []string
+	for _, m := range ms {
+		names = append(names, m.name)
+	}
+	if got, want := strings.Join(names, ","), "0001_initial.sql,0002_server_state.sql"; got != want {
+		t.Errorf("migrations %s, want %s", got, want)
+	}
+	if len(ms) != schemaVersion {
+		t.Errorf("%d migrations, but the tests expect schema version %d", len(ms), schemaVersion)
+	}
 }
+
+// schemaVersion is the user_version a fully migrated database has.
+const schemaVersion = 2
 
 // TestFailedMigrationRollsBack runs a migration list whose second step fails:
 // nothing from the first step survives and user_version is unchanged.

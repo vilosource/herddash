@@ -22,11 +22,12 @@ const logFileName = "herddash.log"
 // runServe is "herddash serve [flags]", also run by "herddash" alone. It loads
 // configuration as "herddash config" does, ensures the data directory, logs
 // JSON to herddash.log there, opens the database (so a second serve on the
-// same database fails at once), and prints every version gate outcome, Agent,
-// Transition, removal, Profile change, reconnect and resync to stdout until
-// ctx ends (exit 0). herdr being absent, gone or restarting never ends it: the
-// engine reconnects. Exit 1 is left for configuration, data directory and
-// database errors before the engine starts.
+// same database fails at once) for the engine to record every Transition into,
+// and prints every version gate outcome, Agent, Transition, removal, Profile
+// change, reconnect and resync to stdout until ctx ends (exit 0). herdr being
+// absent, gone or restarting never ends it: the engine reconnects. Exit 1 is
+// left for configuration, data directory and database errors before the
+// engine starts.
 func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("herddash serve", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -56,9 +57,8 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 		return 1
 	}
 	// Open the store before the log: a refused second serve must not write
-	// into the running Daemon's log. Nothing is written to the store yet
-	// (Story 2.2); holding it open is what makes this process the database's
-	// only owner.
+	// into the running Daemon's log. Holding it open is what makes this
+	// process the database's only owner; the engine records into it.
 	st, err := store.Open(cfg.Database())
 	if err != nil {
 		fmt.Fprintf(stderr, "herddash: %v\n", err)
@@ -97,6 +97,7 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 
 		AllowUnsupportedHerdr: cfg.AllowUnsupportedHerdr(),
 		Profiles:              cfg.ProfileRules(),
+		Store:                 st,
 	})
 	e.Run(ctx)
 	logger.Info("herddash stopped")

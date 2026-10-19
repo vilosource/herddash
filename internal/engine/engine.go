@@ -37,6 +37,9 @@ type Options struct {
 	// Environ reads one variable from a process's environment, as
 	// procenv.Lookup does, which is the default. Tests inject a fake.
 	Environ EnvironFunc
+	// Store is where every Transition, the daemon_start marker and the
+	// engine's epoch state are written (FR-6, AD-3). Nil records nothing.
+	Store Recorder
 }
 
 // EnvironFunc is the type of Options.Environ.
@@ -106,6 +109,8 @@ type Engine struct {
 	// read-only after New.
 	profiles map[core.AgentProgram]core.ProfileRule
 	environ  EnvironFunc
+	// store is Options.Store, nil when nothing is recorded.
+	store Recorder
 
 	inbox chan any
 	// stopped closes when Run returns.
@@ -146,8 +151,13 @@ type Engine struct {
 	// terminals is every pane's terminal_id in the latest applied snapshot,
 	// Agent or not: the evidence the epoch rule compares across a reconnect.
 	terminals map[string]string
-	panes     map[string]*pane
-	nextGen   uint64
+	// saved is set once the epoch and terminals have been saved or loaded;
+	// savedEpoch and savedTerminals are what the store holds.
+	saved          bool
+	savedEpoch     uint64
+	savedTerminals map[string]string
+	panes          map[string]*pane
+	nextGen        uint64
 	// snapSeq numbers snapshot reads; it is the number of the latest one started.
 	snapSeq  uint64
 	inFlight bool
@@ -197,7 +207,14 @@ type pane struct {
 	known   bool
 	program core.AgentProgram
 	status  core.Status
-	context core.PaneContext
+	// Until the Agent is reported, seenBy is how its Status was last learnt
+	// (snapshot or live) and seenOrder the snapshot's state_change_seq: what
+	// its first-sight Transition records, observed at seenAt (UTC Unix ms;
+	// 0 without a Store, which reads no clock for it).
+	seenBy    core.Provenance
+	seenOrder *uint64
+	seenAt    int64
+	context   core.PaneContext
 	// terminalID is the pane's terminal_id in the latest snapshot that showed
 	// it. A snapshot showing the same pane id with another terminal_id shows
 	// another Agent (AD-3).
@@ -299,6 +316,7 @@ func New(o Options) *Engine {
 		allowUnsupported: o.AllowUnsupportedHerdr,
 		profiles:         maps.Clone(o.Profiles),
 		environ:          o.Environ,
+		store:            o.Store,
 		inbox:            make(chan any),
 		stopped:          make(chan struct{}),
 		panes:            map[string]*pane{},
@@ -321,6 +339,11 @@ func New(o Options) *Engine {
 // reconnects. A snapshot that fails once started is logged and read again
 // after snapshotRetryDelay. Run closes every subscription and waits for its
 // goroutines before it returns. Call it once.
+//
+// With a Store, Run first loads the epoch and terminal map the previous run
+// saved and records a daemon_start marker, then connects; every Transition,
+// and every Agent's first sight, is appended as it is observed, and the state
+// is saved after each applied snapshot that changed it.
 func (e *Engine) Run(ctx context.Context) {
 	runCtx, cancel := context.WithCancel(ctx)
 	e.runCtx = runCtx
@@ -331,6 +354,7 @@ func (e *Engine) Run(ctx context.Context) {
 		close(e.stopped)
 	}()
 
+	e.restore()
 	e.connect()
 	e.loop(ctx)
 }
@@ -682,7 +706,7 @@ func (e *Engine) onStatus(m statusMsg) {
 	}
 	if !p.known {
 		// The Status first, so a report the program change causes carries it.
-		p.status = ev.Status
+		e.seen(p, ev.Status, core.ProvenanceLive, nil)
 		e.setProgram(p, ev.AgentProgram)
 		if !p.known {
 			e.report(p)
@@ -858,6 +882,9 @@ func (e *Engine) apply(seq uint64, s core.Snapshot, resubscribe bool) string {
 	for _, obs := range s.Panes {
 		e.terminals[obs.PaneID] = obs.TerminalID
 	}
+	// Persist the epoch and terminals before this snapshot records anything,
+	// so no row is keyed by an epoch the store does not hold.
+	e.saveState()
 	present := map[string]bool{}
 	for _, obs := range s.Panes {
 		a := obs.Agent
@@ -895,7 +922,7 @@ func (e *Engine) apply(seq uint64, s core.Snapshot, resubscribe bool) string {
 			// The Status first, so a report the program change causes
 			// carries it; unless a live event arrived while this read ran,
 			// which it may predate.
-			p.status = a.Status
+			e.seen(p, a.Status, core.ProvenanceSnapshot, a.StateChangeSeq)
 		}
 		e.setProgram(p, a.AgentProgram)
 		switch {
@@ -1179,7 +1206,10 @@ func (e *Engine) report(p *pane) {
 	case p.resolved:
 		p.known = true
 		e.log.Info("agent seen", "pane", p.id, "agent_program", p.program, "profile", p.profile, "status", p.status)
-		e.sink.Agent(e.agent(p), e.now())
+		now := e.now()
+		e.firstSight(p, now)
+		p.seenBy, p.seenOrder, p.seenAt = "", nil, 0
+		e.sink.Agent(e.agent(p), now)
 	case p.resolving == 0:
 		e.resolve(p) // which reports p when it ends
 	}
@@ -1316,7 +1346,54 @@ func (e *Engine) transition(p *pane, next core.Status, prov core.Provenance, ord
 		return
 	}
 	p.status = next
+	e.record(t)
 	e.sink.Transition(t)
+}
+
+// seen sets an unreported pane's Status as a snapshot or a status event
+// showed it. With a Store it also stamps when that Status was first observed,
+// which the first-sight row carries even when the report waits for the Profile.
+func (e *Engine) seen(p *pane, status core.Status, prov core.Provenance, order *uint64) {
+	if e.store != nil && (p.seenBy == "" || p.status != status) {
+		p.seenAt = e.now()
+	}
+	p.status, p.seenBy, p.seenOrder = status, prov, order
+}
+
+// firstSight records an Agent's first report as a Transition with no previous
+// Status, so the record holds every Agent's current Status (FR-7): snapshot
+// provenance when a snapshot showed it, live when a status event did, at the
+// time it was observed. reportedAt is the fallback when that is unknown.
+func (e *Engine) firstSight(p *pane, reportedAt int64) {
+	if e.store == nil {
+		return
+	}
+	prov, observedAt := p.seenBy, p.seenAt
+	if prov == "" {
+		e.log.Warn("first sight with no known source; recording it as snapshot", "pane", p.id)
+		prov = core.ProvenanceSnapshot
+	}
+	if observedAt == 0 {
+		observedAt = reportedAt
+	}
+	in := core.TransitionInput{
+		Key:          e.key(p.id),
+		AgentProgram: p.program,
+		Profile:      p.profile,
+		New:          p.status,
+		HerdrVersion: e.herdrVersion,
+		ObservedAt:   observedAt,
+		Provenance:   prov,
+	}
+	if prov == core.ProvenanceSnapshot {
+		in.HerdrOrder = p.seenOrder
+	}
+	t, err := core.NewTransition(in)
+	if err != nil {
+		e.log.Warn("first sight not recorded", "pane", p.id, "error", err)
+		return
+	}
+	e.record(t)
 }
 
 func (e *Engine) key(paneID string) core.AgentKey {

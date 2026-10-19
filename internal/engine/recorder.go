@@ -1,0 +1,81 @@
+package engine
+
+import (
+	"maps"
+
+	"github.com/vilosource/herddash/internal/core"
+	"github.com/vilosource/herddash/internal/store"
+)
+
+// Recorder is what the engine needs from the store (AD-4, AD-9): the record's
+// two appends and the engine's own state across Daemon restarts. *store.Store
+// provides it; tests provide a fake. Only the engine goroutine calls it.
+type Recorder interface {
+	Append(t core.Transition) error
+	AppendResyncMarker(m store.ResyncMarker) error
+	LoadServerState(host, server string) (store.ServerState, bool, error)
+	SaveServerState(host, server string, st store.ServerState) error
+}
+
+var _ Recorder = (*store.Store)(nil)
+
+// restore runs once as Run starts, before the first connect: it adopts the
+// epoch and terminal map the previous run saved, so the first snapshot applies
+// the epoch rule (AD-3) against them, and records the Daemon start with the
+// epoch now in force. With no Recorder it does nothing. If the saved state
+// cannot be loaded, recording is off for the whole run: starting at the first
+// epoch and saving it would key new rows like old ones (AD-3). The engine still
+// observes and reports to the Sink.
+func (e *Engine) restore() {
+	if e.store == nil {
+		return
+	}
+	st, found, err := e.store.LoadServerState(e.host, e.server)
+	switch {
+	case err != nil:
+		e.log.Error("server state not loaded; recording is off for this run", "error", err.Error())
+		e.store = nil
+		return
+	case found:
+		e.epoch = st.Epoch
+		e.terminals = st.Terminals
+		// The first snapshot decides the epoch as after a reconnect. No Agent
+		// is tracked yet, so an increment removes nothing.
+		e.everReady = true
+		e.saved, e.savedEpoch, e.savedTerminals = true, st.Epoch, maps.Clone(st.Terminals)
+		e.log.Info("server state loaded", "epoch", st.Epoch, "panes", len(st.Terminals))
+	}
+	m := store.ResyncMarker{Host: e.host, Server: e.server, Epoch: e.epoch, ObservedAt: e.now(), Reason: store.ReasonDaemonStart}
+	if err := e.store.AppendResyncMarker(m); err != nil {
+		e.log.Error("resync marker not recorded", "reason", m.Reason, "error", err.Error())
+	}
+}
+
+// record appends t to the record. A failed write is logged and dropped: it
+// never stops the engine or the Sink.
+func (e *Engine) record(t core.Transition) {
+	if e.store == nil {
+		return
+	}
+	if err := e.store.Append(t); err != nil {
+		e.log.Error("transition not recorded", "pane", t.Key().PaneID, "error", err.Error())
+	}
+}
+
+// saveState saves the epoch and terminal map after an applied snapshot when
+// they differ from what was last saved, or when nothing has been saved yet. A
+// failed save is logged and tried again after the next snapshot.
+func (e *Engine) saveState() {
+	if e.store == nil {
+		return
+	}
+	if e.saved && e.epoch == e.savedEpoch && maps.Equal(e.terminals, e.savedTerminals) {
+		return
+	}
+	st := store.ServerState{Epoch: e.epoch, Terminals: maps.Clone(e.terminals)}
+	if err := e.store.SaveServerState(e.host, e.server, st); err != nil {
+		e.log.Error("server state not saved", "epoch", e.epoch, "error", err.Error())
+		return
+	}
+	e.saved, e.savedEpoch, e.savedTerminals = true, st.Epoch, st.Terminals
+}
