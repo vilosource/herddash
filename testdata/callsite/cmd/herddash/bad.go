@@ -11,9 +11,13 @@ func record(st *store.Store, rec interface{ Append(any) error }) {
 	st.Append(nil)
 	st.AppendResyncMarker(store.ResyncMarker{})
 	st.SaveServerState("h", "s", store.ServerState{Epoch: 1})
+	st.Sweep(nil, 0, nil)
 	keep(rec)
 }
 
-var appendLater = (*store.Store).Append
+var (
+	appendLater = (*store.Store).Append
+	sweepLater  = (*store.Store).Sweep
+)
 
 func keep(any) {}

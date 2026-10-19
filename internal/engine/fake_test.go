@@ -865,8 +865,10 @@ type fakeStore struct {
 	// written, or -1.
 	callsAtMarker int
 
-	appendErr, markerErr, loadErr, saveErr, historyErr error
-	historyReads                                       int
+	appendErr, markerErr, loadErr, saveErr, historyErr, sweepErr error
+	historyReads                                                 int
+	// sweeps is every Sweep call, in order.
+	sweeps []sweepCall
 	// failSaves fails the next n saves with saveErr.
 	failSaves int
 	notify    chan struct{}
@@ -931,6 +933,66 @@ func (f *fakeStore) AppendResyncMarker(m store.ResyncMarker) error {
 	f.markers = append(f.markers, m)
 	f.writes = append(f.writes, fmt.Sprintf("marker %s %d", m.Reason, m.Epoch))
 	return nil
+}
+
+// sweepCall is one Sweep the engine made: its cutoff and present set.
+type sweepCall struct {
+	cutoff  int64
+	present []store.Present
+}
+
+// Sweep notes the call and applies Retention to the rows and markers in
+// memory, as the store does: rows observed before cutoff go, except, for a
+// present key, those at or after its Since (all of them for Since 0) and its
+// latest working row; markers go by age. sweepErr fails it, deleting nothing.
+func (f *fakeStore) Sweep(ctx context.Context, cutoff int64, present []store.Present) (store.SweepResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	defer f.poke()
+	f.sweeps = append(f.sweeps, sweepCall{cutoff: cutoff, present: slices.Clone(present)})
+	f.writes = append(f.writes, "sweep")
+	if f.sweepErr != nil {
+		return store.SweepResult{}, f.sweepErr
+	}
+	since := map[core.AgentKey]int64{}
+	for _, p := range present {
+		since[p.Key] = p.Since
+	}
+	latestWorking := map[core.AgentKey]int{}
+	for i, t := range f.rows {
+		if t.New() == core.StatusWorking {
+			latestWorking[t.Key()] = i
+		}
+	}
+	var r store.SweepResult
+	var kept []core.Transition
+	for i, t := range f.rows {
+		s, ok := since[t.Key()]
+		keep := t.ObservedAt() >= cutoff ||
+			ok && (s == 0 || t.ObservedAt() >= s || latestWorking[t.Key()] == i && t.New() == core.StatusWorking)
+		if keep {
+			kept = append(kept, t)
+		} else {
+			r.Transitions++
+		}
+	}
+	f.rows = kept
+	var markers []store.ResyncMarker
+	for _, m := range f.markers {
+		if m.ObservedAt >= cutoff {
+			markers = append(markers, m)
+		} else {
+			r.ResyncMarkers++
+		}
+	}
+	f.markers = markers
+	return r, nil
+}
+
+func (f *fakeStore) sweepList() []sweepCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.sweeps)
 }
 
 func (f *fakeStore) LoadServerState(host, server string) (store.ServerState, bool, error) {

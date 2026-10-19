@@ -884,3 +884,85 @@ func TestServeRestartKeepsWaiting(t *testing.T) {
 		t.Errorf("second run's Agent line %q, want it to end %q (%d ms after the live row)", line, want, gap)
 	}
 }
+
+func TestServeSweepsRetention(t *testing.T) {
+	// serve passes retention_days (default 90) to the engine: the first
+	// connection's sweep deletes a gone Agent's 100-day-old row and an old
+	// marker, and keeps the recent ones.
+	hermeticEnv(t)
+	f := startFakeHerdr(t)
+	dataDir := filepath.Join(t.TempDir(), "data")
+	if err := os.Mkdir(dataDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dataDir, "herddash.db")
+	st, err := store.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UnixMilli()
+	const day = 24 * 3600 * 1000
+	for i, at := range []int64{now - 100*day, now - 10*day} {
+		tr, err := core.NewTransition(core.TransitionInput{
+			Key:          core.AgentKey{Host: "testhost", Server: "test", Epoch: 9, PaneID: fmt.Sprintf("w9:p%d", i)},
+			AgentProgram: "claude", Profile: "claude", New: core.StatusDone, HerdrVersion: "0.9.5",
+			ObservedAt: at, Provenance: core.ProvenanceLive})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := st.Append(tr); err != nil {
+			t.Fatal(err)
+		}
+		if err := st.AppendResyncMarker(store.ResyncMarker{Host: "testhost", Server: "test", Epoch: 9,
+			ObservedAt: at, Reason: store.ReasonDaemonStart}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var stdout, stderr syncBuffer
+	done := make(chan int, 1)
+	go func() { done <- run(ctx, serveArgs(f, dataDir), &stdout, &stderr) }()
+	waitFor(t, "the agent line", func() bool { return strings.Contains(stdout.String(), "agent      host=testhost") })
+	logPath := filepath.Join(dataDir, "herddash.log")
+	waitFor(t, "the sweep logged", func() bool {
+		b, _ := os.ReadFile(logPath)
+		return strings.Contains(string(b), `"msg":"retention sweep","cutoff"`)
+	})
+	cancel()
+	if code := <-done; code != 0 {
+		t.Fatalf("exit code %d, stderr %q", code, stderr.String())
+	}
+
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	// What is left of the seeded rows, in each table: only the 10-day ones.
+	for _, table := range []string{"transitions", "resync_markers"} {
+		rows, err := db.Query(`SELECT observed_at FROM ` + table + ` WHERE epoch = 9 ORDER BY id`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var left []int64
+		for rows.Next() {
+			var at int64
+			if err := rows.Scan(&at); err != nil {
+				t.Fatal(err)
+			}
+			left = append(left, at)
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
+		}
+		rows.Close()
+		if len(left) != 1 || left[0] != now-10*day {
+			t.Errorf("%s seeded rows left at %v, want only the 10-day one at %d", table, left, now-10*day)
+		}
+	}
+}

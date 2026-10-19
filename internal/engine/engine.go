@@ -43,6 +43,10 @@ type Options struct {
 	// connect and reconnect, resync, disagreeing reconcile) and the engine's
 	// epoch state are written (FR-6, FR-7, AD-3). Nil records nothing.
 	Store Recorder
+	// RetentionDays is Retention, in days (FR-9): with a Store, every
+	// retentionSweepInterval the record is swept of rows older than it that no
+	// present Agent needs. 0 never sweeps.
+	RetentionDays int
 }
 
 // EnvironFunc is the type of Options.Environ.
@@ -114,6 +118,8 @@ type Engine struct {
 	environ  EnvironFunc
 	// store is Options.Store, nil when nothing is recorded.
 	store Recorder
+	// retentionDays is Options.RetentionDays; read-only after New.
+	retentionDays int
 
 	inbox chan any
 	// stopped closes when Run returns.
@@ -258,6 +264,10 @@ type pane struct {
 	// record. A pane tracked later, or after a terminal replacement, is a new
 	// Agent even when it reuses a pane id.
 	seedHistory bool
+	// unrecorded is set once the record may not hold this Agent's fold: a
+	// History read for its first sight or an Append of one of its Transitions
+	// failed. Retention then keeps all its rows (Since 0).
+	unrecorded bool
 	// firstSkipped is set when the Agent's first sight deliberately recorded
 	// nothing (it matched the record), so it was no disagreement.
 	firstSkipped bool
@@ -337,6 +347,11 @@ type (
 	reconcileDueMsg struct {
 		conn uint64
 	}
+	// retentionDueMsg says retentionSweepInterval has elapsed again. The
+	// timer outlives connections, so it carries no conn: a tick while not
+	// connected and ready is skipped.
+	retentionDueMsg struct{}
+
 	agentsQuery struct {
 		reply chan []Agent
 	}
@@ -366,6 +381,7 @@ func New(o Options) *Engine {
 		profiles:         maps.Clone(o.Profiles),
 		environ:          o.Environ,
 		store:            o.Store,
+		retentionDays:    o.RetentionDays,
 		inbox:            make(chan any),
 		stopped:          make(chan struct{}),
 		panes:            map[string]*pane{},
@@ -693,6 +709,8 @@ func (e *Engine) handle(m any) {
 			}
 			e.requestSnapshot()
 		}
+	case retentionDueMsg:
+		e.sweep()
 	case agentsQuery:
 		m.reply <- e.agents()
 	case profileMsg:
@@ -858,6 +876,8 @@ func (e *Engine) onSnapshot(m snapshotMsg) {
 		return
 	}
 	first := !e.ready
+	// The first connection of the run to become ready starts Retention.
+	firstOfRun := first && !e.readyOnce
 	// The epoch rule's outcome, for the connect or reconnect marker; "" when
 	// it did not run.
 	epochDetail := ""
@@ -931,6 +951,9 @@ func (e *Engine) onSnapshot(m snapshotMsg) {
 		e.requestResync(unsubscribed)
 	}
 	e.resyncSettle() // in case the snapshot removed the last pane it waited for
+	if firstOfRun {
+		e.startRetention()
+	}
 }
 
 // decideEpoch applies the epoch rule (AD-3) to the first snapshot after a

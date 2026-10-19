@@ -98,6 +98,7 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 		AllowUnsupportedHerdr: cfg.AllowUnsupportedHerdr(),
 		Profiles:              cfg.ProfileRules(),
 		Store:                 st,
+		RetentionDays:         cfg.RetentionDays(),
 	})
 	e.Run(ctx)
 	logger.Info("herddash stopped")
