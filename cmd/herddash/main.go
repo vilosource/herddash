@@ -42,14 +42,20 @@ never ran herdr 0.9.2 or newer passes a date after the last entry (e.g. tomorrow
 `
 
 func main() {
+	os.Exit(mainCode(os.Args[1:]))
+}
+
+// mainCode is main without the exit, so a test's child process can run the
+// real signal path and report its exit code.
+func mainCode(args []string) int {
 	// Owner-only files from the start (FR-17, AD-9): the data directory is 0700
 	// and the database, its WAL and SHM files, the lock and the log are 0600.
 	// Set here rather than in run, so tests do not change the test process.
 	syscall.Umask(0o077)
 	ctx, stop := signalContext()
-	code := run(ctx, os.Args[1:], os.Stdout, os.Stderr)
+	code := run(ctx, args, os.Stdout, os.Stderr)
 	stop()
-	os.Exit(code)
+	return code
 }
 
 // signalContext returns a context that ends on SIGINT or SIGTERM, which is how
