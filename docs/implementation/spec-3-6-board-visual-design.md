@@ -2,7 +2,7 @@
 title: 'Story 3.6: Board visual design'
 type: 'feature'
 created: '2026-10-20'
-status: 'in-progress'
+status: 'done'
 baseline_commit: '84b8da4b1cf4230b4c6bea1f81b04951b70e0961'
 route: 'dispatch'
 review_loop_iteration: 0
@@ -97,8 +97,8 @@ Story 3.7.
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `docs/design/board-design.md` -- the design note
-- [ ] `docs/design/board.html` -- the static page, with the fixture embedded
+- [x] `docs/design/board-design.md` -- the design note
+- [x] `docs/design/board.html` -- the static page, with the fixture embedded
 
 **Acceptance Criteria:**
 - Given `docs/design/board.html` opened from disk with no network, then it renders every matrix row as described, in light and dark.
@@ -106,9 +106,41 @@ Story 3.7.
 
 ## Implementation Notes
 
+- Verified in headless Chrome at 1440 px and 500 px (the browser's minimum); a 320 px column was checked through a narrowed container, not a 320 px viewport.
+- The strip demo data (herdr 0.8.2, last snapshot 2m 40s earlier) is set in page code; the fixture is unchanged apart from a trailing newline.
+- The embedded fixture is a hand-kept copy of `board-fixture.json`; Story 3.7 should load the real `/api/state` instead.
+- Open for the operator at approval: the fixture's duplicate `wB:p7` key and scrambled pane prefixes (triage 1-2), and the zero-Agent bare Board.
+
 ## Spec Change Log
 
 ## Review Triage Log
+
+| # | Source | Finding | Verdict | Evidence / route |
+|---|--------|---------|---------|------------------|
+| 1 | ECH, BH, VG | Fixture has two Agents with key `devbox/default/1/wB:p7` | medium | Confirmed by parsing the fixture; a live `/api/state` cannot produce it and Story 3.7 keys Boxes by AgentKey; fixing it changes fixture data, which the frozen block forbids; intent gap, asked at the approval checkpoint |
+| 2 | BH | Anonymisation scrambled pane-id prefixes (`wA:p9` in payments-platform, `wB:p7` in knowledge-base) | low | Same root as 1 (fixture data); asked with 1 |
+| 3 | ECH | A loud lower-bound Waiting Time can overflow the status row in a narrow column; the note claims every row ellipsises | medium | `.status-row` is nowrap without overflow handling, so digits are clipped silently; patch |
+| 4 | ECH, BH | The disconnected strip's ticking time is inside an aria-live region | medium | Re-announced every second; patch |
+| 5 | ECH | `headers` index past the end or unordered throws | low | Headers come from the engine; guard adds a branch; rejected |
+| 6 | ECH | `sort_key` of the wrong length compares as equal | low | Produced by the engine; rejected |
+| 7 | ECH | Empty directory, workspace or tab renders `undefined` or a bare `›` | low | AgentView fields can be empty strings; direct fallback; patch |
+| 8 | ECH | `waiting_since` of 0 treated as unknown | low | Direct `== null` fix; patch |
+| 9 | ECH | Note says dark strips are "the same, darkened" but the dark refused strip is lighter | low | Wording; patch |
+| 10 | VG | The page compares `sort_key[4]` as one string; Go compares host, server, numeric epoch, pane id | medium | `internal/core/view.go:215-237`; differs from epoch 10 and on prefix hosts; the page labels this helper as Story 3.7's; patch: compare the key fields, epoch numerically, and say so in the note |
+| 11 | VG, BH | Nothing keeps the embedded fixture in step with the file | low | The fix would add a check to this spec; rejected; noted for Story 3.7 |
+| 12 | BH | Full Context Line reachable only by mouse; focusable Boxes do nothing | medium | `title` only; patch: each Box gets an accessible name carrying the full Context Line and directory, and the note says what focus is for |
+| 13 | BH | The note does not define how the directory is shortened (FR-2) | medium | End-truncation cuts the segment that names the project; patch: define start-truncation keeping the last segment, and name where `~` substitution belongs |
+| 14 | BH | Empty states undefined: no Agents, empty top zone, no lower zone | medium | Note silent; patch the note and page (no rule above a header when the top zone is empty; the zero-Agent board stays bare, since the spec admits no other element, flagged for the operator) |
+| 15 | BH | The "never snapshotted" strip text is coded but not designed | low | Patch the note |
+| 16 | BH | Disconnected plus advisory, which the note specifies, cannot be shown | medium | Strips control is one radio group; patch: a combined option |
+| 17 | BH | Waiting Times on a disconnected Board: keep ticking or freeze? | medium | Unspecified, bears on SM-3; patch: decide in the note (keep ticking, dimmed, with the strip saying the data is old) |
+| 18 | BH | Responsive claims not in the acceptance matrix | low | The fix edits this spec; rejected; 500 px and 1440 px measured, 320 px not seen (Implementation Notes) |
+| 19 | BH | `.dir` font size disagrees with the `--text-meta` token | low | Direct; patch |
+| 20 | BH | A media rule sets the default padding | low | Direct deletion or real narrow gutter; patch |
+| 21 | BH | Workspace repeated in Boxes under a workspace header | low | FR-2 lists workspace and tab in the Box; kept consistent across zones; rejected |
+| 22 | BH | Status mismatch; approval mechanism vague | low | Status mismatch is workflow ordering (false part); patch the note to name the sprint-status action item |
+| 23 | BH | Duration format inconsistent at unit boundaries | low | `1h 04m` vs `2d 3h`; patch: define the format and its boundaries |
+| 24 | BH | `board-fixture.json` lacks a trailing newline | low | Not data; direct; patch |
 
 ## Verification
 
