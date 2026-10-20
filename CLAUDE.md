@@ -84,13 +84,11 @@ to the stored event schema, or a new network surface.
 
 ## Things that will bite you
 
-- **The herdr binary on this machine is 0.9.5, but the live server still runs 0.8.2** until it is
-  restarted, which it cannot be right now because it hosts live agent work. Homebrew has replaced
-  `/opt/homebrew/bin/herdr` with 0.9.5; the server process (`herdr server`, started before the
-  upgrade) is still the 0.8.2 it was launched as. herddash supports 0.9.5 or newer (ADR-0006), so
-  expect to test against the live server behind the dogfooding flag. Run 0.9.5 experiments only
-  in isolation, as `docs/research/herdr-0.9.5-probe.sh` does: `env -i` with its own `HOME`, so
-  the inherited `HERDR_SOCKET_PATH` never reaches it.
+- **The live herdr server on this machine hosts real agent work.** Since its restart on
+  2026-10-20 it runs 0.9.5, the supported minimum (ADR-0006), so herddash needs no dogfooding flag
+  against it. Never stop, restart or experiment on it. A Claude session here usually runs inside
+  one of its panes, so the inherited `HERDR_SOCKET_PATH` points at it: run herdr experiments only
+  in isolation, as `docs/research/herdr-0.9.5-probe.sh` does, under `env -i` with its own `HOME`.
 - **herdr's configuration is owned by an Ansible repository, not by hand.** Do not edit
   `~/.config/herdr/config.toml`. Changes belong in that repository.
 - **Do not install anything as a herdr plugin on this machine.** The plugin registry is managed and
@@ -177,15 +175,26 @@ No npm, no build step for assets. Web assets are embedded in the binary.
 
 ## Repository state
 
-**The skeleton exists** (Story 1.1): the Go module `github.com/vilosource/herddash` with no
-dependencies, `cmd/herddash` with only the `version` subcommand, and the eight
-`internal/{core,engine,herdr,procenv,store,httpapi,importer,config}` packages. Only `internal/core`
-has content, the shared domain types (`AgentKey`, `Status`, `AgentProgram`, `Provenance`, and
-`Transition`, built only through `core.NewTransition`); the rest are package docs naming their
-spine role. `internal/herdr/gen` holds the herdr 0.9.5 wire types, generated from the committed
-schema dump by `go generate ./internal/herdr/gen` (Story 1.3); a test fails if they drift. There
-is no herdr client, store or HTTP yet. `main` and `develop` are kept level; if
-they are not, a `develop` into `main` pull request is open or overdue.
+**Epics 1 and 2 are built, and Epic 3 is through Story 3.6.** `docs/implementation/sprint-status.yaml`
+is the authority on which story is next; each story's spec, with its review triage log, is
+`docs/implementation/spec-<key>.md`. What exists:
+
+- `cmd/herddash`: `serve` (the default), `config`, `import-plugin-log` and `version`.
+- `internal/herdr`: the socket client (one request per connection, per-pane status
+  subscriptions, stream-health signals). `internal/herdr/gen` holds the herdr 0.9.5 wire types,
+  generated from the committed schema dump by `go generate ./internal/herdr/gen`; a test fails if
+  they drift.
+- `internal/engine`: the single-writer actor. It reconnects forever, detects server epochs,
+  resyncs, applies the version gate, resolves Profiles through `internal/procenv`, records
+  Transitions and publishes immutable views.
+- `internal/store`: the SQLite record (`modernc.org/sqlite`, WAL, flock-owned).
+- `internal/httpapi`: the read-only loopback API: `/api/state`, `/events` (SSE) and
+  `/api/agents/{host}/{server}/{epoch}/{pane}/history`.
+- `internal/importer`: the plugin-log backfill.
+
+The Board itself is not served yet: its approved design is `docs/design/board-design.md` and
+`docs/design/board.html`, and Story 3.7 builds it. `main` and `develop` are kept level; if they are
+not, a `develop` into `main` pull request is open or overdue.
 
 The remote is `git@github.com:vilosource/herddash.git`, public, MIT. This repository's git identity
 is **pinned locally** to the GitHub noreply address rather than the machine's global work email, so
