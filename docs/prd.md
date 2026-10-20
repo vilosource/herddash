@@ -210,8 +210,9 @@ workspaces. Below it, Working then Unknown, grouped by workspace. Needs you is v
 Realizes UJ-1.
 
 **Consequences (testable):**
-- A Transition into `blocked` moves that Box to the head of the top zone's Needs you group
-  immediately.
+- A Transition into `blocked` moves that Box into Needs you at its longest-waiting position
+  immediately, so a newly blocked Agent sorts last there (amended 2026-10-20, operator decision;
+  see epics.md Story 3.8).
 - A Transition into `working` moves that Box out of the top zone into its workspace group
   immediately.
 - A `done` Agent becoming `idle` keeps its place and its Waiting Time.

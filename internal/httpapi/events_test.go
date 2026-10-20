@@ -8,6 +8,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -618,5 +620,70 @@ func TestEventsRules(t *testing.T) {
 	defer f.mu.Unlock()
 	if len(f.chans) != 0 {
 		t.Errorf("%d subscriptions taken by refused requests", len(f.chans))
+	}
+}
+
+// transitionBudget is how long a published Transition may take to reach an
+// open /events client (Story 3.8, FR-4).
+const transitionBudget = time.Second
+
+// TestEventsPublicationToDeliveryBudget publishes Transitions, as the engine
+// does after recording each, and checks every one reaches an open /events
+// client, as a transition event carrying the Agent's new view, within one
+// second of publication. The budget from recording to delivery, through the
+// real engine and a fake herdr, is cmd/herddash's TestServeEvents.
+func TestEventsPublicationToDeliveryBudget(t *testing.T) {
+	f := &fakeEngine{view: eventsView()}
+	_, srv, _ := newEvents(t, f)
+	s := openStream(t, srv, nil)
+	if e := s.next(t); e.event != "state" {
+		t.Fatalf("first event %q, want state", e.event)
+	}
+	c := f.sub(t, 0)
+
+	v := eventsView()
+	const i = 1
+	agent := v.Agents[i]
+	steps := []core.Status{core.StatusWorking, core.StatusBlocked, core.StatusDone, core.StatusIdle, core.StatusBlocked}
+	if agent.Status == steps[0] {
+		t.Fatalf("fixture agent is already %s", agent.Status)
+	}
+	for n, st := range steps {
+		prev := agent.Status
+		tr, err := core.NewTransition(core.TransitionInput{
+			Key: agent.Key, AgentProgram: agent.AgentProgram, Profile: agent.Profile, Previous: &prev, New: st,
+			ObservedAt: int64(1000 + n), Provenance: core.ProvenanceLive,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		agent.Status = st
+		v.Seq++
+		v.Agents = slices.Clone(v.Agents)
+		v.Agents[i] = agent
+		start := time.Now()
+		send(t, c, engine.Publication{View: v, Changes: []engine.Change{{Kind: engine.ChangeTransition, Transition: tr, Agent: agent}}})
+		e := s.next(t)
+		if took := time.Since(start); took > transitionBudget {
+			t.Fatalf("transition %d (%s to %s) delivered after %v, want within %v", n, prev, st, took, transitionBudget)
+		}
+		if e.event != "transition" || e.id != strconv.FormatUint(v.Seq, 10) {
+			t.Fatalf("event %q id %q, want transition id %d", e.event, e.id, v.Seq)
+		}
+		var got struct {
+			Key        core.AgentKey  `json:"key"`
+			Transition wireTransition `json:"transition"`
+			Agent      struct {
+				Key    core.AgentKey `json:"key"`
+				Status core.Status   `json:"status"`
+			} `json:"agent"`
+		}
+		if err := json.Unmarshal([]byte(e.data), &got); err != nil {
+			t.Fatal(err)
+		}
+		if got.Key != agent.Key || got.Agent.Key != agent.Key || got.Agent.Status != st ||
+			got.Transition.New != st || got.Transition.Previous == nil || *got.Transition.Previous != prev {
+			t.Errorf("transition %d: %+v, want %s to %s for %+v", n, got, prev, st, agent.Key)
+		}
 	}
 }
