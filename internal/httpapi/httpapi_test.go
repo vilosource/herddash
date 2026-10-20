@@ -54,7 +54,7 @@ func testView() engine.View {
 func newHandler(t *testing.T) (http.Handler, engine.View) {
 	t.Helper()
 	v := testView()
-	return New(Options{View: func() engine.View { return v }}), v
+	return New(Options{View: func() engine.View { return v }, Subscribe: noSubscribe}), v
 }
 
 func do(h http.Handler, method, target, host string, hdr map[string]string) *httptest.ResponseRecorder {
@@ -159,7 +159,7 @@ func TestState(t *testing.T) {
 // no herdr client or store, so no request can reach either.
 func TestStateReadsEachRequest(t *testing.T) {
 	var seq uint64
-	h := New(Options{View: func() engine.View { seq++; return engine.View{Seq: seq} }})
+	h := New(Options{View: func() engine.View { seq++; return engine.View{Seq: seq} }, Subscribe: noSubscribe})
 	for want := uint64(1); want <= 2; want++ {
 		w := do(h, http.MethodGet, "/api/state", "localhost", nil)
 		var v struct {
@@ -222,7 +222,7 @@ func TestHead(t *testing.T) {
 
 func TestUnknown(t *testing.T) {
 	h, _ := newHandler(t)
-	for _, p := range []string{"/", "/nope", "/api/state/x", "/api/state/", "/api", "/assets/", "/events",
+	for _, p := range []string{"/", "/nope", "/api/state/x", "/api/state/", "/api", "/assets/", "/events/", "/api/events",
 		"/api/agents/h/s/1/w1:p1/history"} {
 		checkError(t, do(h, http.MethodGet, p, "127.0.0.1:7318", nil), http.StatusNotFound, "not_found")
 	}
@@ -255,5 +255,19 @@ func TestNewNilViewPanics(t *testing.T) {
 			t.Errorf("recovered %v, want a panic naming the nil View", r)
 		}
 	}()
-	New(Options{})
+	New(Options{Subscribe: noSubscribe})
+}
+
+func TestNewNilSubscribePanics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil || !strings.Contains(r.(string), "Subscribe is nil") {
+			t.Errorf("recovered %v, want a panic naming the nil Subscribe", r)
+		}
+	}()
+	New(Options{View: func() engine.View { return engine.View{} }})
+}
+
+// noSubscribe is a Subscribe whose subscription never delivers anything.
+func noSubscribe(int) (*engine.ViewSubscription, func()) {
+	return &engine.ViewSubscription{C: make(chan engine.Publication)}, func() {}
 }

@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/vilosource/herddash/internal/engine"
 )
@@ -15,6 +17,10 @@ type Options struct {
 	// View returns the engine's latest published View. It must be safe to
 	// call from any goroutine (engine.Engine.View is).
 	View func() engine.View
+	// Subscribe starts a subscription to every publication from now on, with
+	// a channel holding buffer of them, and returns the func that ends it
+	// (engine.Engine.Subscribe). Each /events stream takes one.
+	Subscribe func(buffer int) (*engine.ViewSubscription, func())
 	// Logger receives the handler's own failures; nil discards them.
 	Logger *slog.Logger
 }
@@ -26,34 +32,74 @@ const (
 	codeNotFound         = "not_found"
 )
 
-// pathState is the current-state route.
-const pathState = "/api/state"
+// The routes.
+const (
+	// pathState is the current-state route.
+	pathState = "/api/state"
+	// pathEvents is the live event stream.
+	pathEvents = "/events"
+)
 
-// allowGetHead is the Allow header of every 405: the surface is GET only.
-const allowGetHead = "GET, HEAD"
+// The Allow headers of a 405: the surface is GET only, and the event stream
+// does not answer HEAD.
+const (
+	allowGetHead = "GET, HEAD"
+	allowGet     = "GET"
+)
 
 // New returns the read-only HTTP surface (AD-6, ADR-0007). Every request is
 // first checked for a loopback Host header (DNS rebinding); then only
-// GET or HEAD on a known route is served. It reads only through opts.View:
-// it never calls herdr and never touches the store. It never sends a CORS
-// header. It panics if opts.View is nil.
-func New(opts Options) http.Handler {
+// GET (or HEAD, except on /events) on a known route is served. It reads only
+// through opts.View and opts.Subscribe: it never calls herdr and never touches
+// the store. It never sends a CORS header. It panics if opts.View or
+// opts.Subscribe is nil.
+func New(opts Options) *Handler {
 	if opts.View == nil {
 		panic("httpapi.New: Options.View is nil")
+	}
+	if opts.Subscribe == nil {
+		panic("httpapi.New: Options.Subscribe is nil")
 	}
 	log := opts.Logger
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	return &handler{view: opts.View, log: log}
+	return &Handler{
+		view:         opts.View,
+		subscribe:    opts.Subscribe,
+		log:          log,
+		stop:         make(chan struct{}),
+		keepalive:    keepaliveInterval,
+		writeTimeout: streamWriteTimeout,
+	}
 }
 
-type handler struct {
-	view func() engine.View
-	log  *slog.Logger
+// Handler is the read-only HTTP surface New returns.
+type Handler struct {
+	view      func() engine.View
+	subscribe func(buffer int) (*engine.ViewSubscription, func())
+	log       *slog.Logger
+
+	// stop is closed, once, by CloseStreams.
+	stop     chan struct{}
+	stopOnce sync.Once
+
+	// keepalive and writeTimeout are keepaliveInterval and
+	// streamWriteTimeout; tests lower them.
+	keepalive    time.Duration
+	writeTimeout time.Duration
 }
 
-func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+// CloseStreams ends every open /events stream, and makes every later one end
+// at once. serve registers it with http.Server.RegisterOnShutdown, since
+// Shutdown does not end a long-lived response by itself. It may be called any
+// number of times, from any goroutine.
+func (h *Handler) CloseStreams() {
+	h.stopOnce.Do(func() { close(h.stop) })
+}
+
+// ServeHTTP implements http.Handler.
+func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	hd := w.Header()
 	hd.Set("Cache-Control", "no-store")
 	hd.Set("X-Content-Type-Options", "nosniff")
@@ -62,7 +108,17 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusForbidden, codeHostNotAllowed, "the Host header must be localhost, 127.0.0.1 or [::1]")
 		return
 	}
-	if r.URL.Path != pathState {
+	switch r.URL.Path {
+	case pathState:
+	case pathEvents:
+		if r.Method != http.MethodGet {
+			hd.Set("Allow", allowGet)
+			writeError(w, r, http.StatusMethodNotAllowed, codeMethodNotAllowed, "only GET is allowed")
+			return
+		}
+		h.serveEvents(w, r)
+		return
+	default:
 		writeError(w, r, http.StatusNotFound, codeNotFound, "no such route")
 		return
 	}
