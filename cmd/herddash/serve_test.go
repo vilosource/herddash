@@ -1154,3 +1154,126 @@ func TestServePortInUse(t *testing.T) {
 		t.Errorf("herdr was asked %d times; the engine started", n)
 	}
 }
+
+// TestServeEvents runs serve against the fake herdr and opens /events: the
+// stream starts with state, and a live status change arrives as a transition
+// event within one second. Then, with the stream still open, ctx ends: serve
+// returns well before shutdownTimeout, because Shutdown ends the stream.
+func TestServeEvents(t *testing.T) {
+	hermeticEnv(t)
+	f := startFakeHerdr(t)
+	dataDir := filepath.Join(t.TempDir(), "data")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var stdout, stderr syncBuffer
+	done := make(chan int, 1)
+	go func() { done <- run(ctx, serveArgs(f, dataDir), &stdout, &stderr) }()
+	addr := listenAddr(t, dataDir)
+	waitFor(t, "the status subscription", func() bool { return f.statusSubs.Load() >= 1 })
+	waitFor(t, "the read after the subscription", func() bool { return f.snapshots.Load() >= 2 })
+
+	reqCtx, reqCancel := context.WithCancel(context.Background())
+	defer reqCancel()
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, "http://"+addr+"/events", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr := &http.Transport{DisableKeepAlives: true}
+	defer tr.CloseIdleConnections()
+	resp, err := (&http.Client{Transport: tr}).Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Type") != "text/event-stream" {
+		t.Fatalf("status %d, Content-Type %q", resp.StatusCode, resp.Header.Get("Content-Type"))
+	}
+	type event struct{ name, data string }
+	events := make(chan event, 100)
+	ended := make(chan struct{})
+	go func() {
+		defer close(ended)
+		r := bufio.NewReader(resp.Body)
+		var e event
+		for {
+			line, err := r.ReadString('\n')
+			if err != nil {
+				return
+			}
+			line = strings.TrimSuffix(line, "\n")
+			switch {
+			case line == "":
+				select {
+				case events <- e:
+				case <-reqCtx.Done():
+					return
+				}
+				e = event{}
+			case strings.HasPrefix(line, "event: "):
+				e.name = line[len("event: "):]
+			case strings.HasPrefix(line, "data: "):
+				e.data = line[len("data: "):]
+			}
+		}
+	}()
+	select {
+	case e := <-events:
+		if e.name != "state" || !strings.Contains(e.data, `"pane_id":"w1:p1"`) {
+			t.Fatalf("first event %q %s, want state with the fake's Agent", e.name, e.data)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no state event")
+	}
+
+	start := time.Now()
+	select {
+	case f.push <- struct{}{}:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the fake herdr did not take the push")
+	}
+	deadline := time.After(time.Second)
+	for got := false; !got; {
+		select {
+		case e := <-events:
+			if e.name != "transition" {
+				continue
+			}
+			got = true
+			for _, s := range []string{`"pane_id":"w1:p1"`, `"previous":"working"`, `"new":"blocked"`, `"provenance":"live"`, `"attention_class":"needs_you"`} {
+				if !strings.Contains(e.data, s) {
+					t.Errorf("transition %s lacks %s", e.data, s)
+				}
+			}
+		case <-deadline:
+			t.Fatalf("no transition event within 1 s of the live change")
+		}
+	}
+	t.Logf("transition after %v", time.Since(start))
+
+	start = time.Now()
+	cancel()
+	select {
+	case code := <-done:
+		if code != 0 {
+			t.Fatalf("exit code %d, stderr %q", code, stderr.String())
+		}
+	case <-time.After(shutdownTimeout):
+		t.Fatal("serve did not return within shutdownTimeout with /events open")
+	}
+	t.Logf("shutdown took %v", time.Since(start))
+	if d := time.Since(start); d > shutdownTimeout/2 {
+		t.Errorf("serve took %v to return with /events open", d)
+	}
+	// Drain events while waiting, so the reader never blocks on a full channel.
+	timeout := time.After(5 * time.Second)
+	for open := true; open; {
+		select {
+		case <-ended:
+			open = false
+		case <-events:
+		case <-timeout:
+			t.Error("the stream is still open after serve returned")
+			open = false
+		}
+	}
+}

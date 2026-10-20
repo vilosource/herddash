@@ -45,9 +45,10 @@ const (
 // directory, database and listen errors before the engine starts, and for the
 // HTTP server failing while serving, which stops the engine. When ctx ends,
 // the HTTP server shuts down gracefully first, and only then is the engine,
-// which runs under its own context, stopped and waited for. Story 3.4's
-// long-lived /events connections must be ended on shutdown
-// (RegisterOnShutdown), or Shutdown will wait out its timeout.
+// which runs under its own context, stopped and waited for. Shutdown ends
+// every open /events stream through the handler's CloseStreams, registered
+// with RegisterOnShutdown; without it Shutdown would wait out its timeout on
+// those long-lived responses.
 func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("herddash serve", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -137,11 +138,13 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 		RetentionDays:         cfg.RetentionDays(),
 		Home:                  home,
 	})
+	h := httpapi.New(httpapi.Options{View: e.View, Subscribe: e.Subscribe, Logger: logger})
 	srv := &http.Server{
-		Handler:           httpapi.New(httpapi.Options{View: e.View, Logger: logger}),
+		Handler:           h,
 		ReadHeaderTimeout: readHeaderTimeout,
 		ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelWarn),
 	}
+	srv.RegisterOnShutdown(h.CloseStreams)
 	// The engine runs under its own context so that, when ctx ends, the HTTP
 	// server is shut down before the engine stops.
 	engineCtx, stopEngine := context.WithCancel(context.WithoutCancel(ctx))
