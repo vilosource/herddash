@@ -52,3 +52,6 @@
 - source_spec: `docs/implementation/spec-3-8-the-board-stays-live.md`
   summary: Story 3.9's connection strip must also show when the Board itself has lost the Daemon's /events stream (it is reconnecting), not only herdr disconnected per ConnectionTruth.
   evidence: ConnectionTruth comes from the Daemon, so it cannot report the Daemon down; while the Board waits out its backoff (up to 30 s) it shows the last model with ticking Waiting Times and no sign it is stale.
+- source_spec: `docs/implementation/spec-3-9-connection-and-version-strips.md`
+  summary: Run the Board's headless-browser check (board.mjs drawing: strips, dimming, refused hiding, live updates, reconnect) in CI, not only by hand.
+  evidence: Stories 3.7-3.9 each verified board.mjs only in a manual headless-Chrome run; node --test covers order.mjs alone. ubuntu runners ship Chrome, and Node 22's built-in WebSocket can drive it over CDP without npm, but wiring it into CI is work no story plans.

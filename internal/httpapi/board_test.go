@@ -101,6 +101,14 @@ func TestBoardPage(t *testing.T) {
 			t.Errorf("%s fetches something other than /events", rt.path)
 		}
 	}
+	// The strips are one polite, non-atomic live region inside a header,
+	// before the Boxes in reading order.
+	header := strings.Index(page, "<header")
+	strips := strings.Index(page, `<div class="strips" id="strips" role="status" aria-live="polite" aria-atomic="false">`)
+	end := strings.Index(page, "</header>")
+	if header < 0 || strips < header || end < strips || end > strings.Index(page, `id="board"`) {
+		t.Error("page lacks the strips' polite, non-atomic live region in a header before the Board")
+	}
 	// The CSP forbids inline script and style: the page must carry none.
 	for _, s := range []string{"<style", "style=", "<script>"} {
 		if strings.Contains(page, s) {
@@ -156,7 +164,8 @@ func TestBoardBadHost(t *testing.T) {
 }
 
 // TestBoardServesEveryFile walks web/: every file but the node tests is
-// served (index.html at /, the rest under /assets/), and no test file is.
+// served (index.html at /, the rest under /assets/), and no test file is,
+// nor anything in web/check/ (hand-run checks).
 func TestBoardServesEveryFile(t *testing.T) {
 	h, _ := newHandler(t)
 	entries, err := os.ReadDir("web")
@@ -166,6 +175,25 @@ func TestBoardServesEveryFile(t *testing.T) {
 	tests := 0
 	for _, e := range entries {
 		name := e.Name()
+		if e.IsDir() {
+			if name != "check" {
+				t.Errorf("unexpected directory web/%s", name)
+				continue
+			}
+			checks, err := os.ReadDir("web/check")
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, c := range checks {
+				if w := do(h, http.MethodGet, "/assets/check/"+c.Name(), "localhost", nil); w.Code != http.StatusNotFound {
+					t.Errorf("check file %s: status %d, want 404", c.Name(), w.Code)
+				}
+				if _, err := web.ReadFile("web/check/" + c.Name()); err == nil {
+					t.Errorf("check file %s is embedded", c.Name())
+				}
+			}
+			continue
+		}
 		p := "/assets/" + name
 		if name == "index.html" {
 			p = "/"
