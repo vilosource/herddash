@@ -109,9 +109,17 @@ Story 3.7.
 - Verified in headless Chrome at 1440 px and 500 px (the browser's minimum); a 320 px column was checked through a narrowed container, not a 320 px viewport.
 - The strip demo data (herdr 0.8.2, last snapshot 2m 40s earlier) is set in page code; the fixture is unchanged apart from a trailing newline.
 - The embedded fixture is a hand-kept copy of `board-fixture.json`; Story 3.7 should load the real `/api/state` instead.
-- Open for the operator at approval: the fixture's duplicate `wB:p7` key and scrambled pane prefixes (triage 1-2), and the zero-Agent bare Board.
+- Operator approved the design on 2026-10-20 (see Spec Change Log); the zero-Agent bare Board stands as designed.
 
 ## Spec Change Log
+
+- **2026-10-20, operator at the approval checkpoint.** The operator approved the design as is,
+  kept Needs you ordered longest-waiting first (PR #32's decision), and authorised changing the
+  fixture's data despite the frozen "do not change its data": agent 0 `wA:p9` became `wB:p9` and
+  the agy agent's duplicate `wB:p7` became `wA:p7`, so every AgentKey is unique and pane-id
+  prefixes match their workspaces (`wA` knowledge-base, `wB` payments-platform, `wC` ops). The
+  embedded copy in `board.html` was changed identically; the sort order is unchanged because
+  the affected Agents already differ earlier in their sort keys. Resolves triage 1-2.
 
 ## Review Triage Log
 

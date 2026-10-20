@@ -9,7 +9,7 @@
     "host": "devbox",
     "server": "default",
     "epoch": 1,
-    "pane_id": "wA:p9"
+    "pane_id": "wB:p9"
    },
    "agent_program": "claude",
    "profile": "cldw",
@@ -28,7 +28,7 @@
     0,
     0,
     1792496160000,
-    "devbox/default/1/wA:p9"
+    "devbox/default/1/wB:p9"
    ]
   },
   {
@@ -414,7 +414,7 @@
     "host": "devbox",
     "server": "default",
     "epoch": 1,
-    "pane_id": "wB:p7"
+    "pane_id": "wA:p7"
    },
    "agent_program": "agy",
    "profile": "agy",
@@ -433,7 +433,7 @@
     2,
     2,
     1792499100000,
-    "devbox/default/1/wB:p7"
+    "devbox/default/1/wA:p7"
    ]
   },
   {
