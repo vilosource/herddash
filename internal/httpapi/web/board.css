@@ -1,0 +1,176 @@
+/* The Board (Story 3.7), in the design the operator approved on 2026-10-20:
+   docs/design/board-design.md and docs/design/board.html. System fonts only.
+   The connection and version strips are Story 3.9's. */
+
+/* ---- Tokens: light (default) ---- */
+:root {
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+
+  --space-1: 0.25rem; --space-2: 0.5rem; --space-3: 0.75rem;
+  --space-4: 1rem;    --space-5: 1.5rem; --space-6: 2rem;
+
+  --text-label: 0.8125rem;   /* class label, workspace header */
+  --text-meta: 0.875rem;     /* directory, workspace and tab */
+  --text-body: 1rem;         /* Context Line, quiet Waiting Time */
+  --text-heading: 1.0625rem; /* profile · program */
+  --text-time: 1.25rem;      /* Finished Waiting Time */
+  --text-time-loud: 2rem;    /* Needs you Waiting Time */
+  --text-time-loud-narrow: 1.5rem; /* the same, in a Box narrower than 18.5rem */
+
+  --box-min: 17rem;   /* narrowest column before the grid drops one */
+  --box-h: 10.5rem;   /* every Box, whatever its content: 5 rows + gaps + padding */
+  --radius: 0.5rem;
+
+  --bg: #F3F4F6;
+  --surface: #FFFFFF;
+  --ink: #16191F;
+  --ink-muted: #4B5361;
+  --ink-faint: #646C79;
+  --border: #D3D7DE;
+  --border-quiet: #C4C9D1;
+
+  --needs-bg: #B42318;
+  --needs-ink: #FFFFFF;
+  --needs-ink-2: #FFE1DC;
+  --needs-ring: #7A140D;
+
+  --finished-accent: #17663F;
+  --finished-edge: #1F8A55;
+
+  --focus: #1D4ED8;
+}
+
+/* ---- Tokens: dark ---- */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0E1014; --surface: #1A1E25; --ink: #E9EBEF; --ink-muted: #A7AEBA; --ink-faint: #8B93A0;
+    --border: #2D323C; --border-quiet: #3A404B;
+    --needs-bg: #FF7A59; --needs-ink: #1A0703; --needs-ink-2: #3D1307; --needs-ring: #FFB199;
+    --finished-accent: #5BD69A; --finished-edge: #3FB37B;
+    --focus: #7AA2FF;
+  }
+}
+
+/* ---- Page ---- */
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: var(--text-body);
+  line-height: 1.5;
+}
+:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+
+/* ---- Board: two zones ---- */
+.board { padding: var(--space-4); }
+.zone + .zone { margin-top: var(--space-6); }
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--box-min)), 1fr));
+  gap: var(--space-3);
+}
+/* Lower zone: one thin workspace header per group. The first one also draws the zone line. */
+.group + .group { margin-top: var(--space-5); }
+.ws-header {
+  margin: 0 0 var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border);
+  color: var(--ink-muted);
+  font-size: var(--text-label);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  line-height: 1.25rem;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* Empty top zone: the first workspace header draws no separator rule. */
+.board > .zone:first-child > .group:first-of-type > .ws-header { border-top: 0; padding-top: 0; }
+
+/* ---- Box: fixed height, five fixed rows ---- */
+.box {
+  container-type: inline-size;
+  height: var(--box-h);
+  overflow: hidden;
+  display: grid;
+  grid-template-rows: 2.25rem 1.5rem 1.5rem 1.25rem 1.25rem;
+  row-gap: var(--space-1);
+  align-content: start;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--ink-muted);
+}
+.box > * { min-width: 0; margin: 0; }
+.line { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.status-row { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-3); align-self: center; min-width: 0; }
+.status-row .class { flex: 0 0 auto; }
+.class {
+  font-size: var(--text-label);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.wait {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--text-body);
+  line-height: 1;
+  white-space: nowrap;
+}
+.heading { font-size: var(--text-heading); font-weight: 600; line-height: 1.5rem; color: var(--ink); }
+.context { font-size: var(--text-body); line-height: 1.5rem; }
+.dir, .where { font-size: var(--text-meta); line-height: 1.25rem; }
+/* Directory truncates from the start, so the last segment (the project) stays visible. */
+.dir { font-family: var(--font-mono); direction: rtl; text-align: left; }
+.dir > bdi { direction: ltr; unicode-bidi: isolate; }
+
+/* Needs you: dominant. Filled, heavy ring, uppercase label, largest type. Never colour alone. */
+.box--needs_you {
+  background: var(--needs-bg);
+  color: var(--needs-ink-2);
+  border: 3px solid var(--needs-ring);
+  padding: calc(var(--space-3) - 2px) calc(var(--space-4) - 2px);
+}
+.box--needs_you .class { color: var(--needs-ink); font-size: var(--text-meta); }
+.box--needs_you .wait { color: var(--needs-ink); font-size: var(--text-time-loud); font-weight: 800; }
+/* A narrow column steps the loud time down so "≥ 23h 59m" still fits; ellipsis is the last resort. */
+@container (max-width: 18.5rem) { .box--needs_you .wait { font-size: var(--text-time-loud-narrow); } }
+.box--needs_you .heading,
+.box--needs_you .context { color: var(--needs-ink); }
+.box--needs_you .context { font-weight: 600; }
+
+/* Finished: quieter. Raised surface, coloured leading edge, labelled. */
+.box--finished {
+  background: var(--surface);
+  color: var(--ink-muted);
+  border-left: 6px solid var(--finished-edge);
+  padding-left: calc(var(--space-4) - 5px);
+}
+.box--finished .class { color: var(--finished-accent); }
+.box--finished .wait { color: var(--ink); font-size: var(--text-time); font-weight: 600; }
+.box--finished .context { color: var(--ink); }
+
+/* Working and Unknown: recede. Flush with the page, muted text, regular weight. */
+.box--working .class,
+.box--unknown .class { color: var(--ink-muted); font-weight: 600; }
+.box--working .heading,
+.box--unknown .heading { color: var(--ink-muted); font-weight: 500; }
+.box--unknown { border-style: dashed; border-color: var(--border-quiet); }
+/* An idle Agent never seen working: no Waiting Time emphasis at all. */
+.box--never-working .wait { color: var(--ink-faint); font-size: var(--text-meta); }
+.wait--none { color: var(--ink-faint); }
+
+@media (prefers-reduced-motion: no-preference) {
+  .box { transition: opacity 200ms ease, filter 200ms ease; }
+}
+
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}

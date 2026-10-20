@@ -46,3 +46,6 @@
 - source_spec: `docs/implementation/spec-2-2-record-every-transition.md`
   summary: Story 2.3 must record the epoch decided by the first snapshot after a Daemon start (the Reconnected report), since the daemon_start marker carries the epoch saved before that decision.
   evidence: Story 2.2 review; TestServeRecords' second run writes its rows under epoch 2 while its daemon_start marker says epoch 1.
+- source_spec: `docs/implementation/spec-3-7-the-board-renders-every-agent.md`
+  summary: Story 3.8 must reopen the stream when EventSource closes after a non-200 /events reply (503 during a Daemon restart), and keep keyboard focus across re-renders by AgentKey.
+  evidence: EventSource does not retry after a non-200 response; Story 3.7's render replaces every Box on each state event.
