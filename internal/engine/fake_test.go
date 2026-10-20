@@ -749,12 +749,22 @@ func startEngine(t *testing.T, fake *fakeClient) *harness {
 // first; opts may be nil.
 func startEngineWith(t *testing.T, fake *fakeClient, opts func(*Options, *recorder)) *harness {
 	t.Helper()
+	return startEngineBefore(t, fake, opts, nil)
+}
+
+// startEngineBefore is startEngineWith, calling before (unless nil) on the
+// new engine before it runs.
+func startEngineBefore(t *testing.T, fake *fakeClient, opts func(*Options, *recorder), before func(*Engine)) *harness {
+	t.Helper()
 	rec := newRecorder()
 	o := Options{Host: "mac", Server: "default", Client: fake, Sink: rec, Clock: testClock()}
 	if opts != nil {
 		opts(&o, rec)
 	}
 	e := New(o)
+	if before != nil {
+		before(e)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	h := &harness{t: t, fake: fake, rec: rec, engine: e, cancel: cancel, done: make(chan struct{})}
 	go func() {

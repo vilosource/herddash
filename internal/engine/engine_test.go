@@ -103,10 +103,12 @@ func TestLiveChange(t *testing.T) {
 	h.lifecycle(core.LifecycleEvent{Kind: core.LifecycleClosed, PaneID: "w1:p1"})
 	h.rec.expect(t, "agent w1:p1 claude working", "agent w1:p2 claude idle", "transition w1:p1 claude working->blocked live", "removed w1:p1")
 	// One clock reading per report, in order: the gate (not a line here), the
-	// two Agents, the Transition, the removal.
-	want := []int64{clockAt(2), clockAt(3), clockAt(4), clockAt(5)}
-	if got := h.rec.observedTimes(); !slices.Equal(got, want) {
-		t.Errorf("observed_at %v, want %v", got, want)
+	// first snapshot's last_snapshot_at, the two Agents; then the reads that
+	// follow the status subscriptions, each one reading; then the Transition
+	// and the removal, one after the other.
+	got := h.rec.observedTimes()
+	if len(got) != 4 || got[0] != clockAt(3) || got[1] != clockAt(4) || got[2] <= got[1] || got[3] != got[2]+1000 {
+		t.Errorf("observed_at %v, want %d, %d, then two consecutive readings", got, clockAt(3), clockAt(4))
 	}
 }
 
