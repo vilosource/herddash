@@ -49,3 +49,6 @@
 - source_spec: `docs/implementation/spec-3-7-the-board-renders-every-agent.md`
   summary: Story 3.8 must reopen the stream when EventSource closes after a non-200 /events reply (503 during a Daemon restart), and keep keyboard focus across re-renders by AgentKey.
   evidence: EventSource does not retry after a non-200 response; Story 3.7's render replaces every Box on each state event.
+- source_spec: `docs/implementation/spec-3-8-the-board-stays-live.md`
+  summary: Story 3.9's connection strip must also show when the Board itself has lost the Daemon's /events stream (it is reconnecting), not only herdr disconnected per ConnectionTruth.
+  evidence: ConnectionTruth comes from the Daemon, so it cannot report the Daemon down; while the Board waits out its backoff (up to 30 s) it shows the last model with ticking Waiting Times and no sign it is stale.

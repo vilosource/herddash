@@ -729,7 +729,7 @@ So that I never reload it and it never drifts (FR-1, FR-3, FR-4, AD-7).
 
 **Given** an Agent appears, changes or disappears in herdr
 **When** its event arrives
-**Then** its Box is added, moved or removed without a reload, a Transition into `blocked` moves it to the head of Needs you, a Transition into `working` moves it out of the top zone into its workspace group, and a `done` Agent turning `idle` keeps its place and its Waiting Time
+**Then** its Box is added, moved or removed without a reload, a Transition into `blocked` moves it into Needs you at its longest-waiting position (a newly blocked Agent sorts last there, as the operator confirmed on 2026-10-20), a Transition into `working` moves it out of the top zone into its workspace group, and a `done` Agent turning `idle` keeps its place and its Waiting Time
 
 **Given** the stream drops or the Daemon restarts
 **When** the Board notices

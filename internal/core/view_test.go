@@ -159,6 +159,29 @@ func TestSortKeyLessKey(t *testing.T) {
 	}
 }
 
+// TestNewlyBlockedSortsLast checks that, of two blocked Agents in Needs you,
+// the one whose class began later sorts after the earlier one: a newly
+// blocked Agent sorts last there (operator decision 2026-10-20, FR-3). Its
+// pane id would sort first, so only the class start decides.
+func TestNewlyBlockedSortsLast(t *testing.T) {
+	blocked := func(pane string, since int64) AgentView {
+		return NewAgentView(AgentViewInput{
+			Key: key(pane), AgentProgram: "claude", Profile: "cldp", Status: StatusBlocked,
+			Fold: FoldResult{Known: true, Status: StatusBlocked, Class: ClassNeedsYou, Since: since,
+				SinceProvenance: ProvenanceLive, EverWorking: true},
+			Context: PaneContext{WorkspacePosition: 1},
+		})
+	}
+	earlier := blocked("w1:p9", 100)
+	newer := blocked("w1:p1", 200)
+	if earlier.Class != ClassNeedsYou || newer.Class != ClassNeedsYou {
+		t.Fatalf("classes %s and %s, want needs_you", earlier.Class, newer.Class)
+	}
+	if !earlier.SortKey.Less(newer.SortKey) || newer.SortKey.Less(earlier.SortKey) {
+		t.Errorf("newly blocked %+v sorts before the earlier %+v", newer.SortKey, earlier.SortKey)
+	}
+}
+
 func TestNewAgentView(t *testing.T) {
 	k := AgentKey{Host: "mac", Server: "default", Epoch: 3, PaneID: "w1:p2"}
 	v := NewAgentView(AgentViewInput{

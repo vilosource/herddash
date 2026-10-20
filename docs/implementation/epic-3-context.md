@@ -4,7 +4,7 @@
 
 ## Goal
 
-Put the product in front of the operator: one read-only page, open all day beside the terminal, with one Box per Agent and the Agent that has needed the operator longest at the top. The page is served on loopback from the engine's published view, and the same view feeds a read-only API and event stream that any later surface can use. The Board is what herddash is measured by, and its restraint is the differentiator. It has no terminal, no prompt input and no pane control. Epics 1 and 2 already provide the parts the Board reads from. `core` has `ClassOf`, `Fold` and `FoldResult.Add`, `WaitingTime`, `Heading` and `ProfileUnresolved`. The engine keeps a fold per Agent and exposes `Agent{Key, AgentProgram, Profile, Status, Context (PaneContext: ProjectDir, WorkspaceLabel, TabLabel, WorkspacePosition, PaneTitle), Class, WaitingSince, WaitingExact}`. Epic 2 built the store's history reads, resync markers and the gate decision. There is no `AgentView`, sort key, Context Line, ConnectionTruth, published view or HTTP code yet; `internal/httpapi` is only a package doc.
+Put the product in front of the operator: one read-only page, open all day beside the terminal, with one Box per Agent and the Agent that has needed the operator longest at the top. The page is served on loopback from the engine's published view, and the same view feeds a read-only API and event stream that any later surface can use. The Board is what herddash is measured by, and its restraint is the differentiator. It has no terminal, no prompt input and no pane control. Stories 3.1 to 3.7 are done: core's `AgentView`, Context Line and sort key with its golden fixture; the engine's published view and change lists; `/api/state`; the `/events` SSE stream; per-Agent history; the operator-approved Board design under `docs/design/` (`board-design.md`, `board.html`, `board-fixture.json`); and the Board at `/`, built from `internal/httpapi/web/{order.mjs,board.mjs,board.css,index.html}` and tested by `node --test` in CI. What remains is keeping the Board live (3.8) and the connection and version strips (3.9).
 
 ## Stories
 
@@ -22,7 +22,7 @@ Put the product in front of the operator: one read-only page, open all day besid
 
 - **Context Line:** each Agent Program has its own rule, with one global default, which is the empty string. For Claude Code, a Pane Title that is a session name becomes the Context Line. A title of `Claude Code` (the placeholder) or an empty title gets the default, and so does any program with no rule. Adding a rule for a new program touches only `internal/core` and its documentation, never the Board or the API.
 - **Order:** Needs you, then Finished, form a flat top zone across workspaces, each sorted longest-waiting first. Working and then Unknown follow, grouped by workspace in herdr's snapshot order.
-  - A Transition into `blocked` moves the Box to the head of Needs you.
+  - A Transition into `blocked` moves the Box into Needs you at its longest-waiting position, so a newly blocked Agent sorts last there, not first (operator-confirmed). The sort key already does this; nothing special-cases `blocked`.
   - A Transition into `working` moves it into its workspace group.
   - `done` turning into `idle` keeps both the Box's place and its Waiting Time.
   - An `idle` Agent never seen `working` sits with Working.
@@ -32,7 +32,7 @@ Put the product in front of the operator: one read-only page, open all day besid
   - The Context Line is one line, truncated with an ellipsis, with full text on hover. Its space stays reserved when it is empty.
   - Box height is fixed in CSS. An `unresolved` Profile is shown as such, never as a blank.
 - **Restraint:** the Board carries only Boxes, workspace labels and the connection and version strips. Anything more needs an ADR superseding ADR-0003. Needs you must be visually dominant and readable from across a desk.
-- **Live:** a recorded Transition reaches an open Board within one second. There is no polling, and the Board reconnects by itself after a stream drop or Daemon restart.
+- **Live:** the Board opens `/events` first and fetches nothing else. A recorded Transition reaches an open Board within one second. Boxes are added, moved or removed without a reload. There is no polling, and the Board reconnects by itself after a stream drop or Daemon restart and re-renders from the new `state`.
 - **Connection truth:** when herdr is disconnected, a thin strip shows the last snapshot time and Boxes are dimmed, never hidden.
   - With gate `refused`, an unsupported-version strip names `herdr_version` and `herdr_minimum`, and no Boxes are shown.
   - With gate `advisory`, a warning strip says resync is not guaranteed, and Boxes are shown.
@@ -57,7 +57,7 @@ Put the product in front of the operator: one read-only page, open all day besid
   - Each stream has a bounded buffer. A slow client is disconnected and reconnects to a fresh `state`.
   - The server keeps no history and does not handle `Last-Event-ID`. The write deadline is cleared per stream.
   - WebSockets and fetch-then-subscribe are rejected.
-- **Board code:** hand-written HTML, CSS and JS, embedded under `internal/httpapi/web`, with no npm and no build step. The ordering, formatting and event-handling logic is a plain ES module with no DOM access, tested with `node --test` (with no npm packages) against core's golden fixture. CI has no node step yet; Story 3.7 adds one. Beyond rendering, the Board does only three things: it ticks the clock from `waiting_since`, orders Boxes by sort key, and draws a workspace header where `group` changes in the lower zone.
+- **Board code:** hand-written HTML, CSS and JS, embedded under `internal/httpapi/web`, with no npm and no build step. The ordering, formatting and event-handling logic is a plain ES module with no DOM access, tested with `node --test` (with no npm packages) against core's golden fixture. CI runs these with a node step (Node 18 or newer), added by Story 3.7. Beyond rendering, the Board does only three things: it ticks the clock from `waiting_since`, orders Boxes by sort key, and draws a workspace header where `group` changes in the lower zone.
 - **Logging:** Pane Titles are logged only at debug level.
 
 ## UX & Interaction Patterns
@@ -66,7 +66,6 @@ There is no separate UX document. Story 3.6 is the design, produced against an a
 
 ## Cross-Story Dependencies
 
-- 3.1 (core AgentView, Context Line, sort key, golden fixture) comes first. 3.2 builds the published view from it. 3.3 and 3.4 serve that view. 3.5 needs only the store's history read and the route conventions from 3.3.
-- **Operator gate:** the operator must approve Story 3.6's design, and the approval is recorded in sprint status `action_items`, before Story 3.7 starts. The developer cannot satisfy this gate. 3.7 then needs 3.3 and 3.6. 3.8 needs 3.4 and 3.7. 3.9 needs 3.2's ConnectionTruth and 3.7.
+- 3.1 to 3.7 are done, and the 3.6 design approval is recorded. 3.8 builds on 3.4's stream and 3.7's Board modules. 3.9 needs 3.2's ConnectionTruth and 3.7.
 - 3.8's one-second budget is checked in a Go test of the stream. The Board's event handling is tested in the same ES module tests as 3.7's ordering.
-- **Dogfooding:** the live herdr is 0.8.2, behind the advisory flag, so a real `/api/state` will show gate `advisory`.
+- **Live herdr:** the live server runs 0.9.5 since 2026-10-20, so a real `/api/state` shows gate `ok`. Exercise `advisory` and `refused` (Story 3.9) with fixtures, never by touching the live server.
