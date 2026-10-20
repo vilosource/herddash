@@ -7,27 +7,47 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/vilosource/herddash/internal/config"
 	"github.com/vilosource/herddash/internal/engine"
+	"github.com/vilosource/herddash/internal/httpapi"
 	"github.com/vilosource/herddash/internal/store"
 )
 
 // logFileName is the log file in the data directory.
 const logFileName = "herddash.log"
 
+// listen is net.Listen; a test replaces it to make the server fail while
+// serving.
+var listen = net.Listen
+
+// readHeaderTimeout bounds how long a client may take to send its request
+// headers; shutdownTimeout bounds the graceful HTTP shutdown when serve ends.
+const (
+	readHeaderTimeout = 10 * time.Second
+	shutdownTimeout   = 5 * time.Second
+)
+
 // runServe is "herddash serve [flags]", also run by "herddash" alone. It loads
 // configuration as "herddash config" does, ensures the data directory, logs
 // JSON to herddash.log there, opens the database (so a second serve on the
 // same database fails at once) for the engine to record every Transition into,
-// and prints every version gate outcome, Agent, Transition, removal, Profile
-// change, reconnect and resync to stdout until ctx ends (exit 0). herdr being
-// absent, gone or restarting never ends it: the engine reconnects. Exit 1 is
-// left for configuration, data directory and database errors before the
-// engine starts.
+// listens on the configured loopback bind for the read-only HTTP surface
+// (ADR-0007), prints the address it serves on, and prints every version gate
+// outcome, Agent, Transition, removal, Profile change, reconnect and resync to
+// stdout until ctx ends (exit 0). herdr being absent, gone or restarting never
+// ends it: the engine reconnects. Exit 1 is left for configuration, data
+// directory, database and listen errors before the engine starts, and for the
+// HTTP server failing while serving, which stops the engine. When ctx ends,
+// the HTTP server shuts down gracefully first, and only then is the engine,
+// which runs under its own context, stopped and waited for. Story 3.4's
+// long-lived /events connections must be ended on shutdown
+// (RegisterOnShutdown), or Shutdown will wait out its timeout.
 func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("herddash serve", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -87,6 +107,16 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 		}
 	}()
 
+	// Listen before the engine starts, so a port in use fails at once. The
+	// bind is loopback: config refuses any other.
+	ln, err := listen("tcp", cfg.Bind())
+	if err != nil {
+		logger.Error("listen", "bind", cfg.Bind(), "error", err.Error())
+		fmt.Fprintf(stderr, "herddash: %v\n", err)
+		return 1
+	}
+	logger.Info("listening", "addr", ln.Addr().String())
+
 	// The home directory only shortens project directories in Agent views;
 	// without one ("" on error) they are shown in full.
 	home, err := os.UserHomeDir()
@@ -107,9 +137,52 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 		RetentionDays:         cfg.RetentionDays(),
 		Home:                  home,
 	})
-	e.Run(ctx)
+	srv := &http.Server{
+		Handler:           httpapi.New(httpapi.Options{View: e.View, Logger: logger}),
+		ReadHeaderTimeout: readHeaderTimeout,
+		ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelWarn),
+	}
+	// The engine runs under its own context so that, when ctx ends, the HTTP
+	// server is shut down before the engine stops.
+	engineCtx, stopEngine := context.WithCancel(context.WithoutCancel(ctx))
+	defer stopEngine()
+
+	fmt.Fprintf(stdout, "%s listening  http://%s\n", stamp(time.Now().UnixMilli()), ln.Addr())
+	served := make(chan error, 1)
+	go func() { served <- srv.Serve(ln) }()
+	engineDone := make(chan struct{})
+	go func() {
+		defer close(engineDone)
+		e.Run(engineCtx)
+	}()
+
+	code := 0
+	serveEnded := false
+	select {
+	case <-ctx.Done():
+	case err := <-served:
+		// Serve returns only on Shutdown or Close, neither called yet: this is
+		// a failure, and serve without its API must not go on.
+		serveEnded = true
+		logger.Error("http server", "error", err.Error())
+		fmt.Fprintf(stderr, "herddash: %v\n", err)
+		code = 1
+	}
+	sctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	if err := srv.Shutdown(sctx); err != nil {
+		logger.Warn("http shutdown", "error", err.Error())
+		srv.Close()
+	}
+	cancel()
+	if !serveEnded {
+		if err := <-served; err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Error("http server", "error", err.Error())
+		}
+	}
+	stopEngine()
+	<-engineDone
 	logger.Info("herddash stopped")
-	return 0
+	return code
 }
 
 // printer is the engine Sink that prints one line per gate outcome, per Agent

@@ -468,22 +468,30 @@ func expandHome(p, home string) string {
 	return p
 }
 
-// validateBind accepts host:port where host is "localhost" or a loopback IP
-// address and port is 1 to 65535.
+// validateBind accepts host:port where host is exactly localhost, 127.0.0.1
+// or ::1 (written [::1]:port), the hosts the HTTP surface's Host check
+// accepts, and port is all digits from 0 to 65535. Port 0 lets the kernel pick
+// a free port, which serve prints; tests use it so none binds the default.
+// Another loopback address would start a server that refuses every request,
+// so it is refused here; a non-loopback one is ErrNonLoopbackBind.
 func validateBind(addr string) error {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		return err
 	}
 	n, err := strconv.Atoi(port)
-	if err != nil || n < 1 || n > 65535 {
-		return fmt.Errorf("port %q must be a number from 1 to 65535", port)
+	if err != nil || n < 0 || n > 65535 || strings.Trim(port, "0123456789") != "" {
+		return fmt.Errorf("port %q must be a number from 0 to 65535", port)
+	}
+	switch strings.ToLower(host) {
+	case "localhost", "127.0.0.1", "::1":
+		return nil
 	}
 	if strings.EqualFold(strings.TrimSuffix(host, "."), "localhost") {
-		return nil
+		return fmt.Errorf("host %q must be localhost, 127.0.0.1 or ::1, the hosts the API accepts", host)
 	}
 	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
-		return nil
+		return fmt.Errorf("host %q must be localhost, 127.0.0.1 or ::1, the hosts the API accepts", host)
 	}
 	return ErrNonLoopbackBind
 }

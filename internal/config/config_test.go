@@ -260,11 +260,28 @@ func TestNonLoopbackIPv6Rejected(t *testing.T) {
 }
 
 func TestLoopbackBinds(t *testing.T) {
-	for _, b := range []string{"127.0.0.1:7318", "127.0.0.2:1", "[::1]:7318", "localhost:65535", "LOCALHOST:7318", "localhost.:7318"} {
+	for _, b := range []string{"127.0.0.1:7318", "[::1]:7318", "localhost:65535", "127.0.0.1:0", "LOCALHOST:7318"} {
 		env := testEnv(t, nil)
 		if _, err := Load(Flags{Bind: new(b)}, env); err != nil {
 			t.Errorf("bind %q: %v", b, err)
 		}
+	}
+}
+
+// TestRefusedLoopbackBinds checks that a loopback bind the API's Host check
+// would refuse is refused at start, naming the accepted hosts, as are ports
+// that are not all digits.
+func TestRefusedLoopbackBinds(t *testing.T) {
+	for _, b := range []string{"127.0.0.2:1", "localhost.:7318", "[0:0:0:0:0:0:0:1]:7318", "[::ffff:127.0.0.1]:7318"} {
+		_, err := Load(Flags{Bind: new(b)}, testEnv(t, nil))
+		wantKeyError(t, err, "bind")
+		if err == nil || errors.Is(err, ErrNonLoopbackBind) || !strings.Contains(err.Error(), "localhost, 127.0.0.1 or ::1") {
+			t.Errorf("bind %q: error %v, want one naming localhost, 127.0.0.1 or ::1", b, err)
+		}
+	}
+	for _, b := range []string{"127.0.0.1:-0", "127.0.0.1:+0", "127.0.0.1:+7318", "127.0.0.1:65536", "127.0.0.1:"} {
+		_, err := Load(Flags{Bind: new(b)}, testEnv(t, nil))
+		wantKeyError(t, err, "bind")
 	}
 }
 
