@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -232,8 +233,30 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 	}
 }
 
+// serveArgs runs serve against f with its own data directory, listening on a
+// port the kernel picks so no test binds the default 7318.
 func serveArgs(f *fakeHerdr, dataDir string) []string {
-	return []string{"serve", "--socket", f.path, "--server", "test", "--host", "testhost", "--data-dir", dataDir}
+	return []string{"serve", "--socket", f.path, "--server", "test", "--host", "testhost", "--data-dir", dataDir,
+		"--bind", "127.0.0.1:0"}
+}
+
+// listenAddr waits for serve's "listening" log entry in dataDir and returns
+// its address.
+func listenAddr(t *testing.T, dataDir string) string {
+	t.Helper()
+	var addr string
+	waitFor(t, "the listening log entry", func() bool {
+		b, _ := os.ReadFile(filepath.Join(dataDir, logFileName))
+		for _, line := range strings.Split(string(b), "\n") {
+			var entry map[string]any
+			if json.Unmarshal([]byte(line), &entry) == nil && entry["msg"] == "listening" {
+				addr, _ = entry["addr"].(string)
+				return addr != ""
+			}
+		}
+		return false
+	})
+	return addr
 }
 
 // TestServeSignal sends the test process a real SIGINT while serve runs under
@@ -374,6 +397,15 @@ func TestServeReconnects(t *testing.T) {
 // stopped, exit 0.
 func TestNoArgumentsServes(t *testing.T) {
 	home := hermeticEnv(t)
+	// The default config file moves the bind off 7318, so this test, too,
+	// never binds the default port.
+	cfgDir := filepath.Join(home, ".config", "herddash")
+	if err := os.MkdirAll(cfgDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cfgDir, "config.toml"), []byte("bind = \"127.0.0.1:0\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
 	var stdout, stderr syncBuffer
@@ -964,5 +996,161 @@ func TestServeSweepsRetention(t *testing.T) {
 		if len(left) != 1 || left[0] != now-10*day {
 			t.Errorf("%s seeded rows left at %v, want only the 10-day one at %d", table, left, now-10*day)
 		}
+	}
+}
+
+// TestServeAPI runs serve against the fake herdr on a kernel-picked port,
+// reads the address from the log and GETs /api/state: the fake's Agent is
+// there with the connection connected. A non-loopback Host is refused. stdout
+// names the URL, and once serve returns its listener is closed.
+func TestServeAPI(t *testing.T) {
+	hermeticEnv(t)
+	f := startFakeHerdr(t)
+	dataDir := filepath.Join(t.TempDir(), "data")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var stdout, stderr syncBuffer
+	done := make(chan int, 1)
+	go func() { done <- run(ctx, serveArgs(f, dataDir), &stdout, &stderr) }()
+	addr := listenAddr(t, dataDir)
+	if host, _, err := net.SplitHostPort(addr); err != nil || host != "127.0.0.1" {
+		t.Fatalf("listening on %q, want 127.0.0.1:<port>", addr)
+	}
+	waitFor(t, "the listening line", func() bool {
+		return strings.Contains(stdout.String(), " listening  http://"+addr+"\n")
+	})
+
+	tr := &http.Transport{DisableKeepAlives: true}
+	defer tr.CloseIdleConnections()
+	client := &http.Client{Transport: tr, Timeout: 5 * time.Second}
+
+	type state struct {
+		RunID  string `json:"run_id"`
+		Seq    uint64 `json:"seq"`
+		Agents []struct {
+			Key          core.AgentKey `json:"key"`
+			AgentProgram string        `json:"agent_program"`
+			Status       string        `json:"status"`
+		} `json:"agents"`
+		Connection struct {
+			Connected bool   `json:"connected"`
+			Gate      string `json:"gate"`
+		} `json:"connection"`
+	}
+	var got state
+	// Every failure is transient here: retry until waitFor gives up.
+	waitFor(t, "the Agent in /api/state", func() bool {
+		resp, err := client.Get("http://" + addr + "/api/state")
+		if err != nil {
+			return false
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Type") != "application/json" {
+			return false
+		}
+		got = state{}
+		if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+			return false
+		}
+		return got.Connection.Connected && len(got.Agents) == 1
+	})
+	a := got.Agents[0]
+	want := core.AgentKey{Host: "testhost", Server: "test", Epoch: 1, PaneID: "w1:p1"}
+	if a.Key != want || a.AgentProgram != "claude" || a.Status != "working" {
+		t.Errorf("agent %+v, want %+v claude working", a, want)
+	}
+	if got.RunID == "" || got.Seq == 0 || got.Connection.Gate != "ok" {
+		t.Errorf("state run_id %q seq %d gate %q", got.RunID, got.Seq, got.Connection.Gate)
+	}
+
+	req, err := http.NewRequest(http.MethodGet, "http://"+addr+"/api/state", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Host = "evil.example"
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("Host evil.example: status %d, want 403", resp.StatusCode)
+	}
+
+	cancel()
+	if code := <-done; code != 0 {
+		t.Fatalf("exit code %d, stderr %q", code, stderr.String())
+	}
+	tr.CloseIdleConnections()
+	if c, err := net.Dial("tcp", addr); err == nil {
+		c.Close()
+		t.Errorf("a dial to %s succeeded after serve returned; the listener is still open", addr)
+	}
+}
+
+// TestServeHTTPFailure closes the listener under the running HTTP server: serve
+// prints herddash: <err>, stops the engine and exits 1 rather than running on
+// without its API.
+func TestServeHTTPFailure(t *testing.T) {
+	hermeticEnv(t)
+	f := startFakeHerdr(t)
+	var ln net.Listener
+	listened := make(chan struct{})
+	listen = func(network, address string) (net.Listener, error) {
+		l, err := net.Listen(network, address)
+		ln = l
+		close(listened)
+		return l, err
+	}
+	t.Cleanup(func() { listen = net.Listen })
+	dataDir := filepath.Join(t.TempDir(), "data")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var stdout, stderr syncBuffer
+	done := make(chan int, 1)
+	go func() { done <- run(ctx, serveArgs(f, dataDir), &stdout, &stderr) }()
+	waitFor(t, "the Agent line", func() bool { return strings.Contains(stdout.String(), "agent      host=testhost") })
+	<-listened
+	ln.Close()
+	select {
+	case code := <-done:
+		if code != 1 {
+			t.Fatalf("exit code %d, want 1; stderr %q", code, stderr.String())
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("serve went on running after its HTTP server failed")
+	}
+	if got := stderr.String(); !strings.HasPrefix(got, "herddash: ") {
+		t.Errorf("stderr %q, want herddash: <err>", got)
+	}
+	waitFor(t, "every subscription closed", func() bool { return f.openSubs.Load() == 0 })
+}
+
+// TestServePortInUse runs serve with --bind on an address already listening:
+// it exits 1 with herddash: <err> before the engine starts.
+func TestServePortInUse(t *testing.T) {
+	hermeticEnv(t)
+	f := startFakeHerdr(t)
+	taken, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer taken.Close()
+	dataDir := filepath.Join(t.TempDir(), "data")
+	args := append(serveArgs(f, dataDir), "--bind", taken.Addr().String())
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var stdout, stderr syncBuffer
+	if code := run(ctx, args, &stdout, &stderr); code != 1 {
+		t.Fatalf("exit code %d, want 1; stderr %q", code, stderr.String())
+	}
+	if got := stderr.String(); !strings.HasPrefix(got, "herddash: ") || !strings.Contains(got, taken.Addr().String()) {
+		t.Errorf("stderr %q, want herddash: <err> naming %s", got, taken.Addr())
+	}
+	if stdout.String() != "" {
+		t.Errorf("serve printed %q; the engine started", stdout.String())
+	}
+	if n := f.snapshots.Load() + f.subscribes.Load(); n != 0 {
+		t.Errorf("herdr was asked %d times; the engine started", n)
 	}
 }
