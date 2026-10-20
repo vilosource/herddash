@@ -1,0 +1,506 @@
+{
+ "_comment": "Board design fixture (Story 3.6): drawn from a real /api/state on 2026-10-20 (herdr 0.8.2, 13 Agents), anonymised (host, workspaces, directories, titles), plus synthesized Agents for unresolved, unknown, codex/agy, exact times and long/empty Context Lines. now_ms is the instant the Waiting Times are measured from.",
+ "now_ms": 1792500000000,
+ "run_id": "0123456789abcdef0123456789abcdef",
+ "seq": 42,
+ "agents": [
+  {
+   "key": {
+    "host": "devbox",
+    "server": "default",
+    "epoch": 1,
+    "pane_id": "wA:p9"
+   },
+   "agent_program": "claude",
+   "profile": "cldw",
+   "heading": "cldw · claude",
+   "directory": "~/src/ops-scripts",
+   "workspace": "payments-platform",
+   "tab": "payments-platform",
+   "status": "blocked",
+   "attention_class": "needs_you",
+   "waiting_since": 1792496160000,
+   "waiting_exact": true,
+   "pane_title": "approve migration plan for ledger tables before the maintenance window tonight",
+   "context_line": "approve migration plan for ledger tables before the maintenance window tonight",
+   "sort_key": [
+    0,
+    0,
+    0,
+    1792496160000,
+    "devbox/default/1/wA:p9"
+   ]
+  },
+  {
+   "key": {
+    "host": "devbox",
+    "server": "default",
+    "epoch": 1,
+    "pane_id": "wC:p1"
+   },
+   "agent_program": "claude",
+   "profile": "unresolved",
+   "heading": "unresolved · claude",
+   "directory": "~/src/ops-scripts",
+   "workspace": "ops",
+   "tab": "ops",
+   "status": "blocked",
+   "attention_class": "needs_you",
+   "waiting_since": 1792498680000,
+   "waiting_exact": true,
+   "pane_title": "rotate staging certificates",
+   "context_line": "rotate staging certificates",
+   "sort_key": [
+    0,
+    0,
+    0,
+    1792498680000,
+    "devbox/default/1/wC:p1"
+   ]
+  },
+  {
+   "key": {
+    "host": "devbox",
+    "server": "default",
+    "epoch": 1,
+    "pane_id": "wA:p4"
+   },
+   "agent_program": "claude",
+   "profile": "cldp",
+   "heading": "cldp · claude",
+   "directory": "~/src/payments-api",
+   "workspace": "knowledge-base",
+   "tab": "knowledge-base",
+   "status": "blocked",
+   "attention_class": "needs_you",
+   "waiting_since": 1792499820000,
+   "waiting_exact": false,
+   "pane_title": "fix flaky retry test",
+   "context_line": "fix flaky retry test",
+   "sort_key": [
+    0,
+    0,
+    0,
+    1792499820000,
+    "devbox/default/1/wA:p4"
+   ]
+  },
+  {
+   "key": {
+    "host": "devbox",
+    "server": "default",
+    "epoch": 1,
+    "pane_id": "wB:pJ"
+   },
+   "agent_program": "claude",
+   "profile": "cldw",
+   "heading": "cldw · claude",
+   "directory": "~/src/payments-web",
+   "workspace": "payments-platform",
+   "tab": "tab-1",
+   "status": "done",
+   "attention_class": "finished",
+   "waiting_since": 1792485600000,
+   "waiting_exact": false,
+   "pane_title": "refactor billing webhooks",
+   "context_line": "refactor billing webhooks",
+   "sort_key": [
+    0,
+    0,
+    1,
+    1792485600000,
+    "devbox/default/1/wB:pJ"
+   ]
+  },
+  {
+   "key": {
+    "host": "devbox",
+    "server": "default",
+    "epoch": 1,
+    "pane_id": "wB:pC"
+   },
+   "agent_program": "claude",
+   "profile": "cldw",
+   "heading": "cldw · claude",
+   "directory": "~/src/kb-ingest",
+   "workspace": "payments-platform",
+   "tab": "tab-1",
+   "status": "done",
+   "attention_class": "finished",
+   "waiting_since": 1792489200000,
+   "waiting_exact": false,
+   "pane_title": "write release notes",
+   "context_line": "write release notes",
+   "sort_key": [
+    0,
+    0,
+    1,
+    1792489200000,
+    "devbox/default/1/wB:pC"
+   ]
+  },
+  {
+   "key": {
+    "host": "devbox",
+    "server": "default",
+    "epoch": 1,
+    "pane_id": "wB:pE"
+   },
+   "agent_program": "claude",
+   "profile": "cldw",
+   "heading": "cldw · claude",
+   "directory": "~/src/infra",
+   "workspace": "payments-platform",
+   "tab": "tab-2",
+   "status": "done",
+   "attention_class": "finished",
+   "waiting_since": 1792494300000,
+   "waiting_exact": false,
+   "pane_title": "investigate slow /search endpoint p99 regression after index change",
+   "context_line": "investigate slow /search endpoint p99 regression after index change",
+   "sort_key": [
+    0,
+    0,
+    1,
+    1792494300000,
+    "devbox/default/1/wB:pE"
+   ]
+  },
+  {
+   "key": {
+    "host": "devbox",
+    "server": "default",
+    "epoch": 1,
+    "pane_id": "wB:pN"
+   },
+   "agent_program": "claude",
+   "profile": "cldw",
+   "heading": "cldw · claude",
+   "directory": "~/src/kb-ingest",
+   "workspace": "payments-platform",
+   "tab": "tab-3",
+   "status": "done",
+   "attention_class": "finished",
+   "waiting_since": 1792495740000,
+   "waiting_exact": false,
+   "pane_title": "tidy CI",
+   "context_line": "tidy CI",
+   "sort_key": [
+    0,
+    0,
+    1,
+    1792495740000,
+    "devbox/default/1/wB:pN"
+   ]
+  },
+  {
+   "key": {
+    "host": "devbox",
+    "server": "default",
+    "epoch": 1,
+    "pane_id": "wA:p1W"
+   },
+   "agent_program": "claude",
+   "profile": "cldp",
+   "heading": "cldp · claude",
+   "directory": "~/src/payments-web",
+   "workspace": "knowledge-base",
+   "tab": "knowledge-base",
+   "status": "done",
+   "attention_class": "finished",
+   "waiting_since": 1792497180000,
+   "waiting_exact": false,
+   "pane_title": "migrate auth to OIDC",
+   "context_line": "migrate auth to OIDC",
+   "sort_key": [
+    0,
+    0,
+    1,
+    1792497180000,
+    "devbox/default/1/wA:p1W"
+   ]
+  },
+  {
+   "key": {
+    "host": "devbox",
+    "server": "default",
+    "epoch": 1,
+    "pane_id": "wB:pS"
+   },
+   "agent_program": "claude",
+   "profile": "cldw",
+   "heading": "cldw · claude",
+   "directory": "~/src/kb",
+   "workspace": "payments-platform",
+   "tab": "tab-2",
+   "status": "done",
+   "attention_class": "finished",
+   "waiting_since": 1792498020000,
+   "waiting_exact": false,
+   "pane_title": "docs",
+   "context_line": "docs",
+   "sort_key": [
+    0,
+    0,
+    1,
+    1792498020000,
+    "devbox/default/1/wB:pS"
+   ]
+  },
+  {
+   "key": {
+    "host": "devbox",
+    "server": "default",
+    "epoch": 1,
+    "pane_id": "wB:p7"
+   },
+   "agent_program": "claude",
+   "profile": "cldw",
+   "heading": "cldw · claude",
+   "directory": "~/src/kb",
+   "workspace": "payments-platform",
+   "tab": "tab-3",
+   "status": "done",
+   "attention_class": "finished",
+   "waiting_since": 1792499280000,
+   "waiting_exact": false,
+   "pane_title": "review dependency bumps",
+   "context_line": "review dependency bumps",
+   "sort_key": [
+    0,
+    0,
+    1,
+    1792499280000,
+    "devbox/default/1/wB:p7"
+   ]
+  },
+  {
+   "key": {
+    "host": "devbox",
+    "server": "default",
+    "epoch": 1,
+    "pane_id": "wC:p2"
+   },
+   "agent_program": "codex",
+   "profile": "codex",
+   "heading": "codex",
+   "directory": "~/src/ops-scripts",
+   "workspace": "ops",
+   "tab": "ops",
+   "status": "done",
+   "attention_class": "finished",
+   "waiting_since": 1792499520000,
+   "waiting_exact": true,
+   "pane_title": "",
+   "context_line": "",
+   "sort_key": [
+    0,
+    0,
+    1,
+    1792499520000,
+    "devbox/default/1/wC:p2"
+   ]
+  },
+  {
+   "key": {
+    "host": "devbox",
+    "server": "default",
+    "epoch": 1,
+    "pane_id": "wB:pG"
+   },
+   "agent_program": "claude",
+   "profile": "cldw",
+   "heading": "cldw · claude",
+   "directory": "~/src/payments-api",
+   "workspace": "payments-platform",
+   "tab": "tab-3",
+   "status": "done",
+   "attention_class": "finished",
+   "waiting_since": 1792499640000,
+   "waiting_exact": false,
+   "pane_title": "add audit log export",
+   "context_line": "add audit log export",
+   "sort_key": [
+    0,
+    0,
+    1,
+    1792499640000,
+    "devbox/default/1/wB:pG"
+   ]
+  },
+  {
+   "key": {
+    "host": "devbox",
+    "server": "default",
+    "epoch": 1,
+    "pane_id": "wB:p1"
+   },
+   "agent_program": "claude",
+   "profile": "cldw",
+   "heading": "cldw · claude",
+   "directory": "~/src/kb",
+   "workspace": "payments-platform",
+   "tab": "tab-1",
+   "status": "idle",
+   "attention_class": "working",
+   "waiting_since": 1792498140000,
+   "waiting_exact": false,
+   "pane_title": "split monolith module",
+   "context_line": "split monolith module",
+   "sort_key": [
+    1,
+    1,
+    2,
+    1792498140000,
+    "devbox/default/1/wB:p1"
+   ]
+  },
+  {
+   "key": {
+    "host": "devbox",
+    "server": "default",
+    "epoch": 1,
+    "pane_id": "wA:p1Z"
+   },
+   "agent_program": "claude",
+   "profile": "cldp",
+   "heading": "cldp · claude",
+   "directory": "~/src/payments-web",
+   "workspace": "knowledge-base",
+   "tab": "tab-3",
+   "status": "working",
+   "attention_class": "working",
+   "waiting_since": 1792498560000,
+   "waiting_exact": false,
+   "pane_title": "triage nightly failures",
+   "context_line": "triage nightly failures",
+   "sort_key": [
+    1,
+    2,
+    2,
+    1792498560000,
+    "devbox/default/1/wA:p1Z"
+   ]
+  },
+  {
+   "key": {
+    "host": "devbox",
+    "server": "default",
+    "epoch": 1,
+    "pane_id": "wA:p1T"
+   },
+   "agent_program": "claude",
+   "profile": "cldw",
+   "heading": "cldw · claude",
+   "directory": "~/src/payments-api",
+   "workspace": "knowledge-base",
+   "tab": "tab-2",
+   "status": "idle",
+   "attention_class": "working",
+   "waiting_since": 1792498980000,
+   "waiting_exact": false,
+   "pane_title": "port CLI flags to config",
+   "context_line": "port CLI flags to config",
+   "sort_key": [
+    1,
+    2,
+    2,
+    1792498980000,
+    "devbox/default/1/wA:p1T"
+   ]
+  },
+  {
+   "key": {
+    "host": "devbox",
+    "server": "default",
+    "epoch": 1,
+    "pane_id": "wB:p7"
+   },
+   "agent_program": "agy",
+   "profile": "agy",
+   "heading": "agy",
+   "directory": "~/src/ops-scripts",
+   "workspace": "knowledge-base",
+   "tab": "knowledge-base",
+   "status": "working",
+   "attention_class": "working",
+   "waiting_since": 1792499100000,
+   "waiting_exact": true,
+   "pane_title": "",
+   "context_line": "",
+   "sort_key": [
+    1,
+    2,
+    2,
+    1792499100000,
+    "devbox/default/1/wB:p7"
+   ]
+  },
+  {
+   "key": {
+    "host": "devbox",
+    "server": "default",
+    "epoch": 1,
+    "pane_id": "wA:p10"
+   },
+   "agent_program": "claude",
+   "profile": "cldw",
+   "heading": "cldw · claude",
+   "directory": "~/src/infra",
+   "workspace": "knowledge-base",
+   "tab": "tab-1",
+   "status": "working",
+   "attention_class": "working",
+   "waiting_since": 1792499400000,
+   "waiting_exact": false,
+   "pane_title": "spike: vector search for tickets",
+   "context_line": "spike: vector search for tickets",
+   "sort_key": [
+    1,
+    2,
+    2,
+    1792499400000,
+    "devbox/default/1/wA:p10"
+   ]
+  },
+  {
+   "key": {
+    "host": "devbox",
+    "server": "default",
+    "epoch": 1,
+    "pane_id": "wC:p3"
+   },
+   "agent_program": "claude",
+   "profile": "cldw",
+   "heading": "cldw · claude",
+   "directory": "~/src/ops-scripts",
+   "workspace": "ops",
+   "tab": "ops",
+   "status": "unknown",
+   "attention_class": "unknown",
+   "waiting_exact": false,
+   "pane_title": "",
+   "context_line": "",
+   "sort_key": [
+    1,
+    3,
+    3,
+    9007199254740991,
+    "devbox/default/1/wC:p3"
+   ]
+  }
+ ],
+ "headers": [
+  12,
+  13,
+  17
+ ],
+ "connection": {
+  "connected": true,
+  "last_snapshot_at": 1792499996000,
+  "herdr_version": "0.9.5",
+  "herdr_minimum": "0.9.5",
+  "gate": "ok",
+  "resync_guaranteed": true
+ }
+}
