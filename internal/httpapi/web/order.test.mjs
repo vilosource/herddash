@@ -12,10 +12,15 @@ import {
   HANDLED_EVENTS,
   RECONNECT_CAP_MS,
   RECONNECT_START_MS,
+  LOST_GRACE_MS,
+  LOST_TEXT,
   applyEvent,
+  boardStatus,
   boxLabel,
+  clockUTC,
   compareViews,
   emptyModel,
+  formatAge,
   formatDuration,
   headerLabel,
   keyId,
@@ -25,7 +30,9 @@ import {
   nextReconnectDelay,
   sortViews,
   streamDecision,
+  streamLost,
   streamState,
+  stripsKey,
   waitingLabel,
   whereLabel,
   workspaceHeaders,
@@ -467,15 +474,15 @@ test("stream: error reopens only for the current, closed source with no reopen p
   const a = {};
   let st = opened(a);
   // Still connecting: EventSource retries by itself.
-  assert.equal(streamDecision(st, { kind: "error", source: a, closed: false }).reopenAfter, undefined);
+  assert.equal(streamDecision(st, { kind: "error", source: a, closed: false, now: 1 }).reopenAfter, undefined);
   // A source that is not current.
-  assert.equal(streamDecision(st, { kind: "error", source: {}, closed: true }).reopenAfter, undefined);
-  const d = streamDecision(st, { kind: "error", source: a, closed: true });
+  assert.equal(streamDecision(st, { kind: "error", source: {}, closed: true, now: 1 }).reopenAfter, undefined);
+  const d = streamDecision(st, { kind: "error", source: a, closed: true, now: 1 });
   assert.equal(d.reopenAfter, RECONNECT_START_MS);
   assert.equal(d.st.delay, RECONNECT_START_MS * 2);
   assert.equal(d.st.pending, true);
   // A second error while the reopen is pending does nothing.
-  const again = streamDecision(d.st, { kind: "error", source: a, closed: true });
+  const again = streamDecision(d.st, { kind: "error", source: a, closed: true, now: 1 });
   assert.equal(again.reopenAfter, undefined);
   assert.equal(again.st, d.st);
 });
@@ -486,7 +493,7 @@ test("stream: the delay doubles to the cap across failed reopens, and a valid st
   for (let i = 0; i < 8; i++) {
     const s = {};
     ({ st } = streamDecision(st, { kind: "open", source: s }));
-    const d = streamDecision(st, { kind: "error", source: s, closed: true });
+    const d = streamDecision(st, { kind: "error", source: s, closed: true, now: 1 });
     delays.push(d.reopenAfter);
     st = d.st;
   }
@@ -503,7 +510,7 @@ test("stream: a malformed state neither resets the delay nor replaces the model"
   let st = opened({});
   const s = {};
   ({ st } = streamDecision(st, { kind: "open", source: s }));
-  st = streamDecision(st, { kind: "error", source: s, closed: true }).st;
+  st = streamDecision(st, { kind: "error", source: s, closed: true, now: 1 }).st;
   const b = {};
   ({ st } = streamDecision(st, { kind: "open", source: b }));
   const d = streamDecision(st, { kind: "event", source: b, name: "state", data: "{bad" });
@@ -549,4 +556,268 @@ test("stream: events on the current source go through applyEvent", () => {
   const conn = { ...fixtureConnection, connected: false };
   const c = streamDecision(st, { kind: "event", source: a, name: "connection", data: JSON.stringify(conn) });
   assert.deepEqual(c.st.model.connection, conn);
+});
+
+// ---- Strips (Story 3.9) ----
+
+const NOW = Date.UTC(2026, 9, 20, 12, 0, 0);
+const okConn = { connected: true, last_snapshot_at: NOW - 1000, herdr_version: "0.9.5", herdr_minimum: "0.9.5", gate: "ok", resync_guaranteed: true };
+
+// stripText is a strip as it reads on screen: every part but the screen-reader-only one.
+const stripText = (s) => s.parts.filter((p) => !p.sr).map((p) => p.text).join("");
+
+test("strips: all well shows no strip and normal Boxes", () => {
+  assert.deepEqual(boardStatus(okConn, false, NOW), { strips: [], dimmed: false, hideBoxes: false });
+  // Before the first state, with the stream up: nothing to say yet.
+  assert.deepEqual(boardStatus(null, false, NOW), { strips: [], dimmed: false, hideBoxes: false });
+});
+
+test("strips: disconnected shows the ticking snapshot age and dims Boxes", () => {
+  const c = { ...okConn, connected: false, last_snapshot_at: NOW - 160000 };
+  const st = boardStatus(c, false, NOW);
+  assert.equal(st.dimmed, true);
+  assert.equal(st.hideBoxes, false);
+  assert.equal(st.strips.length, 1);
+  const [s] = st.strips;
+  assert.equal(s.kind, "disconnected");
+  assert.equal(stripText(s), "Disconnected from herdr. Last snapshot 2m 40s ago; Boxes show that snapshot.");
+  // The age ticks and is hidden from screen readers, which get the fixed UTC time.
+  assert.deepEqual(s.parts.find((p) => p.tick), { text: "2m 40s ago", tick: true });
+  assert.deepEqual(s.parts.find((p) => p.sr), { text: "at 11:57:20 UTC", sr: true });
+  const later = boardStatus(c, false, NOW + 5000).strips;
+  assert.equal(later[0].parts.find((p) => p.tick).text, "2m 45s ago");
+  // The ticking age does not change the strips' identity, so the live region is not redrawn.
+  assert.equal(stripsKey(later), stripsKey(st.strips));
+});
+
+test("strips: disconnected before any snapshot", () => {
+  const c = { ...okConn, connected: false };
+  delete c.last_snapshot_at;
+  const st = boardStatus(c, false, NOW);
+  assert.equal(st.dimmed, true);
+  assert.equal(st.strips.length, 1);
+  assert.equal(st.strips[0].kind, "disconnected");
+  assert.equal(stripText(st.strips[0]), "Disconnected from herdr. No snapshot received yet.");
+  assert.ok(!st.strips[0].parts.some((p) => p.tick || p.sr));
+});
+
+test("strips: the Daemon unreachable replaces the herdr text and dims Boxes", () => {
+  for (const c of [okConn, { ...okConn, connected: false, last_snapshot_at: NOW - 160000 }, null]) {
+    const st = boardStatus(c, true, NOW);
+    assert.equal(st.dimmed, true);
+    assert.equal(st.strips.length, 1);
+    assert.equal(st.strips[0].kind, "disconnected");
+    assert.equal(stripText(st.strips[0]), "Lost contact with herddash. Reconnecting…");
+    assert.equal(stripText(st.strips[0]), LOST_TEXT);
+  }
+  // The version strip still follows the latest ConnectionTruth.
+  const adv = boardStatus({ ...okConn, gate: "advisory", herdr_version: "0.9.4" }, true, NOW);
+  assert.deepEqual(adv.strips.map((s) => s.kind), ["disconnected", "advisory"]);
+});
+
+test("strips: advisory with resync guaranteed has no resync caveat and shows Boxes", () => {
+  const st = boardStatus({ ...okConn, gate: "advisory", herdr_version: "0.9.4", herdr_minimum: "0.9.5" }, false, NOW);
+  assert.equal(st.dimmed, false);
+  assert.equal(st.hideBoxes, false);
+  assert.equal(st.strips.length, 1);
+  assert.equal(st.strips[0].kind, "advisory");
+  assert.equal(stripText(st.strips[0]), "herdr 0.9.4 is below the supported minimum 0.9.5; recording under the dogfooding flag.");
+});
+
+test("strips: advisory below 0.9.0 adds the resync caveat", () => {
+  const c = { ...okConn, gate: "advisory", herdr_version: "0.8.2", resync_guaranteed: false };
+  const [s] = boardStatus(c, false, NOW).strips;
+  assert.equal(s.kind, "advisory");
+  assert.equal(
+    stripText(s),
+    "herdr 0.8.2 is below the supported minimum 0.9.5; recording under the dogfooding flag. " +
+      "Resync is not guaranteed with this herdr version.",
+  );
+  // Absent means not guaranteed.
+  const absent = { ...c };
+  delete absent.resync_guaranteed;
+  assert.equal(stripText(boardStatus(absent, false, NOW).strips[0]), stripText(s));
+});
+
+test("strips: refused names both versions and hides every Box", () => {
+  const st = boardStatus({ ...okConn, gate: "refused", herdr_version: "0.8.2", resync_guaranteed: false }, false, NOW);
+  assert.equal(st.hideBoxes, true);
+  assert.equal(st.strips.length, 1);
+  assert.equal(st.strips[0].kind, "refused");
+  assert.equal(stripText(st.strips[0]), "herdr 0.8.2 is not supported. herddash needs 0.9.5 or newer and is recording nothing.");
+  // Whatever the model holds: hideBoxes depends on the ConnectionTruth alone.
+  let { model } = applyEvent(emptyModel(), "state", stateData());
+  ({ model } = applyEvent(model, "connection", JSON.stringify({ ...okConn, gate: "refused", herdr_version: "0.8.2" })));
+  assert.ok(model.agents.size > 0);
+  assert.equal(boardStatus(model.connection, false, NOW).hideBoxes, true);
+});
+
+test("strips: disconnected and advisory show slate first, then amber", () => {
+  const c = { ...okConn, connected: false, last_snapshot_at: NOW - 160000, gate: "advisory", herdr_version: "0.8.2", resync_guaranteed: false };
+  const st = boardStatus(c, false, NOW);
+  assert.deepEqual(st.strips.map((s) => s.kind), ["disconnected", "advisory"]);
+  assert.equal(st.dimmed, true);
+  assert.equal(st.hideBoxes, false);
+});
+
+test("strips: a connection event showing herdr connected clears the strip and the dimming", () => {
+  const a = {};
+  let st = opened(a);
+  const down = { ...okConn, connected: false, last_snapshot_at: NOW - 160000 };
+  ({ st } = streamDecision(st, { kind: "event", source: a, name: "connection", data: JSON.stringify(down) }));
+  assert.equal(boardStatus(st.model.connection, false, NOW).dimmed, true);
+  ({ st } = streamDecision(st, { kind: "event", source: a, name: "connection", data: JSON.stringify(okConn) }));
+  assert.deepEqual(boardStatus(st.model.connection, false, NOW), { strips: [], dimmed: false, hideBoxes: false });
+});
+
+test("stream: lost only after LOST_GRACE_MS of errors with no valid state", () => {
+  const a = {};
+  let st = opened(a);
+  assert.equal(st.lostSince, null);
+  assert.equal(streamLost(st, NOW), false);
+  // Not the current source: nothing.
+  assert.equal(streamDecision(st, { kind: "error", source: {}, closed: false, now: NOW }).st, st);
+  // EventSource retrying by itself: in trouble from NOW, no reopen, not yet lost.
+  let d = streamDecision(st, { kind: "error", source: a, closed: false, now: NOW });
+  assert.equal(d.st.lostSince, NOW);
+  assert.equal(d.reopenAfter, undefined);
+  assert.equal(streamLost(d.st, NOW + LOST_GRACE_MS - 1), false);
+  assert.equal(streamLost(d.st, NOW + LOST_GRACE_MS), true);
+  // A transient drop healed within the grace period never shows.
+  const healed = streamDecision(d.st, { kind: "event", source: a, name: "state", data: stateData() }).st;
+  assert.equal(healed.lostSince, null);
+  assert.equal(streamLost(healed, NOW + LOST_GRACE_MS), false);
+  // Closed for good: a later error keeps the first time, and a new source does not clear it.
+  d = streamDecision(d.st, { kind: "error", source: a, closed: true, now: NOW + 500 });
+  assert.equal(d.st.lostSince, NOW);
+  assert.equal(d.reopenAfter, RECONNECT_START_MS);
+  const b = {};
+  ({ st } = streamDecision(d.st, { kind: "open", source: b }));
+  assert.equal(st.lostSince, NOW);
+  // A malformed state does not clear it; a valid one does.
+  st = streamDecision(st, { kind: "event", source: b, name: "state", data: "{bad" }).st;
+  assert.equal(streamLost(st, NOW + LOST_GRACE_MS), true);
+  ({ st } = streamDecision(st, { kind: "event", source: b, name: "state", data: stateData() }));
+  assert.equal(streamLost(st, NOW + LOST_GRACE_MS), false);
+});
+
+test("strips: anything but connected true is disconnected", () => {
+  for (const connected of [undefined, "true", 1, null]) {
+    const c = { ...okConn, connected };
+    if (connected === undefined) delete c.connected;
+    const st = boardStatus(c, false, NOW);
+    assert.equal(st.dimmed, true, String(connected));
+    assert.equal(st.strips[0].kind, "disconnected", String(connected));
+  }
+});
+
+test("strips: a non-finite last_snapshot_at reads as no snapshot", () => {
+  for (const at of [NaN, Infinity, "99", -5, 0]) {
+    const [s] = boardStatus({ ...okConn, connected: false, last_snapshot_at: at }, false, NOW).strips;
+    assert.equal(stripText(s), "Disconnected from herdr. No snapshot received yet.", String(at));
+  }
+});
+
+test("strips: a missing or unknown gate is refused, naming the gate", () => {
+  const missing = { ...okConn };
+  delete missing.gate;
+  for (const [c, g] of [
+    [missing, "none"],
+    [{ ...okConn, gate: "x" }, "x"],
+    [{ ...okConn, gate: 7 }, "none"],
+  ]) {
+    const st = boardStatus(c, false, NOW);
+    assert.equal(st.hideBoxes, true, g);
+    assert.equal(st.strips.length, 1);
+    assert.equal(st.strips[0].kind, "refused");
+    assert.equal(stripText(st.strips[0]), "herdr version gate unknown (" + g + "); nothing is being recorded.");
+  }
+});
+
+test("strips: a missing gate while disconnected is the Daemon before its first decision", () => {
+  for (const gate of [undefined, ""]) {
+    const c = { connected: false, herdr_minimum: "0.9.5", resync_guaranteed: false, gate };
+    if (gate === undefined) delete c.gate;
+    const st = boardStatus(c, false, NOW);
+    assert.deepEqual(
+      st.strips.map((s) => s.kind),
+      ["disconnected"],
+      String(gate),
+    );
+    assert.equal(stripText(st.strips[0]), "Disconnected from herdr. No snapshot received yet.");
+    assert.equal(st.hideBoxes, false);
+    assert.equal(st.dimmed, true);
+  }
+  // Connected with a missing gate is still refused.
+  const connected = { ...okConn };
+  delete connected.gate;
+  const st = boardStatus(connected, false, NOW);
+  assert.deepEqual(
+    st.strips.map((s) => s.kind),
+    ["refused"],
+  );
+  assert.equal(stripText(st.strips[0]), "herdr version gate unknown (none); nothing is being recorded.");
+  assert.equal(st.hideBoxes, true);
+  // A present unknown gate while disconnected is still refused.
+  assert.equal(boardStatus({ ...okConn, connected: false, gate: "x" }, false, NOW).hideBoxes, true);
+});
+
+test("strips: disconnected and refused drop the clause about Boxes", () => {
+  const c = { ...okConn, connected: false, last_snapshot_at: NOW - 160000, gate: "refused", herdr_version: "0.8.2" };
+  const st = boardStatus(c, false, NOW);
+  assert.equal(st.hideBoxes, true);
+  assert.deepEqual(
+    st.strips.map((s) => s.kind),
+    ["disconnected", "refused"],
+  );
+  assert.equal(stripText(st.strips[0]), "Disconnected from herdr. Last snapshot 2m 40s ago.");
+});
+
+test("strips: lost and refused show the lost strip, then red, with no Boxes", () => {
+  const st = boardStatus({ ...okConn, gate: "refused", herdr_version: "0.8.2" }, true, NOW);
+  assert.deepEqual(
+    st.strips.map((s) => s.kind),
+    ["disconnected", "refused"],
+  );
+  assert.equal(stripText(st.strips[0]), LOST_TEXT);
+  assert.equal(st.dimmed, true);
+  assert.equal(st.hideBoxes, true);
+});
+
+test("strips: an unknown herdr version reads as such", () => {
+  const c = { ...okConn, gate: "advisory" };
+  delete c.herdr_version;
+  assert.match(stripText(boardStatus(c, false, NOW).strips[0]), /^herdr \(version unknown\) is below the supported minimum 0\.9\.5;/);
+  const r = { ...okConn, gate: "refused", herdr_minimum: "" };
+  delete r.herdr_version;
+  assert.equal(
+    stripText(boardStatus(r, false, NOW).strips[0]),
+    "herdr (version unknown) is not supported. herddash needs (version unknown) or newer and is recording nothing.",
+  );
+});
+
+test("strips: a state event showing herdr connected clears the disconnected strip", () => {
+  const a = {};
+  let st = opened(a);
+  const down = { ...okConn, connected: false, last_snapshot_at: NOW - 160000 };
+  ({ st } = streamDecision(st, { kind: "event", source: a, name: "connection", data: JSON.stringify(down) }));
+  assert.equal(boardStatus(st.model.connection, streamLost(st, NOW), NOW).dimmed, true);
+  const data = JSON.stringify({ agents: fixture.input.map((i) => i.view), connection: okConn });
+  ({ st } = streamDecision(st, { kind: "event", source: a, name: "state", data }));
+  assert.deepEqual(boardStatus(st.model.connection, streamLost(st, NOW), NOW), {
+    strips: [],
+    dimmed: false,
+    hideBoxes: false,
+  });
+});
+
+test("formatAge keeps seconds below an hour, then follows formatDuration", () => {
+  assert.equal(formatAge(-5), "0s");
+  assert.equal(formatAge(59999), "59s");
+  assert.equal(formatAge(60000), "1m 00s");
+  assert.equal(formatAge(160000), "2m 40s");
+  assert.equal(formatAge(3599999), "59m 59s");
+  assert.equal(formatAge(3600000), "1h 00m");
+  assert.equal(formatAge(86400000), "1d 00h");
+  assert.equal(clockUTC(Date.UTC(2026, 0, 2, 3, 4, 5)), "03:04:05 UTC");
 });

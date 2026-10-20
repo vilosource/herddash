@@ -9,8 +9,8 @@ import (
 )
 
 // web holds the Board's files (Story 3.7): hand-written HTML, CSS and ES
-// modules, with no build step. They are named one by one so that the node
-// tests beside them are not embedded.
+// modules, with no build step. They are named one by one so that neither the
+// node tests beside them nor the hand-run checks in web/check/ are embedded.
 //
 //go:embed web/index.html web/board.css web/board.mjs web/order.mjs
 var web embed.FS

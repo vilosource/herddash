@@ -1,4 +1,5 @@
-// Board ordering, formatting (Story 3.7) and event handling (Story 3.8). A
+// Board ordering, formatting (Story 3.7), event handling (Story 3.8) and the
+// connection and version strips (Story 3.9). A
 // plain ES module: no DOM, no browser globals, so `node --test` checks it
 // against core's golden fixture (internal/core/testdata/board-order.json).
 //
@@ -290,10 +291,19 @@ export function nextReconnectDelay(delay) {
 
 // streamState is the Board's stream state before the first source opens:
 // the model, the current source (any token board.mjs compares with ===),
-// whether a reopen is pending, the next reopen delay, and whether the current
-// source has yet to deliver a valid state.
+// whether a reopen is pending, the next reopen delay, whether the current
+// source has yet to deliver a valid state, and lostSince: when (ms) the
+// first error on the current source came since the last valid state, or null
+// (see streamLost).
 export function streamState() {
-  return { model: emptyModel(), source: null, pending: false, delay: RECONNECT_START_MS, awaitingState: true };
+  return {
+    model: emptyModel(),
+    source: null,
+    pending: false,
+    delay: RECONNECT_START_MS,
+    awaitingState: true,
+    lostSince: null,
+  };
 }
 
 // streamDecision is the Board's stream logic, one input at a time. It returns
@@ -302,32 +312,154 @@ export function streamState() {
 //
 //   - {kind: "open", source}: source is now current; no reopen is pending,
 //     and its events are ignored until it delivers a valid state.
-//   - {kind: "error", source, closed}: when source is current, closed (the
-//     EventSource gave up, as on a non-200 reply) and no reopen is pending,
-//     reopen after the current delay, and the delay after that doubles up to
-//     the cap. Otherwise nothing: EventSource retries a dropped stream itself.
+//   - {kind: "error", source, closed, now}: when source is current, the
+//     stream is in trouble from now (lostSince, kept from an earlier error)
+//     until the next valid state. When it is also
+//     closed (the EventSource gave up, as on a non-200 reply) and no reopen
+//     is pending, reopen after the current delay, and the delay after that
+//     doubles up to the cap. Otherwise no reopen: EventSource retries a
+//     dropped stream itself.
 //   - {kind: "event", source, name, data}: an event from a source that is not
 //     current is ignored, and so is every event before a valid state on the
 //     current one, so a malformed state on a new stream cannot leave the old
-//     model to be merged into. A valid state replaces the model and resets
-//     the delay; other events go through applyEvent.
+//     model to be merged into. A valid state replaces the model, resets the
+//     delay and ends a loss of the stream; other events go through
+//     applyEvent.
 export function streamDecision(st, input) {
   switch (input.kind) {
     case "open":
       return { st: { ...st, source: input.source, pending: false, awaitingState: true } };
-    case "error":
-      if (input.source !== st.source || !input.closed || st.pending) return { st };
-      return { st: { ...st, pending: true, delay: nextReconnectDelay(st.delay) }, reopenAfter: st.delay };
+    case "error": {
+      if (input.source !== st.source) return { st };
+      const lost = st.lostSince != null ? st : { ...st, lostSince: input.now };
+      if (!input.closed || st.pending) return { st: lost };
+      return { st: { ...lost, pending: true, delay: nextReconnectDelay(st.delay) }, reopenAfter: st.delay };
+    }
     case "event": {
       if (input.source !== st.source) return { st };
       if (st.awaitingState && input.name !== "state") return { st };
       const r = applyEvent(st.model, input.name, input.data);
       if (r.warning) return { st, warning: r.warning };
       if (input.name === "state") {
-        return { st: { ...st, model: r.model, awaitingState: false, delay: RECONNECT_START_MS } };
+        return { st: { ...st, model: r.model, awaitingState: false, delay: RECONNECT_START_MS, lostSince: null } };
       }
       return r.model === st.model ? { st } : { st: { ...st, model: r.model } };
     }
   }
   return { st };
+}
+
+// LOST_GRACE_MS is how long the stream may be in trouble, with no valid state
+// since its first error, before the Board shows it has lost the Daemon: a
+// transient drop that EventSource's own retry heals does not flash the strip.
+export const LOST_GRACE_MS = 3000;
+
+// streamLost reports whether, at nowMs, the Board has lost the Daemon's
+// stream: an error on the current source at least LOST_GRACE_MS ago and no
+// valid state since.
+export function streamLost(st, nowMs) {
+  return typeof st.lostSince === "number" && nowMs - st.lostSince >= LOST_GRACE_MS;
+}
+
+// formatAge formats how old the last snapshot is, in ms: it keeps seconds
+// below an hour (0s to 59s, then 1m 00s to 59m 59s), because it is read when
+// something is wrong, and then follows formatDuration.
+export function formatAge(ms) {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  if (s < 60) return s + "s";
+  const m = Math.floor(s / 60);
+  if (m < 60) return m + "m " + pad2(s % 60) + "s";
+  return formatDuration(ms);
+}
+
+// clockUTC is a UTC Unix ms time as HH:MM:SS UTC.
+export function clockUTC(ms) {
+  const d = new Date(ms);
+  return pad2(d.getUTCHours()) + ":" + pad2(d.getUTCMinutes()) + ":" + pad2(d.getUTCSeconds()) + " UTC";
+}
+
+// LOST_TEXT is the connection strip while the Board has lost the Daemon's
+// stream.
+export const LOST_TEXT = "Lost contact with herddash. Reconnecting…";
+
+function versionLabel(v) {
+  return typeof v === "string" && v ? v : "(version unknown)";
+}
+
+// boardStatus decides what the Board shows around its Boxes, from the latest
+// ConnectionTruth (null before the first state), whether the Board has lost
+// the Daemon's stream, and the clock. It returns {strips, dimmed, hideBoxes}:
+//
+//   - strips, in order (connection, then version), each {kind, parts}: kind
+//     is "disconnected", "advisory" or "refused"; parts are the strip's text
+//     runs, each {text}, plus tick: true on the age that ticks (hidden from
+//     screen readers) or sr: true on the fixed time read in its place.
+//   - dimmed: every Box is dimmed and desaturated, never hidden, because the
+//     Board's data is stale (herdr disconnected, or the Daemon's stream lost).
+//   - hideBoxes: the gate is not ok or advisory (refused, unknown, or
+//     missing while connected), so no Box is shown at all. A missing gate
+//     while not connected is the Daemon before its first gate decision: no
+//     version strip, and Boxes are not hidden for it.
+//
+// Anything but connected: true is disconnected, and anything but
+// resync_guaranteed: true is not guaranteed.
+//
+// A lost stream replaces the herdr-disconnected text, because the
+// ConnectionTruth is then itself stale; the version strip still follows the
+// latest ConnectionTruth.
+export function boardStatus(connection, lost, nowMs) {
+  const c = isObject(connection) ? connection : null;
+  const gate = c ? c.gate : "ok";
+  // The Daemon omits gate before its first decision, while herdr is not yet
+  // connected: the disconnected strip says enough, so no version strip then.
+  const undecided = c !== null && (gate === undefined || gate === null || gate === "") && c.connected !== true;
+  const hideBoxes = !undecided && gate !== "ok" && gate !== "advisory";
+  const strips = [];
+  if (lost) {
+    strips.push({ kind: "disconnected", parts: [{ text: LOST_TEXT }] });
+  } else if (c && c.connected !== true) {
+    const at = c.last_snapshot_at;
+    if (Number.isFinite(at) && at > 0) {
+      strips.push({
+        kind: "disconnected",
+        parts: [
+          { text: "Disconnected from herdr. Last snapshot " },
+          { text: formatAge(nowMs - at) + " ago", tick: true },
+          { text: "at " + clockUTC(at), sr: true },
+          { text: hideBoxes ? "." : "; Boxes show that snapshot." },
+        ],
+      });
+    } else {
+      strips.push({ kind: "disconnected", parts: [{ text: "Disconnected from herdr. No snapshot received yet." }] });
+    }
+  }
+  if (gate === "advisory") {
+    let t =
+      "herdr " + versionLabel(c.herdr_version) + " is below the supported minimum " +
+      versionLabel(c.herdr_minimum) + "; recording under the dogfooding flag.";
+    if (c.resync_guaranteed !== true) t += " Resync is not guaranteed with this herdr version.";
+    strips.push({ kind: "advisory", parts: [{ text: t }] });
+  } else if (gate === "refused") {
+    strips.push({
+      kind: "refused",
+      parts: [
+        {
+          text:
+            "herdr " + versionLabel(c.herdr_version) + " is not supported. herddash needs " +
+            versionLabel(c.herdr_minimum) + " or newer and is recording nothing.",
+        },
+      ],
+    });
+  } else if (hideBoxes) {
+    const g = typeof gate === "string" && gate ? gate : "none";
+    strips.push({ kind: "refused", parts: [{ text: "herdr version gate unknown (" + g + "); nothing is being recorded." }] });
+  }
+  return { strips, dimmed: lost || (c !== null && c.connected !== true), hideBoxes };
+}
+
+// stripsKey identifies strips by everything but the ticking age, so the Board
+// redraws its live region only when a strip appears, goes or changes, never as
+// the age ticks.
+export function stripsKey(strips) {
+  return JSON.stringify(strips.map((s) => [s.kind, s.parts.map((p) => (p.tick ? "" : p.text))]));
 }

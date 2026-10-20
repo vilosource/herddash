@@ -1,6 +1,6 @@
 /* The Board (Story 3.7), in the design the operator approved on 2026-10-20:
    docs/design/board-design.md and docs/design/board.html. System fonts only.
-   The connection and version strips are Story 3.9's. */
+   The connection and version strips are Story 3.9's, in the same design. */
 
 /* ---- Tokens: light (default) ---- */
 :root {
@@ -39,6 +39,12 @@
   --finished-edge: #1F8A55;
 
   --focus: #1D4ED8;
+
+  --strip-disc-bg: #3A4150;  --strip-disc-ink: #FFFFFF;
+  --strip-adv-bg: #FDE9A8;   --strip-adv-ink: #4D3600;
+  --strip-ref-bg: #8F1D15;   --strip-ref-ink: #FFFFFF;
+
+  --stale-opacity: 0.5;
 }
 
 /* ---- Tokens: dark ---- */
@@ -49,6 +55,9 @@
     --needs-bg: #FF7A59; --needs-ink: #1A0703; --needs-ink-2: #3D1307; --needs-ring: #FFB199;
     --finished-accent: #5BD69A; --finished-edge: #3FB37B;
     --focus: #7AA2FF;
+    --strip-disc-bg: #323946; --strip-disc-ink: #E9EBEF;
+    --strip-adv-bg: #3D2E05;  --strip-adv-ink: #FFE7A3;
+    --strip-ref-bg: #A3261C;  --strip-ref-ink: #FFFFFF;
   }
 }
 
@@ -64,6 +73,22 @@ body {
   line-height: 1.5;
 }
 :focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+
+/* ---- Strips: thin, full width, stuck to the top, only when needed ---- */
+/* The header holds the strips' live region; it is what sticks. */
+.strips-bar { position: sticky; top: 0; z-index: 2; }
+.strip {
+  margin: 0;
+  padding: var(--space-2) var(--space-4);
+  font-size: var(--text-meta);
+  font-weight: 600;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.strip--disconnected { background: var(--strip-disc-bg); color: var(--strip-disc-ink); }
+.strip--advisory     { background: var(--strip-adv-bg);  color: var(--strip-adv-ink); }
+.strip--refused      { background: var(--strip-ref-bg);  color: var(--strip-ref-ink); }
+.strip .time { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 
 /* ---- Board: two zones ---- */
 .board { padding: var(--space-4); }
@@ -165,6 +190,9 @@ body {
 /* An idle Agent never seen working: no Waiting Time emphasis at all. */
 .box--never-working .wait { color: var(--ink-faint); font-size: var(--text-meta); }
 .wait--none { color: var(--ink-faint); }
+
+/* Disconnected, or the Daemon's stream lost: every Box dimmed, never hidden. */
+.board--stale .box { opacity: var(--stale-opacity); filter: saturate(0.35); }
 
 @media (prefers-reduced-motion: no-preference) {
   .box { transition: opacity 200ms ease, filter 200ms ease; }

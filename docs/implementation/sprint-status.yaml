@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 10-16-2026 09:40
-last_updated: 10-20-2026 16:08
+last_updated: 10-20-2026 16:33
 project: herddash
 project_key: NOKEY
 tracking_system: file-system
@@ -56,7 +56,7 @@ development_status:
   2-6-import-the-plugin-s-log-as-history: done
   epic-2-retrospective: optional
 
-  epic-3: in-progress
+  epic-3: done
   3-1-each-agent-s-view-context-line-and-order: done
   3-2-the-engine-publishes-views-and-change-lists: done
   3-3-read-only-api-on-loopback-with-current-state: done
@@ -65,7 +65,7 @@ development_status:
   3-6-board-visual-design: done
   3-7-the-board-renders-every-agent: done
   3-8-the-board-stays-live: done
-  3-9-connection-and-version-strips: backlog
+  3-9-connection-and-version-strips: done
   epic-3-retrospective: optional
 
   epic-4: backlog
