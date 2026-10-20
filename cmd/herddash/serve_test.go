@@ -322,6 +322,210 @@ func TestServeSignal(t *testing.T) {
 	}
 }
 
+// shutdownLimit is how long Story 4.1's tests allow serve to stop after a
+// signal. It is well under shutdownTimeout, so a stream that would hold
+// Shutdown until its timeout fails the test instead of racing it.
+const shutdownLimit = 2 * time.Second
+
+// TestServeShutdownAndRestart is Story 4.1: with an /events stream open and a
+// live Transition just pushed, a real SIGTERM makes serve end the stream and
+// exit 0 well within shutdownTimeout. Shutdown stops the HTTP server without
+// timing out and closes the database cleanly. A serve started at once on the
+// same data directory and the same address starts cleanly and records a second
+// daemon_start marker. Every Transition serve printed is in an intact record.
+func TestServeShutdownAndRestart(t *testing.T) {
+	hermeticEnv(t)
+	f := startFakeHerdr(t)
+	dataDir := filepath.Join(t.TempDir(), "data")
+	ctx, stop := signalContext()
+	defer stop()
+
+	var stdout, stderr syncBuffer
+	done := make(chan int, 1)
+	go func() { done <- run(ctx, serveArgs(f, dataDir), &stdout, &stderr) }()
+	addr := listenAddr(t, dataDir)
+	waitFor(t, "the Agent line", func() bool { return strings.Contains(stdout.String(), "pane=w1:p1") })
+	waitFor(t, "the status subscription", func() bool { return f.statusSubs.Load() >= 1 })
+
+	req, err := http.NewRequest(http.MethodGet, "http://"+addr+"/events", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr := &http.Transport{DisableKeepAlives: true}
+	defer tr.CloseIdleConnections()
+	resp, err := (&http.Client{Transport: tr}).Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("/events status %d", resp.StatusCode)
+	}
+	gotState := make(chan struct{})
+	ended := make(chan error, 1)
+	go func() {
+		r := bufio.NewReader(resp.Body)
+		seen := false
+		for {
+			line, err := r.ReadString('\n')
+			if err != nil {
+				ended <- err
+				return
+			}
+			if !seen && line == "event: state\n" {
+				seen = true
+				close(gotState)
+			}
+		}
+	}()
+	select {
+	case <-gotState:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no state event on /events")
+	}
+
+	// A live change goes in just before the signal, so a write may be in
+	// progress when shutdown begins.
+	f.push <- struct{}{}
+	start := time.Now()
+	if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case code := <-done:
+		if code != 0 {
+			t.Fatalf("exit code %d after SIGTERM, stderr %q", code, stderr.String())
+		}
+	case <-time.After(shutdownLimit):
+		t.Fatalf("serve did not stop within %v of SIGTERM", shutdownLimit)
+	}
+	t.Logf("stopped %v after SIGTERM", time.Since(start).Round(time.Millisecond))
+	// The server ended the stream: an EOF the client did not cause.
+	select {
+	case err := <-ended:
+		if err != io.EOF {
+			t.Errorf("the /events stream ended with %v, want EOF from the server", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("the /events stream was still open after serve exited")
+	}
+	b, err := os.ReadFile(filepath.Join(dataDir, logFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{`"http shutdown"`, `"database close"`} {
+		if strings.Contains(string(b), bad) {
+			t.Errorf("log has %s: shutdown did not finish cleanly:\n%s", bad, b)
+		}
+	}
+	if !strings.Contains(string(b), `"herddash stopped"`) {
+		t.Errorf("log has no stop entry:\n%s", b)
+	}
+	printedBlocked := strings.Contains(stdout.String(), "status=blocked previous=working provenance=live")
+
+	// A restart straight away, on the same address as under launchd or
+	// systemd: the lock and the port must both be free.
+	args := serveArgs(f, dataDir)
+	args[len(args)-1] = addr
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	defer cancel2()
+	var stdout2, stderr2 syncBuffer
+	done2 := make(chan int, 1)
+	go func() { done2 <- run(ctx2, args, &stdout2, &stderr2) }()
+	deadline := time.After(5 * time.Second)
+	for !strings.Contains(stdout2.String(), "pane=w1:p1") {
+		select {
+		case code := <-done2:
+			t.Fatalf("restarted serve exited %d, stderr %q", code, stderr2.String())
+		case <-deadline:
+			t.Fatalf("restarted serve showed no Agent; stderr %q", stderr2.String())
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+	cancel2()
+	if code := <-done2; code != 0 {
+		t.Fatalf("restarted serve exit code %d, stderr %q", code, stderr2.String())
+	}
+
+	db, err := sql.Open("sqlite", filepath.Join(dataDir, "herddash.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var integrity string
+	if err := db.QueryRow(`PRAGMA integrity_check`).Scan(&integrity); err != nil || integrity != "ok" {
+		t.Errorf("integrity_check %q, %v", integrity, err)
+	}
+	var starts int
+	if err := db.QueryRow(`SELECT count(*) FROM resync_markers WHERE reason = 'daemon_start'`).Scan(&starts); err != nil {
+		t.Fatal(err)
+	}
+	if starts != 2 {
+		t.Errorf("%d daemon_start markers, want 2 (one per serve)", starts)
+	}
+	if printedBlocked {
+		var n int
+		if err := db.QueryRow(`SELECT count(*) FROM transitions WHERE pane_id = 'w1:p1' AND new_status = 'blocked'`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		if n == 0 {
+			t.Error("serve printed the blocked Transition but the record lacks it")
+		}
+	}
+}
+
+// TestHelperServe is TestServeExitCode's child process: it runs main's code
+// path, with the arguments in HERDDASH_TEST_SERVE_ARGS, and exits with its
+// code.
+func TestHelperServe(t *testing.T) {
+	raw := os.Getenv("HERDDASH_TEST_SERVE_ARGS")
+	if raw == "" {
+		t.Skip("run only as TestServeExitCode's child process")
+	}
+	var args []string
+	if err := json.Unmarshal([]byte(raw), &args); err != nil {
+		t.Fatal(err)
+	}
+	os.Exit(mainCode(args))
+}
+
+// TestServeExitCode runs serve through main's code path in a child process
+// and sends it SIGTERM: the process itself exits 0, which is what launchd and
+// systemd act on.
+func TestServeExitCode(t *testing.T) {
+	hermeticEnv(t)
+	f := startFakeHerdr(t)
+	dataDir := filepath.Join(t.TempDir(), "data")
+	args, err := json.Marshal(serveArgs(f, dataDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	child := exec.Command(os.Args[0], "-test.run=^TestHelperServe$")
+	child.Env = append(os.Environ(), "HERDDASH_TEST_SERVE_ARGS="+string(args))
+	if err := child.Start(); err != nil {
+		t.Fatal(err)
+	}
+	exited := make(chan error, 1)
+	go func() { exited <- child.Wait() }()
+	listenAddr(t, dataDir)
+	waitFor(t, "the status subscription", func() bool { return f.statusSubs.Load() >= 1 })
+	if err := child.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-exited:
+		if err != nil {
+			t.Fatalf("child serve: %v (exit code %d)", err, child.ProcessState.ExitCode())
+		}
+	case <-time.After(shutdownLimit + 3*time.Second):
+		child.Process.Kill()
+		t.Fatal("child serve did not exit after SIGTERM")
+	}
+	if code := child.ProcessState.ExitCode(); code != 0 {
+		t.Errorf("child serve exit code %d, want 0", code)
+	}
+}
+
 func TestServeTightensLogMode(t *testing.T) {
 	hermeticEnv(t)
 	f := startFakeHerdr(t)

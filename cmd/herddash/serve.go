@@ -48,7 +48,10 @@ const (
 // which runs under its own context, stopped and waited for. Shutdown ends
 // every open /events stream through the handler's CloseStreams, registered
 // with RegisterOnShutdown; without it Shutdown would wait out its timeout on
-// those long-lived responses.
+// those long-lived responses. A store write the engine has begun finishes,
+// since store writes take no context, and the deferred Store.Close then
+// releases the database lock, so a serve started straight afterwards starts
+// cleanly (Story 4.1, TestServeShutdownAndRestart).
 func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("herddash serve", flag.ContinueOnError)
 	fs.SetOutput(stderr)

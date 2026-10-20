@@ -55,3 +55,6 @@
 - source_spec: `docs/implementation/spec-3-9-connection-and-version-strips.md`
   summary: Run the Board's headless-browser check (board.mjs drawing: strips, dimming, refused hiding, live updates, reconnect) in CI, not only by hand.
   evidence: Stories 3.7-3.9 each verified board.mjs only in a manual headless-Chrome run; node --test covers order.mjs alone. ubuntu runners ship Chrome, and Node 22's built-in WebSocket can drive it over CDP without npm, but wiring it into CI is work no story plans.
+- source_spec: `docs/implementation/spec-4-1-clean-shutdown.md`
+  summary: CLAUDE.md's operator-checkpoint list still says Story 1.3 must avoid "the live 0.8.2 server"; the live herdr has run 0.9.5 since 2026-10-20.
+  evidence: The checkpoint is closed and the server was restarted on 0.9.5 (PID 56666, loaded binary checked via lsof); the line now misleads a reader about the dogfooding flag. Agent-context file, so deferred.
