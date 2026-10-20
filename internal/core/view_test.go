@@ -369,3 +369,28 @@ func TestWorkspaceHeaders(t *testing.T) {
 		t.Errorf("one group: headers = %v, want [0]", h)
 	}
 }
+
+func TestConnectionTruthJSON(t *testing.T) {
+	cases := []struct {
+		name string
+		in   ConnectionTruth
+		want string
+	}{
+		{"before any gate", ConnectionTruth{HerdrMinimum: HerdrMinimum},
+			`{"connected":false,"herdr_minimum":"0.9.5","resync_guaranteed":false}`},
+		{"connected", ConnectionTruth{Connected: true, LastSnapshotAt: 1760000000000, HerdrVersion: "0.9.5",
+			HerdrMinimum: HerdrMinimum, Gate: GateOK, ResyncGuaranteed: true},
+			`{"connected":true,"last_snapshot_at":1760000000000,"herdr_version":"0.9.5","herdr_minimum":"0.9.5","gate":"ok","resync_guaranteed":true}`},
+		{"refused", ConnectionTruth{HerdrVersion: "0.8.2", HerdrMinimum: HerdrMinimum, Gate: GateRefused},
+			`{"connected":false,"herdr_version":"0.8.2","herdr_minimum":"0.9.5","gate":"refused","resync_guaranteed":false}`},
+	}
+	for _, c := range cases {
+		b, err := json.Marshal(c.in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(b) != c.want {
+			t.Errorf("%s: got %s, want %s", c.name, b, c.want)
+		}
+	}
+}

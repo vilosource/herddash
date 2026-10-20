@@ -47,6 +47,9 @@ type Options struct {
 	// retentionSweepInterval the record is swept of rows older than it that no
 	// present Agent needs. 0 never sweeps.
 	RetentionDays int
+	// Home is the Daemon user's home directory, for shortening each Agent's
+	// project directory in its view; "" shortens nothing.
+	Home string
 }
 
 // EnvironFunc is the type of Options.Environ.
@@ -120,6 +123,11 @@ type Engine struct {
 	store Recorder
 	// retentionDays is Options.RetentionDays; read-only after New.
 	retentionDays int
+	// home is Options.Home and runID this run's id; read-only after New.
+	home  string
+	runID string
+	// pub is what readers see; safe from any goroutine.
+	pub publisher
 
 	inbox chan any
 	// stopped closes when Run returns.
@@ -212,6 +220,13 @@ type Engine struct {
 	reconcileFrom uint64
 	// resyncLastStart is when the latest resync began, by the wall clock.
 	resyncLastStart time.Time
+
+	// truth is the ConnectionTruth now; changes are the current message's
+	// changes so far, published when it has been handled; viewSeq is the
+	// latest publication's Seq.
+	truth   core.ConnectionTruth
+	changes []Change
+	viewSeq uint64
 }
 
 // pane is one tracked Agent pane.
@@ -271,6 +286,9 @@ type pane struct {
 	// firstSkipped is set when the Agent's first sight deliberately recorded
 	// nothing (it matched the record), so it was no disagreement.
 	firstSkipped bool
+	// view is the Agent's view last noted in a change, valid once noted is set.
+	view  core.AgentView
+	noted bool
 	// profile is the Agent's Profile, valid once resolved is set. resolving
 	// tags the Profile resolution in flight, 0 when there is none; a result
 	// carrying any other tag is stale and ignored.
@@ -382,6 +400,8 @@ func New(o Options) *Engine {
 		environ:          o.Environ,
 		store:            o.Store,
 		retentionDays:    o.RetentionDays,
+		home:             o.Home,
+		runID:            newRunID(),
 		inbox:            make(chan any),
 		stopped:          make(chan struct{}),
 		panes:            map[string]*pane{},
@@ -396,6 +416,9 @@ func New(o Options) *Engine {
 	if e.environ == nil {
 		e.environ = procenv.Lookup
 	}
+	e.truth = core.ConnectionTruth{HerdrMinimum: core.HerdrMinimum}
+	e.pub.subs = map[*ViewSubscription]struct{}{}
+	e.pub.view.Store(&View{RunID: e.runID, Agents: []core.AgentView{}, Connection: e.truth, Headers: []int{}})
 	return e
 }
 
@@ -413,6 +436,7 @@ func (e *Engine) Run(ctx context.Context) {
 	runCtx, cancel := context.WithCancel(ctx)
 	e.runCtx = runCtx
 	defer func() {
+		e.stopPublishing()
 		e.closeAll()
 		cancel()
 		e.wg.Wait()
@@ -471,6 +495,12 @@ func (e *Engine) onConnect(m connectMsg) {
 	}
 	changed := e.reportGate(m.gate, m.version)
 	e.herdrVersion = m.version
+	t := e.truth
+	t.HerdrVersion, t.Gate, t.ResyncGuaranteed = m.version, m.gate, m.resyncGuaranteed
+	if m.gate == core.GateRefused {
+		t.Connected = false
+	}
+	e.setTruth(t)
 	switch m.gate {
 	case core.GateRefused:
 		e.refused(changed)
@@ -592,6 +622,9 @@ func (e *Engine) disconnect() {
 	}
 	e.connected = false
 	e.ready = false
+	t := e.truth
+	t.Connected = false
+	e.setTruth(t)
 	for id, p := range e.panes {
 		if p.sub != nil {
 			p.sub.Close()
@@ -669,7 +702,9 @@ func (e *Engine) Agents(ctx context.Context) ([]Agent, error) {
 	}
 }
 
+// handle handles one inbox message, then publishes what it changed.
 func (e *Engine) handle(m any) {
+	defer e.publish()
 	switch m := m.(type) {
 	case connectMsg:
 		e.onConnect(m)
@@ -927,6 +962,9 @@ func (e *Engine) onSnapshot(m snapshotMsg) {
 	if ending {
 		e.markCauses(ended)
 	}
+	t := e.truth
+	t.Connected, t.LastSnapshotAt = true, e.now()
+	e.setTruth(t)
 	unsubscribed, changed := e.apply(m.seq, m.snap, first)
 	if reconcile && changed {
 		e.mark(store.ReasonReconcile, "")
@@ -1069,6 +1107,7 @@ func (e *Engine) apply(seq uint64, s core.Snapshot, resubscribe bool) (unsubscri
 			e.transition(p, a.Status, core.ProvenanceSnapshot, a.StateChangeSeq)
 			changed = true
 		}
+		e.noteView(p) // a context or program change
 		changed = changed || firstSeen
 		switch {
 		case p.sub != nil || p.subscribing:
@@ -1238,6 +1277,7 @@ func (e *Engine) startResync(causes []cause) {
 	e.resyncNext = nil
 	e.log.Info("resync", "cause", c.reason, "detail", c.detail)
 	e.sink.Resynced(c.reason, e.now())
+	e.change(Change{Kind: ChangeResync, Reason: c.reason, Detail: c.detail})
 	e.resyncSubscribe()
 	e.resyncSettle()
 }
@@ -1343,6 +1383,11 @@ func (e *Engine) remove(id, reason string) {
 	if p.known {
 		e.log.Info("agent removed", "pane", id, "agent_program", p.program, "reason", reason)
 		e.sink.Removed(e.agent(p), e.now())
+		last := p.view
+		if !p.noted {
+			last = e.viewOf(p)
+		}
+		e.change(Change{Kind: ChangeRemoved, Key: e.key(p.id), Agent: last})
 	}
 }
 
@@ -1359,6 +1404,7 @@ func (e *Engine) report(p *pane) {
 		p.firstSkipped = e.firstSight(p, now)
 		p.seenBy, p.seenOrder, p.seenAt = "", nil, 0
 		e.sink.Agent(e.agent(p), now)
+		e.noteView(p)
 	case p.resolving == 0:
 		e.resolve(p) // which reports p when it ends
 	}
@@ -1471,6 +1517,7 @@ func (e *Engine) settleProfile(p *pane, m profileMsg) {
 	case had && previous != m.profile:
 		e.log.Info("profile changed", "pane", p.id, "agent_program", p.program, "profile", m.profile, "previous", previous)
 		e.sink.Profile(e.agent(p), previous, e.now())
+		e.noteView(p)
 	}
 }
 
@@ -1498,6 +1545,10 @@ func (e *Engine) transition(p *pane, next core.Status, prov core.Provenance, ord
 	p.fold = p.fold.Add(t)
 	e.record(t)
 	e.sink.Transition(t, e.agent(p))
+	if p.known {
+		p.view, p.noted = e.viewOf(p), true
+		e.change(Change{Kind: ChangeTransition, Transition: t, Agent: p.view})
+	}
 }
 
 // seen sets an unreported pane's Status as a snapshot or a status event

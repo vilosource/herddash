@@ -438,9 +438,10 @@ func TestRecordFirstSightAfterHeldResolution(t *testing.T) {
 	tr := rows[0]
 	order, ok := tr.HerdrOrder()
 	// Clock readings: the daemon_start marker (1), the gate (2), the connect
-	// marker (3), the snapshot showing the Agent (4), then the report.
-	if tr.Provenance() != core.ProvenanceSnapshot || !ok || order != 7 || tr.ObservedAt() != clockAt(4) || reported <= tr.ObservedAt() {
-		t.Errorf("first sight %s at %d (reported at %d), want snapshot seq 7 at %d", row(tr), tr.ObservedAt(), reported, clockAt(4))
+	// marker (3), the snapshot's last_snapshot_at (4), the snapshot showing
+	// the Agent (5), then the report.
+	if tr.Provenance() != core.ProvenanceSnapshot || !ok || order != 7 || tr.ObservedAt() != clockAt(5) || reported <= tr.ObservedAt() {
+		t.Errorf("first sight %s at %d (reported at %d), want snapshot seq 7 at %d", row(tr), tr.ObservedAt(), reported, clockAt(5))
 	}
 }
 

@@ -87,6 +87,12 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 		}
 	}()
 
+	// The home directory only shortens project directories in Agent views;
+	// without one ("" on error) they are shown in full.
+	home, err := os.UserHomeDir()
+	if err != nil {
+		logger.Warn("home directory unknown; project directories will be shown unshortened", "error", err.Error())
+	}
 	e := engine.New(engine.Options{
 		Host:   cfg.Host(),
 		Server: cfg.Server(),
@@ -99,6 +105,7 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 		Profiles:              cfg.ProfileRules(),
 		Store:                 st,
 		RetentionDays:         cfg.RetentionDays(),
+		Home:                  home,
 	})
 	e.Run(ctx)
 	logger.Info("herddash stopped")

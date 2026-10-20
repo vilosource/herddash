@@ -277,3 +277,24 @@ func WorkspaceHeaders(views []AgentView) []int {
 	}
 	return headers
 }
+
+// ConnectionTruth is what every surface says about the Daemon's connection to
+// herdr: whether it is observing, when it last read herdr's state, and the
+// version gate's outcome (FR-16).
+type ConnectionTruth struct {
+	// Connected is set from a connection's first applied snapshot until the
+	// connection is lost.
+	Connected bool `json:"connected"`
+	// LastSnapshotAt is when the latest snapshot was applied (UTC Unix ms);
+	// 0 before any, and then omitted.
+	LastSnapshotAt int64 `json:"last_snapshot_at,omitempty"`
+	// HerdrVersion is the version herdr's ping returned at the latest gate
+	// decision; omitted when empty.
+	HerdrVersion string `json:"herdr_version,omitempty"`
+	// HerdrMinimum is the oldest herdr herddash supports, HerdrMinimum.
+	HerdrMinimum string `json:"herdr_minimum"`
+	// Gate is the latest gate decision; omitted before the first.
+	Gate Gate `json:"gate,omitempty"`
+	// ResyncGuaranteed is DecideGate's verdict on the resync guarantee.
+	ResyncGuaranteed bool `json:"resync_guaranteed"`
+}
