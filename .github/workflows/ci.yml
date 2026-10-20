@@ -31,6 +31,26 @@ jobs:
         run: go vet ./...
       - name: test
         run: go test -race ./...
+      # The Board's ordering module, against core's golden fixture. Node is
+      # preinstalled on the runner; no npm packages. The test files are named
+      # by a shell glob because Node 22 does not take a directory argument.
+      # The step fails on a Node older than 18 and when no test ran.
+      - name: board tests
+        run: |
+          set -o pipefail
+          node --version
+          major="$(node -p 'process.versions.node.split(".")[0]')"
+          if [ "$major" -lt 18 ]; then
+            echo "node $major is older than 18"
+            exit 1
+          fi
+          tap="$RUNNER_TEMP/board-tests.tap"
+          node --test --test-reporter=tap internal/httpapi/web/*.test.mjs | tee "$tap"
+          tests="$(sed -n 's/^# tests //p' "$tap")"
+          if [ "${tests:-0}" -eq 0 ]; then
+            echo "no board tests ran"
+            exit 1
+          fi
 
   cross-compile:
     needs: check

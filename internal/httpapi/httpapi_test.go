@@ -222,7 +222,7 @@ func TestHead(t *testing.T) {
 
 func TestUnknown(t *testing.T) {
 	h, _ := newHandler(t)
-	for _, p := range []string{"/", "/nope", "/api/state/x", "/api/state/", "/api", "/assets/", "/events/", "/api/events",
+	for _, p := range []string{"/nope", "/api/state/x", "/api/state/", "/api", "/assets/", "/events/", "/api/events",
 		"/api/agents/h/s/1/w1:p1/history"} {
 		checkError(t, do(h, http.MethodGet, p, "127.0.0.1:7318", nil), http.StatusNotFound, "not_found")
 	}

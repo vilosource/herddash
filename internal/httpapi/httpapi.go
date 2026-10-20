@@ -53,11 +53,12 @@ const (
 )
 
 // New returns the read-only HTTP surface (AD-6, ADR-0007). Every request is
-// first checked for a loopback Host header (DNS rebinding); then only
-// GET (or HEAD, except on /events) on a known route is served. It reads only
-// through opts.View, opts.Subscribe and opts.History: it never calls herdr and
-// never writes to the store. It never sends a CORS header. It panics if
-// opts.View, opts.Subscribe or opts.History is nil.
+// first checked for a loopback Host header (DNS rebinding); then only GET (or
+// HEAD, except on /events) on a known route is served: the Board at / and its
+// embedded files under /assets/, /api/state, the history route and /events.
+// It reads only through opts.View, opts.Subscribe and opts.History: it never
+// calls herdr and never writes to the store. It never sends a CORS header. It
+// panics if opts.View, opts.Subscribe or opts.History is nil.
 func New(opts Options) *Handler {
 	if opts.View == nil {
 		panic("httpapi.New: Options.View is nil")
@@ -121,8 +122,20 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var (
 		isHistory  bool
 		historyKey core.AgentKey
+		board      *boardFile
 	)
 	switch {
+	case r.URL.Path == pathBoard:
+		hd.Set("Content-Security-Policy", boardCSP)
+		board = &boardPage
+	case strings.HasPrefix(r.URL.Path, prefixAssets):
+		hd.Set("Content-Security-Policy", boardCSP)
+		f, ok := boardAsset(r.URL.Path)
+		if !ok {
+			writeError(w, r, http.StatusNotFound, codeNotFound, "no such asset")
+			return
+		}
+		board = &f
 	case strings.HasPrefix(r.URL.Path, prefixAgents):
 		k, ok := parseHistoryPath(r.URL)
 		if !ok {
@@ -146,6 +159,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		hd.Set("Allow", allowGetHead)
 		writeError(w, r, http.StatusMethodNotAllowed, codeMethodNotAllowed, "only GET and HEAD are allowed")
+		return
+	}
+	if board != nil {
+		serveBoardFile(w, r, *board)
 		return
 	}
 	if isHistory {
