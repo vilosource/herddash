@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/vilosource/herddash/internal/core"
 	"github.com/vilosource/herddash/internal/engine"
 )
 
@@ -21,6 +23,9 @@ type Options struct {
 	// a channel holding buffer of them, and returns the func that ends it
 	// (engine.Engine.Subscribe). Each /events stream takes one.
 	Subscribe func(buffer int) (*engine.ViewSubscription, func())
+	// History returns one Agent's recorded Transitions in the record's order
+	// (store.Store.History). The history route reads only through it.
+	History func(ctx context.Context, key core.AgentKey) ([]core.Transition, error)
 	// Logger receives the handler's own failures; nil discards them.
 	Logger *slog.Logger
 }
@@ -50,15 +55,18 @@ const (
 // New returns the read-only HTTP surface (AD-6, ADR-0007). Every request is
 // first checked for a loopback Host header (DNS rebinding); then only
 // GET (or HEAD, except on /events) on a known route is served. It reads only
-// through opts.View and opts.Subscribe: it never calls herdr and never touches
-// the store. It never sends a CORS header. It panics if opts.View or
-// opts.Subscribe is nil.
+// through opts.View, opts.Subscribe and opts.History: it never calls herdr and
+// never writes to the store. It never sends a CORS header. It panics if
+// opts.View, opts.Subscribe or opts.History is nil.
 func New(opts Options) *Handler {
 	if opts.View == nil {
 		panic("httpapi.New: Options.View is nil")
 	}
 	if opts.Subscribe == nil {
 		panic("httpapi.New: Options.Subscribe is nil")
+	}
+	if opts.History == nil {
+		panic("httpapi.New: Options.History is nil")
 	}
 	log := opts.Logger
 	if log == nil {
@@ -67,6 +75,7 @@ func New(opts Options) *Handler {
 	return &Handler{
 		view:         opts.View,
 		subscribe:    opts.Subscribe,
+		history:      opts.History,
 		log:          log,
 		stop:         make(chan struct{}),
 		keepalive:    keepaliveInterval,
@@ -78,6 +87,7 @@ func New(opts Options) *Handler {
 type Handler struct {
 	view      func() engine.View
 	subscribe func(buffer int) (*engine.ViewSubscription, func())
+	history   func(ctx context.Context, key core.AgentKey) ([]core.Transition, error)
 	log       *slog.Logger
 
 	// stop is closed, once, by CloseStreams.
@@ -108,9 +118,20 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusForbidden, codeHostNotAllowed, "the Host header must be localhost, 127.0.0.1 or [::1]")
 		return
 	}
-	switch r.URL.Path {
-	case pathState:
-	case pathEvents:
+	var (
+		isHistory  bool
+		historyKey core.AgentKey
+	)
+	switch {
+	case strings.HasPrefix(r.URL.Path, prefixAgents):
+		k, ok := parseHistoryPath(r.URL)
+		if !ok {
+			writeError(w, r, http.StatusNotFound, codeNotFound, "no such route")
+			return
+		}
+		isHistory, historyKey = true, k
+	case r.URL.Path == pathState:
+	case r.URL.Path == pathEvents:
 		if r.Method != http.MethodGet {
 			hd.Set("Allow", allowGet)
 			writeError(w, r, http.StatusMethodNotAllowed, codeMethodNotAllowed, "only GET is allowed")
@@ -125,6 +146,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		hd.Set("Allow", allowGetHead)
 		writeError(w, r, http.StatusMethodNotAllowed, codeMethodNotAllowed, "only GET and HEAD are allowed")
+		return
+	}
+	if isHistory {
+		h.serveHistory(w, r, historyKey)
 		return
 	}
 	v := h.view()

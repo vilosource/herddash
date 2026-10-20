@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -1275,5 +1276,81 @@ func TestServeEvents(t *testing.T) {
 			t.Error("the stream is still open after serve returned")
 			open = false
 		}
+	}
+}
+
+// TestServeHistory runs serve against the fake herdr, records a live change,
+// and reads the Agent's history over HTTP: the first sight and the live row,
+// in order, read from the opened store. An unknown key gets 404.
+func TestServeHistory(t *testing.T) {
+	hermeticEnv(t)
+	f := startFakeHerdr(t)
+	dataDir := filepath.Join(t.TempDir(), "data")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var stdout, stderr syncBuffer
+	done := make(chan int, 1)
+	go func() { done <- run(ctx, serveArgs(f, dataDir), &stdout, &stderr) }()
+	addr := listenAddr(t, dataDir)
+	waitFor(t, "the status subscription", func() bool { return f.statusSubs.Load() >= 1 })
+	waitFor(t, "the read after the subscription", func() bool { return f.snapshots.Load() >= 2 })
+	select {
+	case f.push <- struct{}{}:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the fake herdr did not take the push")
+	}
+	waitFor(t, "the live transition line", func() bool { return strings.Contains(stdout.String(), "provenance=live") })
+
+	tr := &http.Transport{DisableKeepAlives: true}
+	defer tr.CloseIdleConnections()
+	client := &http.Client{Transport: tr, Timeout: 5 * time.Second}
+	get := func(path string) (int, []byte) {
+		t.Helper()
+		resp, err := client.Get("http://" + addr + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp.StatusCode, body
+	}
+
+	code, body := get("/api/agents/testhost/test/1/w1%3Ap1/history")
+	if code != http.StatusOK {
+		t.Fatalf("status %d, body %s", code, body)
+	}
+	var got struct {
+		Key         core.AgentKey `json:"key"`
+		Transitions []struct {
+			Previous   string `json:"previous"`
+			New        string `json:"new"`
+			Provenance string `json:"provenance"`
+			Profile    string `json:"profile"`
+		} `json:"transitions"`
+	}
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("body %s: %v", body, err)
+	}
+	if want := (core.AgentKey{Host: "testhost", Server: "test", Epoch: 1, PaneID: "w1:p1"}); got.Key != want {
+		t.Errorf("key %+v, want %+v", got.Key, want)
+	}
+	var rows []string
+	for _, r := range got.Transitions {
+		rows = append(rows, fmt.Sprintf("%s->%s %s %s", r.Previous, r.New, r.Provenance, r.Profile))
+	}
+	if g, w := strings.Join(rows, "; "), "->working snapshot claude; working->blocked live claude"; g != w {
+		t.Errorf("history %q, want %q", g, w)
+	}
+
+	if code, body := get("/api/agents/testhost/test/1/w9:p9/history"); code != http.StatusNotFound || !strings.Contains(string(body), `"not_found"`) {
+		t.Errorf("unknown key: status %d, body %s", code, body)
+	}
+
+	cancel()
+	if code := <-done; code != 0 {
+		t.Fatalf("exit code %d, stderr %q", code, stderr.String())
 	}
 }

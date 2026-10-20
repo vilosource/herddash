@@ -138,7 +138,7 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 		RetentionDays:         cfg.RetentionDays(),
 		Home:                  home,
 	})
-	h := httpapi.New(httpapi.Options{View: e.View, Subscribe: e.Subscribe, Logger: logger})
+	h := httpapi.New(httpapi.Options{View: e.View, Subscribe: e.Subscribe, History: st.History, Logger: logger})
 	srv := &http.Server{
 		Handler:           h,
 		ReadHeaderTimeout: readHeaderTimeout,

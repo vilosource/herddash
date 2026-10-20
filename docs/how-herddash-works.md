@@ -79,6 +79,14 @@ If the connection drops, the page reconnects and receives the whole state again,
 herddash never asks herdr for anything when you load the page. The page shows herddash's own
 record, so a dozen open tabs put no extra load on herdr.
 
+The API also answers what one agent did. `GET /api/agents/{host}/{server}/{epoch}/{pane}/history`
+returns `{"key": …, "transitions": [ … ]}`: every recorded status change of that agent, oldest
+first, each with the profile at the time and where it came from (`live`, `snapshot` or
+`backfill`). Each part of the path is percent-encoded, so pane `w1:p1` may be sent as `w1%3Ap1`.
+A 404 means herddash holds no record for that agent: it was never seen, or its records are older
+than the retention period and have been deleted. Retention never deletes the change that started
+an agent's current state, so an agent on the board always has at least that row.
+
 ## Why the waiting time can be trusted
 
 Every box shows how long the agent has been in its current state. herddash records the moment it
