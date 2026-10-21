@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  herddash as a launchd agent: runs `herddash serve` as the operator's own user
+  in their login session. launchd expands neither ~ nor variables, so __HOME__
+  stands for the absolute home directory; docs/install.md replaces it with one
+  sed line. Configuration comes from ~/.config/herddash/config.toml, as when run
+  by hand. No HERDR_SOCKET_PATH or HERDR_SESSION is set: the Daemon finds the
+  socket by herdr's own resolution order, and the config file can pin it.
+
+  Restart only after a non-zero exit (a SIGTERM at logout exits 0), at most once
+  every 30 seconds. Standard output repeats the log and is discarded; standard
+  error goes to the data directory beside herddash.log. Umask 63 is 077.
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>io.github.vilosource.herddash</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>__HOME__/.local/bin/herddash</string>
+		<string>serve</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
+	<key>ThrottleInterval</key>
+	<integer>30</integer>
+	<key>Umask</key>
+	<integer>63</integer>
+	<key>ProcessType</key>
+	<string>Background</string>
+	<key>StandardOutPath</key>
+	<string>/dev/null</string>
+	<key>StandardErrorPath</key>
+	<string>__HOME__/.local/share/herddash/herddash.stderr.log</string>
+</dict>
+</plist>
