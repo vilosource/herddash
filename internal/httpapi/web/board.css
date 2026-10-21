@@ -35,14 +35,16 @@
   --needs-ink-2: #FFE1DC;
   --needs-ring: #7A140D;
 
-  --finished-accent: #17663F;
-  --finished-edge: #1F8A55;
+  /* Traffic lights (2026-10-21): red needs you, amber idle, green working;
+     finished takes the blue. */
+  --finished-accent: #2D5A96;
+  --finished-edge: #3E6FB0;
 
-  --working-accent: #2D5A96;
-  --working-edge: #3E6FB0;
+  --working-accent: #17663F;
+  --working-edge: #1F8A55;
 
-  --idle-accent: #5A616E;
-  --idle-edge: #7E8592;
+  --idle-accent: #8A5300;
+  --idle-edge: #C77700;
 
   --badge-bg: #E4E7EC;
   --badge-ink: #2B313B;
@@ -61,10 +63,10 @@
   :root {
     --bg: #0E1014; --surface: #1A1E25; --ink: #E9EBEF; --ink-muted: #A7AEBA; --ink-faint: #8B93A0;
     --border: #2D323C; --border-quiet: #3A404B;
-    --needs-bg: #FF7A59; --needs-ink: #1A0703; --needs-ink-2: #3D1307; --needs-ring: #FFB199;
-    --finished-accent: #5BD69A; --finished-edge: #3FB37B;
-    --working-accent: #8DB6EE; --working-edge: #5B8FD6;
-    --idle-accent: #A7AEBA; --idle-edge: #6B7380;
+    --needs-bg: #F2555A; --needs-ink: #1A0505; --needs-ink-2: #3A0C0C; --needs-ring: #FFB3B5;
+    --finished-accent: #8DB6EE; --finished-edge: #5B8FD6;
+    --working-accent: #5BD69A; --working-edge: #3FB37B;
+    --idle-accent: #FFC15E; --idle-edge: #F5A524;
     --badge-bg: #2A303A; --badge-ink: #DDE1E7;
     --focus: #7AA2FF;
     --strip-disc-bg: #323946; --strip-disc-ink: #E9EBEF;
@@ -214,7 +216,7 @@ body {
 .box--finished .class { color: var(--finished-accent); }
 .box--finished .context { color: var(--ink); }
 
-/* Working: a blue leading edge like Finished's green one, flush with the page, so it reads as
+/* Working: a green leading edge like Finished's blue one, flush with the page, so it reads as
    busy rather than done. Unknown recedes. */
 .box--working {
   border-left: 6px solid var(--working-edge);
@@ -224,7 +226,7 @@ body {
 .box--unknown .class { color: var(--ink-muted); font-weight: 600; }
 .box--unknown .where { color: var(--ink-muted); font-weight: 600; }
 .box--unknown { border-style: dashed; border-color: var(--border-quiet); }
-/* Idle (class working, Status anything but working): a grey edge, labelled, and no Waiting
+/* Idle (class working, Status anything but working): an amber edge, labelled, and no Waiting
    Time emphasis. */
 .box--idle {
   border-left: 6px solid var(--idle-edge);

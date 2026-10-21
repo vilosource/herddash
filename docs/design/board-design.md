@@ -26,14 +26,14 @@ the workspace line and the heading; label (`0.8125`) sets the directory and the 
 | `--ink` text | `#16191F` | `#E9EBEF` | 16.0 / 16.0 on bg |
 | `--ink-muted` Working text, headers | `#4B5361` | `#A7AEBA` | 7.0 / 8.5 on bg |
 | `--ink-faint` unemphasised time, dash | `#646C79` | `#8B93A0` | 4.8 / 6.2 on bg |
-| `--needs-bg` Needs you fill | `#B42318` | `#FF7A59` | **6.0 / 7.4 against the page** |
-| `--needs-ink` / `--needs-ink-2` | `#FFFFFF` / `#FFE1DC` | `#1A0703` / `#3D1307` | 6.6, 5.3 / 7.6, 6.3 on the fill |
-| `--finished-accent` label | `#17663F` | `#5BD69A` | 7.0 / 9.2 on surface |
-| `--finished-edge` leading edge | `#1F8A55` | `#3FB37B` | 4.0 / 7.2 on bg (non-text, ≥ 3) |
-| `--working-accent` label | `#2D5A96` | `#8DB6EE` | 6.3 / 9.1 on bg |
-| `--working-edge` leading edge | `#3E6FB0` | `#5B8FD6` | 4.7 / 5.8 on bg (non-text, ≥ 3) |
-| `--idle-accent` label | `#5A616E` | `#A7AEBA` | 5.7 / 8.5 on bg |
-| `--idle-edge` leading edge | `#7E8592` | `#6B7380` | 3.4 / 4.0 on bg (non-text, ≥ 3) |
+| `--needs-bg` Needs you fill | `#B42318` | `#F2555A` | **6.0 / 5.6 against the page** |
+| `--needs-ink` / `--needs-ink-2` | `#FFFFFF` / `#FFE1DC` | `#1A0505` / `#3A0C0C` | 6.6, 5.3 / 5.8, 5.0 on the fill |
+| `--finished-accent` label | `#2D5A96` | `#8DB6EE` | 7.0 / 8.0 on surface |
+| `--finished-edge` leading edge | `#3E6FB0` | `#5B8FD6` | 4.6 / 5.8 on bg (non-text, ≥ 3) |
+| `--working-accent` label | `#17663F` | `#5BD69A` | 6.3 / 10.5 on bg |
+| `--working-edge` leading edge | `#1F8A55` | `#3FB37B` | 4.0 / 7.2 on bg (non-text, ≥ 3) |
+| `--idle-accent` label | `#8A5300` | `#FFC15E` | 5.8 / 11.8 on bg |
+| `--idle-edge` leading edge | `#C77700` | `#F5A524` | 3.1 / 9.3 on bg (non-text, ≥ 3) |
 | `--badge-bg` / `--badge-ink` pane badge | `#E4E7EC` / `#2B313B` | `#2A303A` / `#DDE1E7` | 10.6 / 10.1 |
 | `--focus` outline | `#1D4ED8` | `#7AA2FF` | 6.1 / 7.7 on bg |
 | strips: disconnected, advisory, refused | slate, amber, red | the same, darkened | 10.2, 9.4, 8.9 / 9.7, 10.8, 7.4 |
@@ -92,18 +92,22 @@ string. Otherwise it should trust the API's order.
 
 ## Emphasis by class
 
+*Amended 2026-10-21 (operator decision): traffic lights.* Red is Needs you, amber is Idle and
+green is Working; Finished, which green meant before, takes the blue Working gave up. The dark
+Needs you fill moved from red-orange to red so it cannot be mistaken for amber.
+
 - **Needs you is dominant.** It has a solid fill, a 3px ring, white (light) or near-black (dark)
   text, a bold Context Line and an extra-bold Waiting Time. It never relies on colour alone: the
   uppercase `NEEDS YOU` label, the heavy ring and the weight carry it in greyscale too, and it is
   always first on the page.
-- **Finished is quieter.** It sits on a raised surface with a 6px green leading edge and a green
+- **Finished is quieter.** It sits on a raised surface with a 6px blue leading edge and a blue
   `FINISHED` label, in its workspace's group.
-- **Working has a blue leading edge**, the same 6px bar as Finished in blue, flush with the page
-  rather than raised, with a blue `WORKING` label. Blue says busy, green says done; the label
-  says it in text too.
+- **Working has a green leading edge**, the same 6px bar as Finished in green, flush with the
+  page rather than raised, with a green `WORKING` label. Green says busy and fine, blue says
+  done; the label says it in text too.
 - **Unknown recedes.** It sits flush with the page with a dashed hairline border and muted text.
-- **Idle is grey.** An Agent of class Working whose Status is not `working`, such as one idle
-  since before it was ever seen working, has a 6px grey leading edge (`--idle-edge`), an `IDLE`
+- **Idle is amber.** An Agent of class Working whose Status is not `working`, such as one idle
+  since before it was ever seen working, has a 6px amber leading edge (`--idle-edge`), an `IDLE`
   label in `--idle-accent`, and no Waiting Time emphasis: its time is set in `--ink-faint`. It is
   the one thing the Board derives from the Status, and the Daemon ranks the same Agents Idle.
 
