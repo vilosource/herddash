@@ -2,6 +2,7 @@ package procenv
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -135,5 +136,23 @@ func TestClaudeSessionNeverKey(t *testing.T) {
 	}
 	if _, err := ClaudeSession(dir, 9); !errors.Is(err, ErrSession) {
 		t.Errorf("pid 9 with only a .key file: error %v, want ErrSession", err)
+	}
+}
+
+// TestClaudeSessionLastingKinds: the two failures the engine treats as
+// lasting are told apart: a missing record wraps fs.ErrNotExist, one naming
+// another process wraps ErrSessionOtherProcess; a body that does not decode
+// wraps neither.
+func TestClaudeSessionLastingKinds(t *testing.T) {
+	if _, err := ClaudeSession(sessionDir(t, nil), 7); !errors.Is(err, fs.ErrNotExist) || !errors.Is(err, ErrSession) {
+		t.Errorf("missing: error %v, want ErrSession and fs.ErrNotExist", err)
+	}
+	dir := sessionDir(t, map[string]string{"7.json": `{"pid":8,"status":"waiting"}`})
+	if _, err := ClaudeSession(dir, 7); !errors.Is(err, ErrSessionOtherProcess) || !errors.Is(err, ErrSession) {
+		t.Errorf("other pid: error %v, want ErrSession and ErrSessionOtherProcess", err)
+	}
+	dir = sessionDir(t, map[string]string{"7.json": `{"pid":7,`})
+	if _, err := ClaudeSession(dir, 7); errors.Is(err, ErrSessionOtherProcess) || errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("not json: error %v, want neither lasting kind", err)
 	}
 }

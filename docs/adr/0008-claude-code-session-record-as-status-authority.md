@@ -41,6 +41,8 @@ panel. The Board showed it Finished; the operator noticed only by looking at the
   ends. Its provenance is `live`. A new nullable column `observed_by` says who observed it:
   `claude_session` for these, NULL for herdr as before. Migration 0003 adds the column with
   `ALTER TABLE … ADD COLUMN` and a CHECK, so no table is rebuilt and existing rows are untouched.
+  The CHECK constrains the value only; that `observed_by` is set only with provenance `live` is
+  enforced in code (`core.NewTransition`), since the applied migration is not edited.
   Its `observed_at` is the record's `statusUpdatedAt` when that is not in the future, raised to
   the Agent's previous Transition when it is earlier (Claude Code stamps a few milliseconds
   before herdr reports the same moment), else the time it was read.
@@ -48,6 +50,10 @@ panel. The Board showed it Finished; the operator noticed only by looking at the
   off the actor, bounded by a timeout, skipped while the previous one runs.
 - **Failure is quiet and safe.** A missing or unreadable record, a `pid` mismatch, or a shape that
   no longer decodes means herdr's Status alone, logged once at debug level. It never guesses.
+  *Amended 2026-10-21 in review:* a failure that may pass (a timeout, a read still running, a body
+  that does not decode) keeps the previous verdict; only a missing record, a `pid` mismatch, or
+  three failures in a row of any kind end it. A record caught mid-write must not end a wait.
+  The reader takes only a regular file, never a symbolic link or a FIFO.
 - **Surfaces.** The Board needs no change: the Agent is Needs you. The history API includes
   `observed_by`.
 

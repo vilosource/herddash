@@ -1,7 +1,10 @@
 package engine
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -14,34 +17,40 @@ import (
 
 	"github.com/vilosource/herddash/internal/core"
 	"github.com/vilosource/herddash/internal/procenv"
+	"github.com/vilosource/herddash/internal/store"
 )
 
 // noSession is the engine tests' default Session: no record for anyone, so
 // no engine test reads a real one.
 func noSession(string, int) (procenv.Session, error) {
-	return procenv.Session{}, procenv.ErrSession
+	return procenv.Session{}, fmt.Errorf("%w: %w", procenv.ErrSession, fs.ErrNotExist)
 }
 
 // fakeSessions is a scripted set of session records, standing in for
 // procenv.ClaudeSession.
 type fakeSessions struct {
-	mu    sync.Mutex
-	recs  map[int]procenv.Session
-	errs  map[int]error
-	dirs  []string
-	calls atomic.Int32
+	mu   sync.Mutex
+	recs map[int]procenv.Session
+	errs map[int]error
+	// failN fails the next n reads of a pid with failErr, then reads again.
+	failN   map[int]int
+	failErr map[int]error
+	dirs    []string
+	pids    []int
+	calls   atomic.Int32
 	// block, when set, holds every read until it is closed.
 	block chan struct{}
 }
 
 func newFakeSessions() *fakeSessions {
-	return &fakeSessions{recs: map[int]procenv.Session{}, errs: map[int]error{}}
+	return &fakeSessions{recs: map[int]procenv.Session{}, errs: map[int]error{}, failN: map[int]int{}, failErr: map[int]error{}}
 }
 
 func (f *fakeSessions) read(dir string, pid int) (procenv.Session, error) {
 	f.calls.Add(1)
 	f.mu.Lock()
 	f.dirs = append(f.dirs, dir)
+	f.pids = append(f.pids, pid)
 	block := f.block
 	f.mu.Unlock()
 	if block != nil {
@@ -49,12 +58,16 @@ func (f *fakeSessions) read(dir string, pid int) (procenv.Session, error) {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.failN[pid] > 0 {
+		f.failN[pid]--
+		return procenv.Session{}, f.failErr[pid]
+	}
 	if err := f.errs[pid]; err != nil {
 		return procenv.Session{}, err
 	}
 	s, ok := f.recs[pid]
 	if !ok {
-		return procenv.Session{}, procenv.ErrSession
+		return procenv.Session{}, fmt.Errorf("%w: %w", procenv.ErrSession, fs.ErrNotExist)
 	}
 	return s, nil
 }
@@ -71,6 +84,42 @@ func (f *fakeSessions) fail(pid int, err error) {
 	f.mu.Lock()
 	f.errs[pid] = err
 	f.mu.Unlock()
+}
+
+// failNext fails the next n reads of pid with err, waits until they have been
+// made, then for the engine to settle.
+func (f *fakeSessions) failNext(t *testing.T, h *harness, pid, n int, err error) {
+	t.Helper()
+	f.mu.Lock()
+	f.failN[pid], f.failErr[pid] = n, err
+	f.mu.Unlock()
+	deadline := time.Now().Add(wait)
+	for {
+		f.mu.Lock()
+		left := f.failN[pid]
+		f.mu.Unlock()
+		if left == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%d failing reads of pid %d not made", left, pid)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	h.settle()
+}
+
+// readsOf counts the reads made of pid's record.
+func (f *fakeSessions) readsOf(pid int) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, p := range f.pids {
+		if p == pid {
+			n++
+		}
+	}
+	return n
 }
 
 func (f *fakeSessions) dirList() []string {
@@ -115,6 +164,7 @@ type sessionRig struct {
 	w     *watcher
 	logs  *logSink
 	clock *manualClock
+	env   *fakeEnviron
 }
 
 // startSession runs a viewed, recording engine on one Agent of program with
@@ -124,15 +174,32 @@ type sessionRig struct {
 func startSession(t *testing.T, program core.AgentProgram, status core.Status,
 	read SessionFunc, opts func(*Options, *fakeEnviron)) *sessionRig {
 	t.Helper()
+	r := startSessionOn(t, nil, program, status, read, opts)
+	r.st.awaitRows(t, 1)
+	r.h.fake.awaitSubscribe("w1:p1")
+	return r
+}
+
+// startSessionOn is startSession on st when it is not nil, as a Daemon
+// restart on the same herdr (epoch 3 kept, so the first sight reads st's
+// history); it waits only until the Agent is in the View.
+func startSessionOn(t *testing.T, st *fakeStore, program core.AgentProgram, status core.Status,
+	read SessionFunc, opts func(*Options, *fakeEnviron)) *sessionRig {
+	t.Helper()
 	si := sessionInterval
 	sessionInterval = 5 * time.Millisecond
 	t.Cleanup(func() { sessionInterval = si })
 	fake := newFakeClient(t, oneAgent(program, status))
 	fake.setProc("w1:p1", p1PID)
-	st := newFakeStore(fake)
+	if st == nil {
+		st = newFakeStore(fake)
+	} else {
+		st.client = fake
+		st.setState(store.ServerState{Epoch: 3, Terminals: terminalsOf(oneAgent(program, status))})
+	}
 	env := newFakeEnviron(t)
 	env.set(p1PID, claudeVar, "/h/.claude-cldw")
-	r := &sessionRig{st: st, logs: &logSink{}, clock: &manualClock{}}
+	r := &sessionRig{st: st, logs: &logSink{}, clock: &manualClock{}, env: env}
 	r.clock.ms.Store(base)
 	r.h, r.w = startViewed(t, fake, func(o *Options, _ *recorder) {
 		o.Store = st
@@ -146,8 +213,6 @@ func startSession(t *testing.T, program core.AgentProgram, status core.Status,
 		}
 	})
 	r.w.await("the agent", func(ps []Publication) bool { return len(ps) > 0 && len(ps[len(ps)-1].View.Agents) == 1 })
-	r.st.awaitRows(t, 1)
-	r.h.fake.awaitSubscribe("w1:p1")
 	return r
 }
 
@@ -399,6 +464,7 @@ func TestSessionObservedAtBad(t *testing.T) {
 			r := startSession(t, "claude", core.StatusDone, sess.read, nil)
 			want := []sessionRow{}
 			if name == "before the last transition" {
+				r.h.settle() // no snapshot read in flight to see the event's Status first
 				r.at(1_000)
 				r.event("claude", core.StatusIdle)
 				want = append(want, sessionRow{core.StatusDone, core.StatusIdle, core.ObservedByHerdr, 1_000, core.ProvenanceLive})
@@ -496,4 +562,206 @@ func TestSessionEnvironmentFails(t *testing.T) {
 	if v := r.view(); v.Status != core.StatusBlocked {
 		t.Errorf("view %+v", v)
 	}
+}
+
+// sessionStored is a stored Transition of w1:p1 under epoch 3, observed by
+// by, as a previous run recorded it.
+func sessionStored(t *testing.T, prev, next core.Status, at int64, by core.Observer) core.Transition {
+	t.Helper()
+	in := core.TransitionInput{Key: core.AgentKey{Host: "mac", Server: "default", Epoch: 3, PaneID: "w1:p1"},
+		AgentProgram: "claude", Profile: "cldw", New: next, HerdrVersion: "0.9.5", ObservedAt: at,
+		Provenance: core.ProvenanceLive, ObservedBy: by}
+	if prev != "" {
+		in.Previous = &prev
+	}
+	tr, err := core.NewTransition(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tr
+}
+
+// decodeErr is a session read failing as a record that does not decode does.
+var decodeErr = fmt.Errorf("%w: does not decode as the observed record", procenv.ErrSession)
+
+// TestSessionTransientFailureKeepsWaiting: waiting, then reads that fail for
+// a passing reason (a body that does not decode, a timeout), then waiting
+// again: the verdict holds throughout and nothing more is recorded.
+func TestSessionTransientFailureKeepsWaiting(t *testing.T) {
+	sess := newFakeSessions()
+	sess.set(p1PID, "waiting", base)
+	r := startSession(t, "claude", core.StatusDone, sess.read, nil)
+	blocked := sessionRow{core.StatusDone, core.StatusBlocked, core.ObservedByClaudeSession, 0, core.ProvenanceLive}
+	r.expectSessionRows(t, blocked)
+	r.at(1_000)
+	sess.failNext(t, r.h, p1PID, 2, decodeErr)
+	sess.moreReads(t, r.h)
+	sess.failNext(t, r.h, p1PID, 2, context.DeadlineExceeded)
+	sess.moreReads(t, r.h)
+	r.expectSessionRows(t, blocked)
+	if v := r.view(); v.Status != core.StatusBlocked {
+		t.Errorf("view %+v", v)
+	}
+}
+
+// TestSessionThreeFailuresClear: three failed reads in a row, of any kind,
+// end the verdict: the Agent returns to herdr's Status.
+func TestSessionThreeFailuresClear(t *testing.T) {
+	sess := newFakeSessions()
+	sess.set(p1PID, "waiting", base)
+	r := startSession(t, "claude", core.StatusDone, sess.read, nil)
+	blocked := sessionRow{core.StatusDone, core.StatusBlocked, core.ObservedByClaudeSession, 0, core.ProvenanceLive}
+	r.expectSessionRows(t, blocked)
+	r.at(1_000)
+	sess.fail(p1PID, decodeErr)
+	r.expectSessionRows(t, blocked,
+		sessionRow{core.StatusBlocked, core.StatusDone, core.ObservedByClaudeSession, 1_000, core.ProvenanceLive})
+}
+
+// TestSessionLastingFailureClears: one read finding the record gone, or
+// naming another process, ends the verdict at once.
+func TestSessionLastingFailureClears(t *testing.T) {
+	for name, err := range map[string]error{
+		"missing":       fmt.Errorf("%w: %w", procenv.ErrSession, fs.ErrNotExist),
+		"other process": fmt.Errorf("%w: %w", procenv.ErrSession, procenv.ErrSessionOtherProcess),
+	} {
+		t.Run(name, func(t *testing.T) {
+			sess := newFakeSessions()
+			sess.set(p1PID, "waiting", base)
+			r := startSession(t, "claude", core.StatusDone, sess.read, nil)
+			blocked := sessionRow{core.StatusDone, core.StatusBlocked, core.ObservedByClaudeSession, 0, core.ProvenanceLive}
+			r.expectSessionRows(t, blocked)
+			r.at(1_000)
+			sess.failNext(t, r.h, p1PID, 1, err)
+			r.expectSessionRows(t, blocked,
+				sessionRow{core.StatusBlocked, core.StatusDone, core.ObservedByClaudeSession, 1_000, core.ProvenanceLive},
+				sessionRow{core.StatusDone, core.StatusBlocked, core.ObservedByClaudeSession, 1_000, core.ProvenanceLive})
+		})
+	}
+}
+
+// waitingRecord is a previous run's record of w1:p1: done, then blocked by
+// the session record at base-5000.
+func waitingRecord(t *testing.T) *fakeStore {
+	st := newFakeStore(nil)
+	st.seed(sessionStored(t, "", core.StatusDone, base-10_000, core.ObservedByHerdr),
+		sessionStored(t, core.StatusDone, core.StatusBlocked, base-5_000, core.ObservedByClaudeSession))
+	return st
+}
+
+// TestSessionRestartWhileWaiting: the Daemon restarts while the record says
+// waiting and herdr says done. The first sight waits for the first session
+// read, which still says waiting: the Agent is unchanged since the record,
+// nothing is written, and its Waiting Time runs on from the stored start.
+func TestSessionRestartWhileWaiting(t *testing.T) {
+	sess := newFakeSessions()
+	sess.set(p1PID, "waiting", base-5_000)
+	st := waitingRecord(t)
+	r := startSessionOn(t, st, "claude", core.StatusDone, sess.read, nil)
+	sess.moreReads(t, r.h)
+	if rows := st.rowList(); len(rows) != 2 {
+		t.Fatalf("%d rows, want the two stored: %v", len(rows), rows)
+	}
+	if v := r.view(); v.Status != core.StatusBlocked || v.Class != core.ClassNeedsYou {
+		t.Errorf("view %+v", v)
+	}
+	if a := agentByPane(t, r.h.agents(), "w1:p1"); a.WaitingSince != base-5_000 || !a.WaitingExact {
+		t.Errorf("waiting since %d exact %v, want the stored start", a.WaitingSince-base, a.WaitingExact)
+	}
+	if e := r.logs.entries(t, "INFO", "agent unchanged since the record"); len(e) != 1 {
+		t.Errorf("info entries %v, want one", e)
+	}
+}
+
+// TestSessionRestartAfterWaiting: the Daemon restarts after the question was
+// answered: the first sight records herdr's Status, once.
+func TestSessionRestartAfterWaiting(t *testing.T) {
+	sess := newFakeSessions()
+	sess.set(p1PID, "busy", base-1_000)
+	st := waitingRecord(t)
+	r := startSessionOn(t, st, "claude", core.StatusDone, sess.read, nil)
+	sess.moreReads(t, r.h)
+	rows := st.rowList()
+	if len(rows) != 3 {
+		t.Fatalf("%d rows, want one more than the two stored", len(rows))
+	}
+	if prev, _ := rows[2].Previous(); prev != core.StatusBlocked || rows[2].New() != core.StatusDone || rows[2].ObservedBy() != core.ObservedByHerdr {
+		t.Errorf("first sight %+v", describeRow(rows[2]))
+	}
+}
+
+// TestSessionWaitingEndsHerdrUnknown: herdr has given no valid Status when
+// waiting ends: the Agent returns to the Status before the record made it
+// blocked, not stays blocked.
+func TestSessionWaitingEndsHerdrUnknown(t *testing.T) {
+	sess := newFakeSessions()
+	sess.set(p1PID, "waiting", base-5_000)
+	st := waitingRecord(t)
+	r := startSessionOn(t, st, "claude", core.Status(""), sess.read, nil)
+	sess.moreReads(t, r.h)
+	if v := r.view(); v.Status != core.StatusBlocked {
+		t.Fatalf("view %+v", v)
+	}
+	r.at(3_000)
+	sess.set(p1PID, "busy", base+2_000)
+	rows := st.awaitRows(t, 3)
+	if got, want := describeRow(rows[2]), (sessionRow{core.StatusBlocked, core.StatusDone, core.ObservedByClaudeSession, 2_000, core.ProvenanceLive}); got != want {
+		t.Errorf("row %+v, want %+v", got, want)
+	}
+}
+
+// TestSessionReleasedWhileWaiting: herdr releases the Agent while its record
+// says waiting: the watch stops and the release's final Status is recorded,
+// observed by herdr, so the record does not end at Needs you.
+func TestSessionReleasedWhileWaiting(t *testing.T) {
+	sess := newFakeSessions()
+	sess.set(p1PID, "waiting", base)
+	r := startSession(t, "claude", core.StatusDone, sess.read, nil)
+	blocked := sessionRow{core.StatusDone, core.StatusBlocked, core.ObservedByClaudeSession, 0, core.ProvenanceLive}
+	r.expectSessionRows(t, blocked)
+	r.at(1_000)
+	r.h.lifecycle(core.LifecycleEvent{Kind: core.LifecycleAgentReleased, PaneID: "w1:p1", AgentProgram: "claude", FinalStatus: core.StatusDone})
+	r.expectSessionRows(t, blocked,
+		sessionRow{core.StatusBlocked, core.StatusDone, core.ObservedByHerdr, 1_000, core.ProvenanceLive})
+}
+
+// TestSessionProgramChangedOneRow: another program while waiting, with herdr
+// reporting another Status in the same event: one row, to that Status.
+func TestSessionProgramChangedOneRow(t *testing.T) {
+	sess := newFakeSessions()
+	sess.set(p1PID, "waiting", base)
+	r := startSession(t, "claude", core.StatusDone, sess.read, nil)
+	blocked := sessionRow{core.StatusDone, core.StatusBlocked, core.ObservedByClaudeSession, 0, core.ProvenanceLive}
+	r.expectSessionRows(t, blocked)
+	r.at(1_000)
+	r.event("codex", core.StatusWorking)
+	r.h.settle()
+	r.expectSessionRows(t, blocked,
+		sessionRow{core.StatusBlocked, core.StatusWorking, core.ObservedByClaudeSession, 1_000, core.ProvenanceLive})
+}
+
+// TestSessionNewProcessStillWaiting: a resolution finds another process for
+// the Agent while waiting, and that process's record says waiting too:
+// nothing is recorded, no return and reblock.
+func TestSessionNewProcessStillWaiting(t *testing.T) {
+	const p2PID = 202
+	sess := newFakeSessions()
+	sess.set(p1PID, "waiting", base)
+	sess.set(p2PID, "waiting", base)
+	r := startSession(t, "claude", core.StatusDone, sess.read, nil)
+	blocked := sessionRow{core.StatusDone, core.StatusBlocked, core.ObservedByClaudeSession, 0, core.ProvenanceLive}
+	r.expectSessionRows(t, blocked)
+	r.at(1_000)
+	r.env.set(p2PID, claudeVar, "/h/.claude-cldw")
+	r.h.fake.setProc("w1:p1", p2PID)
+	r.h.lifecycle(core.LifecycleEvent{Kind: core.LifecycleAgentDetected, PaneID: "w1:p1", AgentProgram: "claude"})
+	deadline := time.Now().Add(wait)
+	for sess.readsOf(p2PID) < 3 {
+		if time.Now().After(deadline) {
+			t.Fatal("the new process's record was not read")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	r.h.settle()
+	r.expectSessionRows(t, blocked)
 }

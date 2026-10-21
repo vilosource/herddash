@@ -69,6 +69,13 @@ an ADR.
   transcript; not observed).
 - **View, not record.** `AgentView` gains `background_tasks` (a count). The Attention Class, the
   Fold, Waiting Time and the stored record are unchanged: no stored schema change.
+- **Main turn over, a background subagent running.** herdr reports `working` and Claude Code's
+  session record says `busy` while any background subagent runs, even when the main conversation
+  has ended its turn and is only waiting (observed 2026-10-21 on this session: the operator asked
+  "why is the dashboard showing that 3:herddash is WORKING yet you are just waiting for an Agent
+  to finish its work?"). The transcript tells the two apart: the main thread's last assistant
+  record ended its turn and a subagent id is still open. That Agent reads **BACKGROUND**, not
+  Working.
 - **Board.** Working with open tasks reads `WORKING · 2 bg` (green); `done`/`idle` with open tasks
   reads **BACKGROUND** (green, dashed edge, ranked just before Working), as built; Finished only when
   none are open. Group counts as built.

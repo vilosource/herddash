@@ -205,6 +205,9 @@ func NewTransition(in TransitionInput) (Transition, error) {
 		return Transition{}, &TransitionError{Field: "possibly spurious", Value: "true with provenance " + string(in.Provenance), Err: ErrInvalidSpurious}
 	}
 
+	// observed_by is only ever set with provenance live. This check is what
+	// enforces it: migration 0003's CHECK constrains the value alone, and that
+	// migration is applied to live databases and is never edited.
 	if !in.ObservedBy.Valid() || (in.ObservedBy != ObservedByHerdr && in.Provenance != ProvenanceLive) {
 		return Transition{}, &TransitionError{Field: "observed by", Value: string(in.ObservedBy) + " with provenance " + string(in.Provenance), Err: ErrInvalidObserver}
 	}

@@ -136,15 +136,64 @@ while it says `waiting`, the Agent's Status is `blocked`, recorded as a live Tra
   `transition` event carries it too.
 - **Docs.** PRD FR-6 amendment (with FR-2/FR-3 references), the spine's procenv adapter row, and
   the socket API record's "Other observations" entry for the missed dialog (times from ADR-0008).
-- **Judgment calls / known gaps.** A Daemon restart while an Agent is `waiting`: its first sight
-  follows herdr (e.g. `done`, recorded against the stored `blocked`), then the first read records
-  `blocked` again at read time, since `statusUpdatedAt` precedes that first sight. A Status core
-  does not know never becomes herdr's Status. The acceptance criterion's live check (a dev build
+- **Judgment calls / known gaps.** A Daemon restart while an Agent is `waiting` was a known gap
+  (first sight followed herdr, then the first read re-blocked); review closed it, see the Review
+  Triage Log. A Status core does not know never becomes herdr's Status. The acceptance criterion's live check (a dev build
   showing a real question dialog) was not run here.
 
 ## Spec Change Log
 
+- **2026-10-21, matrix row "statusUpdatedAt in future / before last".** The frozen row says
+  observed_at is the read time in both cases. "Before last" now clamps to the Agent's previous
+  Transition instead (`core.SessionObservedAt`: `max(statusUpdatedAt, previous)`), because Claude
+  Code stamps `waiting` a few milliseconds before herdr reports the same moment, and discarding
+  that stamp lost the true start. ADR-0008's Decision was amended to say so (commit `dbb1b78`);
+  `TestSessionObservedAtBad` "before the last transition" expects the clamp. A stamp in the future,
+  or none, is still the read time.
+- **2026-10-21, failure rule.** ADR-0008's "Failure is quiet and safe" was amended: a passing
+  failure keeps the verdict; only a missing record, a pid mismatch, or three failures in a row end
+  it (Review Triage Log, item 1).
+
 ## Review Triage Log
+
+Review of the session-status watch, 2026-10-21. All eight findings accepted and fixed; each fix
+has a test that fails with it reverted (checked by reverting each fix alone).
+
+1. **A transient read failure cleared `waiting`** (one timeout or a record caught mid-write ended
+   a wait, recording a return and a reblock). Now `onSession` keeps the verdict on a passing
+   failure and ends it only on a lasting one (`fs.ErrNotExist`, or the new
+   `procenv.ErrSessionOtherProcess` for a pid mismatch) or `sessionFailLimit` (3) failures in a
+   row. Tests: `TestSessionTransientFailureKeepsWaiting`, `TestSessionThreeFailuresClear`,
+   `TestSessionLastingFailureClears`, `procenv.TestClaudeSessionLastingKinds`.
+2. **Daemon restart while waiting wrote herdr's Status first.** `deferSight`: for a `claude`
+   Agent whose stored history ends `blocked` observed by `claude_session` (and herdr does not
+   itself say blocked), the first sight waits for the first session read (bounded by
+   `sessionTimeout`; any failure falls back to herdr). Still waiting: unchanged since the record,
+   nothing written, Waiting Time continuous from the stored start. History is read once
+   (`historyOnce`). Tests: `TestSessionRestartWhileWaiting`, `TestSessionRestartAfterWaiting`.
+3. **Agent release while waiting left the record at Needs you.** The release stops the session
+   watch first, then records FinalStatus observed by herdr (with no valid FinalStatus, the
+   session's Status is settled back instead). Test: `TestSessionReleasedWhileWaiting`.
+4. **Program change while waiting wrote two rows; a new pid wrote a return and reblock.**
+   `onStatus` and `apply` set herdr's Status from the event before `setProgram`, so the settle
+   returns straight to it and the herdr path finds nothing to record. `followSession(p, keep)`:
+   a re-resolution to another process of the same program keeps the verdict until the new
+   process's first read decides it. Tests: `TestSessionProgramChangedOneRow`,
+   `TestSessionNewProcessStillWaiting`.
+5. **No valid herdr Status when waiting ends left it stuck blocked.** `settleSession` falls back
+   to `preSession` (the Status before the record made it blocked, or the stored row's previous
+   after a deferred first sight), then `unknown`. Test: `TestSessionWaitingEndsHerdrUnknown`.
+6. **The reader followed symlinks and would block on a FIFO.** `os.Lstat` first (regular file
+   only), open with `O_NONBLOCK|O_NOFOLLOW` on unix (`session_unix.go`; `session_other.go` adds
+   none), then `f.Stat` again: regular and `os.SameFile` with the Lstat. Tests:
+   `TestClaudeSessionFIFO`, `TestClaudeSessionSymlink` (`session_unix_test.go`).
+7. **Migration 0003's CHECK does not tie `observed_by` to provenance `live`.** Not edited (applied
+   to the operator's live database). Comments in `core.NewTransition` and `store/record.go`, and a
+   sentence in ADR-0008, say the rule is enforced in code.
+8. **Spec drift.** Spec Change Log entries above. Also: the pre-existing flake in
+   `TestSessionObservedAtBad` "before the last transition" (a snapshot read in flight saw the
+   event's Status first, recording it as snapshot provenance; it failed on the unchanged engine
+   too) is fixed by settling before the event.
 
 ## Verification
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"maps"
 	"math"
@@ -369,6 +370,22 @@ type pane struct {
 	sessCancel context.CancelFunc
 	sessDir    string
 	sessLogged bool
+	// sessFails counts the session reads that have failed in a row; a
+	// passing failure keeps the verdict until it reaches sessionFailLimit.
+	sessFails int
+	// preSession is the Status before the session record made the Agent
+	// blocked, the fallback when waiting ends with no valid herdr Status.
+	preSession core.Status
+	// awaitSession is set while the Agent's first sight waits for its first
+	// session read (a restart while its record said waiting); sessDeferred
+	// once that wait has been decided, so it happens at most once.
+	awaitSession bool
+	sessDeferred bool
+	// hist is the Agent's stored history, read once for its first sight when
+	// histRead is set; histOK is history's second result.
+	hist     []core.Transition
+	histRead bool
+	histOK   bool
 	// lastAt is the observed_at of the Agent's latest Transition, recorded
 	// or read from the record; 0 when there is none.
 	lastAt int64
@@ -877,10 +894,17 @@ func (e *Engine) onLifecycle(d herdr.Delivery[core.LifecycleEvent]) {
 	ev := d.Event
 	switch ev.Kind {
 	case core.LifecycleAgentReleased:
-		// The release carries the Agent's last Status: record it first.
-		if p, ok := e.panes[ev.PaneID]; ok && p.known && ev.FinalStatus.Valid() {
-			if next := e.herdrSays(p, ev.FinalStatus); next != p.status {
-				e.transition(p, next, core.ProvenanceLive, nil)
+		// The release carries the Agent's last Status: record it first, as
+		// herdr observed it. The process has gone, so the session record
+		// says nothing more: its watch ends first, and with no final Status a
+		// Status it caused returns to herdr's, so the record never ends at
+		// Needs you for an exited process.
+		if p, ok := e.panes[ev.PaneID]; ok && p.known {
+			e.stopSession(p, !ev.FinalStatus.Valid())
+			if ev.FinalStatus.Valid() {
+				if next := e.herdrSays(p, ev.FinalStatus); next != p.status {
+					e.transition(p, next, core.ProvenanceLive, nil)
+				}
 			}
 		}
 		e.remove(ev.PaneID, string(ev.Kind))
@@ -937,6 +961,11 @@ func (e *Engine) onStatus(m statusMsg) {
 			e.report(p)
 		}
 		return
+	}
+	// herdr's Status first, so a session verdict a program change ends
+	// returns to the Status this event reports, in one row.
+	if ev.Status.Valid() {
+		p.herdr = ev.Status
 	}
 	e.setProgram(p, ev.AgentProgram)
 	// While the session record says waiting, a herdr change moves herdr's
@@ -1214,6 +1243,9 @@ func (e *Engine) apply(seq uint64, s core.Snapshot, resubscribe bool) (unsubscri
 			// which it may predate.
 			firstSeen = p.seenBy == ""
 			e.seen(p, a.Status, core.ProvenanceSnapshot, a.StateChangeSeq)
+		}
+		if wasKnown && p.liveDuring != seq && a.Status.Valid() {
+			p.herdr = a.Status // as onStatus: before a program change settles
 		}
 		if had := p.program; e.setProgram(p, a.AgentProgram) && had != "" {
 			changed = true // herdr names another program than the engine held
@@ -1527,14 +1559,21 @@ func (e *Engine) remove(id, reason string) {
 // without being reported.
 func (e *Engine) report(p *pane) {
 	switch {
+	case p.awaitSession:
+		// Its first session read reports it (deferSight).
 	case p.resolved:
+		if e.deferSight(p) {
+			return
+		}
 		p.known = true
 		e.log.Info("agent seen", "pane", p.id, "agent_program", p.program, "profile", p.profile, "status", p.status)
 		now := e.now()
 		p.firstSkipped = e.firstSight(p, now)
 		p.seenBy, p.seenOrder, p.seenAt = "", nil, 0
 		e.followBackground(p)
-		e.followSession(p)
+		if p.sessGen == 0 { // a deferred first sight's watch runs on
+			e.followSession(p, false)
+		}
 		e.sink.Agent(e.agent(p), now)
 		e.noteView(p)
 	case p.resolving == 0:
@@ -1553,8 +1592,14 @@ func (e *Engine) setProgram(p *pane, program core.AgentProgram) bool {
 	// Another program is another process: the next resolution reads it.
 	p.pid, p.background = 0, false
 	e.followBackground(p)
-	e.followSession(p)
-	if p.known || p.resolving != 0 {
+	// A first sight waiting on the old process's session record is resolved
+	// again for the new program instead.
+	deferred := p.awaitSession
+	if deferred {
+		p.awaitSession, p.resolved = false, false
+	}
+	e.followSession(p, false)
+	if p.known || p.resolving != 0 || deferred {
 		e.resolve(p)
 	}
 	return true
@@ -1652,7 +1697,7 @@ func (e *Engine) settleProfile(p *pane, m profileMsg) {
 		// the process already known, so one slow lookup does not end the watch.
 		p.pid, p.background = m.pid, false
 		e.followBackground(p)
-		e.followSession(p)
+		e.followSession(p, true)
 	}
 	switch {
 	case !p.known:
@@ -1777,29 +1822,50 @@ func (e *Engine) onBackground(m backgroundMsg) {
 // followSession restarts p's session watch for its current process and
 // program (ADR-0008): a first read at once, then one every sessionInterval.
 // Whatever the record said about an earlier process is dropped first, and a
-// Status it caused returns to herdr's. When the program reads no session
-// record, or the Agent is not reported or its process is not known, the watch
-// stays stopped.
-func (e *Engine) followSession(p *pane) {
-	e.stopSession(p, true)
-	if !p.known || p.pid <= 0 || !core.ReadsSession(p.program) {
-		return
+// Status it caused returns to herdr's; with keep (the same program, another
+// process), the verdict is kept instead until the new process's first read
+// decides it, so a process that is still waiting records no return and
+// reblock. When the program reads no session record, or the Agent is not
+// reported or its process is not known, the watch stays stopped.
+func (e *Engine) followSession(p *pane, keep bool) {
+	watch := p.known && p.pid > 0 && core.ReadsSession(p.program)
+	e.endSessionWatch(p)
+	if !keep || !watch {
+		e.dropSession(p, true)
 	}
+	if watch {
+		e.startSessionWatch(p)
+	}
+}
+
+// startSessionWatch starts p's session watch, its first read at once.
+func (e *Engine) startSessionWatch(p *pane) {
 	e.nextGen++
-	p.sessGen = e.nextGen
+	p.sessGen, p.sessFails = e.nextGen, 0
 	p.sessCtx, p.sessCancel = context.WithCancel(e.runCtx)
 	e.checkSession(p, 0)
 }
 
-// stopSession ends p's session watch, if any, and forgets what the record
-// said. With settle, a Status the record caused returns to herdr's, recorded
-// as observed by the record's watch ending; without it (the Agent is going)
-// nothing is recorded.
-func (e *Engine) stopSession(p *pane, settle bool) {
+// endSessionWatch ends p's session watch, if any, keeping its verdict.
+func (e *Engine) endSessionWatch(p *pane) {
 	if p.sessCancel != nil {
 		p.sessCancel()
 	}
-	p.sessGen, p.sessCtx, p.sessCancel, p.sessDir = 0, nil, nil, ""
+	p.sessGen, p.sessCtx, p.sessCancel, p.sessDir, p.sessFails = 0, nil, nil, "", 0
+}
+
+// stopSession ends p's session watch, if any, and forgets what the record
+// said. With settle, a Status the record caused returns to herdr's, recorded
+// as observed by the record's watch ending; without it (the Agent is going,
+// or the caller records herdr's Status next) nothing is recorded.
+func (e *Engine) stopSession(p *pane, settle bool) {
+	e.endSessionWatch(p)
+	e.dropSession(p, settle)
+}
+
+// dropSession forgets the record's verdict on p, settling as stopSession
+// says.
+func (e *Engine) dropSession(p *pane, settle bool) {
 	if p.session == "" {
 		return
 	}
@@ -1811,14 +1877,73 @@ func (e *Engine) stopSession(p *pane, settle bool) {
 
 // settleSession records a change of p's effective Status that its session
 // record caused, as a live Transition observed by claude_session, at
-// updatedAt when core.SessionObservedAt allows it.
+// updatedAt when core.SessionObservedAt allows it. When waiting ends and
+// herdr has given no valid Status, the Agent returns to the Status before the
+// record made it blocked, or to unknown: it is never left blocked.
 func (e *Engine) settleSession(p *pane, updatedAt int64) {
 	next := core.EffectiveStatus(p.program, p.herdr, p.session)
-	if !p.known || !next.Valid() || next == p.status {
+	if !next.Valid() {
+		if p.status != core.StatusBlocked {
+			return
+		}
+		next = p.preSession
+		if !next.Valid() {
+			next = core.StatusUnknown
+		}
+	}
+	if !p.known || next == p.status {
 		return
 	}
+	before := p.status
 	at := core.SessionObservedAt(updatedAt, p.lastAt, e.now())
 	e.transitionAt(p, next, core.ProvenanceLive, nil, core.ObservedByClaudeSession, at)
+	switch {
+	case p.status != next:
+		// not recorded
+	case next == core.StatusBlocked && before.Valid():
+		p.preSession = before
+	case next != core.StatusBlocked:
+		p.preSession = ""
+	}
+}
+
+// deferSight decides whether p's first sight waits for its first session
+// read: for an Agent that reads one, with its process known, whose stored
+// history ends in blocked observed by claude_session (the Daemon restarted
+// while its record said waiting) and which herdr does not itself show
+// blocked. Writing herdr's Status first would end the stored wait only for
+// the first read to start a new one. The wait is one read, bounded by
+// sessionTimeout; it happens at most once per pane.
+func (e *Engine) deferSight(p *pane) bool {
+	if p.sessDeferred || e.store == nil || !p.seedHistory || p.pid <= 0 ||
+		!core.ReadsSession(p.program) || p.status == core.StatusBlocked {
+		return false
+	}
+	p.sessDeferred = true
+	ts, ok := e.historyOnce(p)
+	if !ok || len(ts) == 0 {
+		return false
+	}
+	last := ts[len(ts)-1]
+	if last.New() != core.StatusBlocked || last.ObservedBy() != core.ObservedByClaudeSession || last.AgentProgram() != p.program {
+		return false
+	}
+	if prev, ok := last.Previous(); ok {
+		p.preSession = prev
+	}
+	p.awaitSession = true
+	e.log.Debug("first sight waits for the claude session", "pane", p.id)
+	e.startSessionWatch(p)
+	return true
+}
+
+// historyOnce is history(p), read at most once before p's first sight.
+func (e *Engine) historyOnce(p *pane) ([]core.Transition, bool) {
+	if !p.histRead {
+		p.hist, p.histOK = e.history(p)
+		p.histRead = true
+	}
+	return p.hist, p.histOK
 }
 
 // checkSession reads p's session record after delay, off the actor, and sends
@@ -1892,9 +2017,20 @@ func (e *Engine) readSession(ctx context.Context, busy *atomic.Bool, pid int, di
 // process's environment.
 const claudeConfigVar = "CLAUDE_CONFIG_DIR"
 
+// sessionFailLimit is how many session reads in a row may fail, for any
+// reason, before the verdict ends.
+const sessionFailLimit = 3
+
+// lastingSession reports whether a failed session read means the record will
+// not come back: it is gone, or names another process.
+func lastingSession(err error) bool {
+	return errors.Is(err, fs.ErrNotExist) || errors.Is(err, procenv.ErrSessionOtherProcess)
+}
+
 // onSession records what one read of the session record said, for the watch
-// it belongs to, and schedules the next read. A failed read is no record: the
-// Status returns to herdr's, and the first failure for a pane is logged at
+// it belongs to, and schedules the next read. A lasting failure, or three in
+// a row, is no record: the Status returns to herdr's; a passing one keeps
+// the verdict. The first failure for a pane is logged at
 // debug level, never as a warning, since an exited process or a Claude Code
 // release without the record is ordinary. Only the record's status is ever
 // logged.
@@ -1908,11 +2044,39 @@ func (e *Engine) onSession(m sessionMsg) {
 	}
 	next := m.status
 	if m.err != nil {
-		next = ""
+		p.sessFails++
 		if !p.sessLogged {
 			p.sessLogged = true
 			e.log.Debug("claude session not read", "pane", p.id, "pid", p.pid, "error", m.err.Error())
 		}
+		// A passing failure (a timeout, a read still running, a body caught
+		// mid-write) keeps the verdict; a lasting one, or sessionFailLimit in
+		// a row, ends it. A deferred first sight takes any failure as none.
+		next = p.session
+		if p.awaitSession || lastingSession(m.err) || p.sessFails >= sessionFailLimit {
+			next = ""
+		}
+	} else {
+		p.sessFails = 0
+	}
+	if p.awaitSession {
+		// The first sight waited for this read (deferSight): it now sees the
+		// effective Status, so a record still waiting finds the Agent
+		// unchanged since the record and its wait runs on.
+		p.awaitSession = false
+		p.session = next
+		if next != "" {
+			e.log.Debug("claude session", "pane", p.id, "status", next)
+		}
+		if eff := core.EffectiveStatus(p.program, p.herdr, p.session); eff.Valid() {
+			p.status = eff
+		}
+		if p.session != core.SessionWaiting {
+			p.preSession = ""
+		}
+		e.report(p)
+		e.checkSession(p, sessionInterval)
+		return
 	}
 	if next != p.session {
 		e.log.Debug("claude session", "pane", p.id, "status", next)
@@ -1996,7 +2160,8 @@ func (e *Engine) firstSight(p *pane, reportedAt int64) (skipped bool) {
 	if observedAt == 0 {
 		observedAt = reportedAt
 	}
-	ts, ok := e.history(p)
+	ts, ok := e.historyOnce(p)
+	p.hist, p.histRead = nil, false
 	hist := core.Fold(ts)
 	if len(ts) > 0 {
 		p.lastAt = ts[len(ts)-1].ObservedAt()

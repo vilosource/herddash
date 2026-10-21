@@ -93,6 +93,10 @@ func columns(t core.Transition) ([]any, error) {
 	}
 	return []any{k.Host, k.Server, epoch, k.PaneID, nullable(string(t.AgentProgram())), nullable(t.Profile()), previous, string(t.New()),
 		order, nullable(t.HerdrVersion()), string(t.Provenance()), spurious, t.ObservedAt(), nullable(t.ImportKey()),
+		// observed_by is non-NULL only with provenance live. Migration
+		// 0003's CHECK does not say so, and is applied to live databases, so
+		// it is not edited: core.NewTransition enforces it, and every row
+		// reaches here through it.
 		nullable(string(t.ObservedBy()))}, nil
 }
 
