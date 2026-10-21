@@ -32,10 +32,10 @@ Turn the dogfooded Daemon into something that runs by itself on each of the oper
 - **Writes and markers:** the single engine goroutine is the only writer (AD-2), so a clean shutdown means letting its in-flight `store.Append` finish. Each Daemon start writes a `daemon_start` marker (AD-4).
 - **Signal handling:** `cmd/herddash` already ends a context on SIGINT and SIGTERM and then restores default handling, so a second Ctrl-C force-quits a shutdown that hangs. Story 4.1 builds on that rather than adding a second mechanism.
 - **Defaults (AD-8):** the config file is `~/.config/herddash/config.toml`. The data directory is `$XDG_DATA_HOME/herddash`, falling back to `~/.local/share/herddash`, on both OSes. Config changes apply only on restart, and a flag beats the file, which beats the defaults.
-- **Version stamping:** release builds pass `-ldflags "-X main.version=... -X main.commit=..."`. Nothing wires this yet. Once the release workflow does, update CLAUDE.md, whose `version` text is a deferred item.
+- **Version stamping:** release builds pass `-ldflags "-X main.version=... -X main.commit=..."`. `scripts/release-build.sh` wires it, for the release workflow and locally (Story 4.3).
 - **Toolchain:** `go.mod` requires Go 1.26. Releases are built with Go 1.27.2, which needs macOS 13 or newer. If an older Mac must be supported, build releases with 1.26.x.
 - **Release workflow:**
-  - It is a separate workflow, triggered by the tag release-please creates. The release-please workflow itself must never publish artifacts.
+  - It is a separate workflow (`release.yml`) that runs on `workflow_run` of release-please and acts on the tag that run created; a tag or release trigger would never fire, because release-please creates both with `GITHUB_TOKEN`. The release-please workflow itself must never publish artifacts.
   - release-please targets the default branch (`main`).
   - `docs` commits count towards a release here.
   - `initial-version` is pinned to 0.1.0.
