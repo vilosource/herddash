@@ -197,6 +197,25 @@ names the workspace. The heading of a Claude Code Agent is its Profile alone (`c
 `unresolved`). An Agent of class Working whose Status is not `working` reads `IDLE`. See
 [the Board design](design/board-design.md).
 
+*Amended 2026-10-21, operator request:* "as a user I need to be able to differentiate between an
+agent waiting for a subagent or background task vs really Finished." herdr reports a Claude Code
+Agent that ended its turn with a background shell still running as `done`, then `idle`, so the
+Board showed it Finished. A Claude Code Agent whose Status is `done` or `idle` and whose process
+still has a tool-shell child (a direct child whose arguments name its
+`/shell-snapshots/snapshot-` file) reads `BACKGROUND`, ranked right after Working in its
+workspace group. The Daemon finds this by reading the Agent process's direct children locally,
+never from herdr and never from pane output. The Attention Class, Waiting Time and the record are
+unchanged: Waiting Time still counts from when the turn ended. A running subagent already reads
+Working; a Working, Needs you or Unknown Agent is never Background. Other Agent Programs have no
+rule yet and never read Background.
+
+**Consequences (testable):**
+- A `done` or `idle` Claude Code Agent with a tool-shell child reads `BACKGROUND`; one whose
+  children are only MCP servers, `gopls` or `caffeinate` reads Finished (or Idle).
+- When the shell ends, the Box reads Finished again within a few seconds, with its Waiting Time
+  unchanged.
+- A `working` Agent with a shell child reads Working.
+
 #### FR-2a: Context Line derivation
 
 The Daemon derives each Agent's Context Line through a per-Agent-Program rule with a global

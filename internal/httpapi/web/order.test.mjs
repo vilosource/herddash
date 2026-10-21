@@ -27,6 +27,8 @@ import {
   layout,
   modelViews,
   isIdle,
+  isBackground,
+  BACKGROUND_LABEL,
   boxKind,
   classLabel,
   documentTitle,
@@ -234,6 +236,54 @@ test("idle label: class working, status idle reads Idle and draws as idle", () =
   assert.equal(boxKind({ status: "blocked", attention_class: "needs_you" }), "needs_you");
 });
 
+test("background: the Daemon's field, read as sent, before Finished and Idle", () => {
+  const done = { status: "done", attention_class: "finished", background: true };
+  const idle = { status: "idle", attention_class: "working", background: true };
+  for (const v of [done, idle]) {
+    assert.equal(isBackground(v), true);
+    assert.equal(boxKind(v), "background");
+    assert.equal(classLabel(v), "Background");
+  }
+  assert.equal(BACKGROUND_LABEL, "Background");
+  // Never derived from the Status or class: false or absent is not Background.
+  assert.equal(boxKind({ ...done, background: false }), "finished");
+  assert.equal(boxKind({ status: "done", attention_class: "finished" }), "finished");
+  assert.equal(boxKind({ ...idle, background: false }), "idle");
+  assert.equal(classLabel({ ...idle, background: "yes" }), "Idle");
+});
+
+test("background box label says Background", () => {
+  const now = 1_000_000;
+  const v = {
+    key: { host: "h", server: "default", epoch: 1, pane_id: "w1:p1" },
+    attention_class: "finished",
+    status: "done",
+    background: true,
+    heading: "cldw",
+    context_line: "await-ci",
+    directory: "~/src/p",
+    workspace: "ops",
+    tab: "1",
+    pane_position: "",
+    waiting_since: now - 75_000,
+    waiting_exact: true,
+  };
+  assert.equal(boxLabel(v, now), "ops › 1, await-ci, ~/src/p, cldw, Background, waiting 1m");
+});
+
+test("golden fixture: Background views are the Daemon's, ranked 2", () => {
+  const bg = fixture.input.filter((i) => i.view.background);
+  assert.ok(bg.length > 0, "no Background view in the fixture");
+  for (const { view: v } of bg) {
+    assert.equal(boxKind(v), "background", keyString(v));
+    assert.equal(v.sort_key[2], 2, keyString(v));
+    assert.ok(v.status === "done" || v.status === "idle", keyString(v));
+  }
+  // An input marked background that the Daemon did not show as such (another
+  // program) stays Finished.
+  assert.ok(fixture.input.some((i) => i.background && !i.view.background));
+});
+
 test("tab label: the tab, else the workspace", () => {
   assert.equal(tabLabel({ workspace: "ops", tab: "2: api" }), "2: api");
   assert.equal(tabLabel({ workspace: "ops", tab: "" }), "ops");
@@ -250,14 +300,17 @@ test("needs you zone is the Daemon's zone 0", () => {
   for (const { view: v } of fixture.input) assert.equal(inNeedsYou(v), v.attention_class === "needs_you", keyString(v));
 });
 
-test("group counts: working, finished and idle, zeros left out", () => {
+test("group counts: working, background, finished and idle, zeros left out", () => {
   const w = { status: "working", attention_class: "working" };
   const f = { status: "done", attention_class: "finished" };
   const i = { status: "idle", attention_class: "working" };
   const u = { status: "unknown", attention_class: "unknown" };
+  const b = { status: "done", attention_class: "finished", background: true };
   assert.equal(groupCounts([w, f, i, i, u]), "1 working · 1 finished · 2 idle");
   assert.equal(groupCounts([i, f]), "1 finished · 1 idle");
   assert.equal(groupCounts([u]), "");
+  assert.equal(groupCounts([f, b, w, b]), "1 working · 2 background · 1 finished");
+  assert.equal(groupCounts([b]), "1 background");
 });
 
 test("title: the Needs you count, or plain herddash", () => {
@@ -268,19 +321,19 @@ test("title: the Needs you count, or plain herddash", () => {
   assert.equal(documentTitle([]), "herddash");
 });
 
-test("golden fixture: needs you alone on top, then each group working, finished, idle, unknown", () => {
+test("golden fixture: needs you alone on top, then each group working, background, finished, idle, unknown", () => {
   const { top, groups } = layout(fixture.input.map((i) => i.view).reverse());
   assert.ok(top.length > 0);
   for (const v of top) assert.equal(v.attention_class, "needs_you");
-  const rank = { working: 1, finished: 2, idle: 3, unknown: 4 };
+  const rank = { working: 1, background: 2, finished: 3, idle: 4, unknown: 5 };
   for (const g of groups) {
     const ranks = g.views.map((v) => rank[boxKind(v)]);
     assert.deepEqual(ranks, ranks.slice().sort((a, b) => a - b), g.label);
     assert.ok(g.views.every((v) => v.attention_class !== "needs_you"));
   }
   const one = groups.find((g) => g.label === "herddash");
-  assert.deepEqual(one.views.map(boxKind), ["working", "finished", "idle", "unknown"]);
-  assert.equal(one.counts, "1 working · 1 finished · 1 idle");
+  assert.deepEqual(one.views.map(boxKind), ["working", "background", "finished", "idle", "unknown"]);
+  assert.equal(one.counts, "1 working · 1 background · 1 finished · 1 idle");
 });
 
 test("layout: golden fixture's top zone and groups", () => {
@@ -428,7 +481,7 @@ test("transition into working moves the Box out of the top zone into its workspa
   assert.ok(!top.some((x) => keyString(x) === "mac/default/1/w1:p1"));
   const g = groups.find((g) => g.views.some((x) => keyString(x) === "mac/default/1/w1:p1"));
   assert.equal(g.label, "herddash");
-  assert.deepEqual(g.views.map(keyString), ["mac/default/1/w1:p3", "mac/default/1/w1:p1", "mac/default/1/w1:p2", "mac/default/1/w1:p5", "mac/default/1/w1:p4"]);
+  assert.deepEqual(g.views.map(keyString), ["mac/default/1/w1:p3", "mac/default/1/w1:p1", "mac/default/1/w1:p6", "mac/default/1/w1:p2", "mac/default/1/w1:p5", "mac/default/1/w1:p4"]);
 });
 
 test("applyEvent keeps the sort key and waiting_since a done-to-idle transition carries (core owns the guarantee)", () => {

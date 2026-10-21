@@ -223,7 +223,7 @@ func TestNewAgentView(t *testing.T) {
 		Key: k, AgentProgram: "claude", Profile: "cldw", Heading: "cldw",
 		Directory: "~/proj", Workspace: "ws", Tab: "t", PanePosition: "top-left", Status: StatusIdle, Class: ClassFinished,
 		WaitingSince: 500, WaitingExact: false, PaneTitle: "fix-auth-bug", ContextLine: "fix-auth-bug",
-		SortKey: SortKey{Zone: 1, Group: 2, ClassRank: 2, Start: 500, Key: k},
+		SortKey: SortKey{Zone: 1, Group: 2, ClassRank: 3, Start: 500, Key: k},
 	}
 	if v != want {
 		t.Errorf("view =\n%+v\nwant\n%+v", v, want)
@@ -271,6 +271,7 @@ func TestAgentViewJSON(t *testing.T) {
 		`"waiting_exact":false`,
 		`"sort_key":[1,9007199254740991,1,9007199254740991,"mac/default/2/w1:p1"]`,
 		`"pane_position":""`,
+		`"background":false`,
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("JSON %s lacks %s", s, want)
@@ -288,7 +289,7 @@ func TestAgentViewJSON(t *testing.T) {
 		t.Errorf("sort_key = %#v, want an array of five", m["sort_key"])
 	}
 	for _, f := range []string{"key", "agent_program", "profile", "heading", "directory", "workspace", "tab",
-		"pane_position", "status", "attention_class", "waiting_exact", "pane_title", "context_line", "sort_key"} {
+		"pane_position", "status", "attention_class", "waiting_exact", "pane_title", "context_line", "background", "sort_key"} {
 		if _, ok := m[f]; !ok {
 			t.Errorf("JSON lacks %q", f)
 		}
@@ -319,6 +320,7 @@ type boardFixture struct {
 		Tab               string       `json:"tab"`
 		PanePosition      string       `json:"pane_position"`
 		PaneTitle         string       `json:"pane_title"`
+		Background        bool         `json:"background"`
 		// View is the expected AgentView, as NewAgentView serialises it.
 		View json.RawMessage `json:"view"`
 	} `json:"input"`
@@ -351,7 +353,7 @@ func loadBoard(t *testing.T) ([]AgentView, boardFixture) {
 			Key: in.Key, AgentProgram: in.AgentProgram, Profile: in.Profile, Status: in.Status, Fold: f,
 			Context: PaneContext{ProjectDir: in.Directory, WorkspaceLabel: in.Workspace, TabLabel: in.Tab,
 				WorkspacePosition: in.WorkspacePosition, PaneTitle: in.PaneTitle, PanePosition: in.PanePosition},
-			Home: fx.Home,
+			Home: fx.Home, Background: in.Background,
 		}))
 	}
 	return views, fx
@@ -365,6 +367,13 @@ func TestGoldenBoard(t *testing.T) {
 	}
 	if len(classes) != 4 {
 		t.Errorf("fixture covers classes %v, want all four", classes)
+	}
+	ranks := map[int]bool{}
+	for _, v := range views {
+		ranks[v.SortKey.ClassRank] = true
+	}
+	if len(ranks) != 6 {
+		t.Errorf("fixture covers class ranks %v, want all six", ranks)
 	}
 	for i, v := range views {
 		got, err := json.Marshal(v)

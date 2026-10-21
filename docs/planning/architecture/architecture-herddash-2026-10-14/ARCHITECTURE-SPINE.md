@@ -35,7 +35,7 @@ One **engine** goroutine is the only owner of current state and the only caller 
 | Core | `internal/core` | AgentKey, Agent, Transition and its constructor, Status, Attention Class, Waiting Time and exactness, sort key, history fold, Profile and Context Line rules, AgentView, ConnectionTruth |
 | Engine | `internal/engine` | the actor: pane set, current state, reconcile and Retention timers, resync decisions, publishing views |
 | Adapter | `internal/herdr` | socket mechanics: dial, ping, snapshot, subscribe, stream-health signals, generated wire types |
-| Adapter | `internal/procenv` | reading one process's environment (linux: `/proc`; darwin: `kern.procargs2`) |
+| Adapter | `internal/procenv` | reading one process's environment, and its direct children with their arguments (linux: `/proc`; darwin: `kern.procargs2`, `kern.proc.all`; children added 2026-10-21 for Background) |
 | Adapter | `internal/store` | open with lock, migrations, append, history reads and fold input, Retention sweep |
 | Adapter | `internal/httpapi` | GET routes, SSE, embedded Board assets |
 | Adapter | `internal/importer` | parsing the plugin log into core Transitions |
@@ -358,7 +358,7 @@ cmd/herddash/          # serve (default), import-plugin-log, version
 internal/core/         # pure rules, fold, sort key, AgentView, ConnectionTruth
 internal/engine/       # the single-writer actor
 internal/herdr/        # socket mechanics; gen/ holds generated wire types
-internal/procenv/      # env readers: procenv_linux.go, procenv_darwin.go
+internal/procenv/      # env and child-process readers: procenv_linux.go, procenv_darwin.go
 internal/store/        # SQLite; migrations/ holds numbered .sql
 internal/httpapi/      # routes, SSE; web/ holds embedded Board assets
 internal/importer/     # plugin-log parser

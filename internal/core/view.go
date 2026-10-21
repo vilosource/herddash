@@ -97,6 +97,11 @@ type AgentViewInput struct {
 	// Home is the Daemon user's home directory, for shortening the project
 	// directory; "" shortens nothing.
 	Home string
+	// Background is set when the Agent's process has a child its program's
+	// BackgroundRule names a background task (HasBackground). The view shows
+	// it only while ChecksBackground holds for the Status and the class is
+	// finished or working.
+	Background bool
 }
 
 // AgentView is how every surface (the API, the event stream and the Board)
@@ -123,8 +128,13 @@ type AgentView struct {
 	WaitingExact bool   `json:"waiting_exact"`
 	PaneTitle    string `json:"pane_title"`
 	// ContextLine is never omitted: an empty one is sent as "".
-	ContextLine string  `json:"context_line"`
-	SortKey     SortKey `json:"sort_key"`
+	ContextLine string `json:"context_line"`
+	// Background is set when the Agent is waiting on background work: its
+	// Status is done or idle and its process still runs a background task.
+	// The class, the Waiting Time and the record are unchanged by it; only
+	// the Board's kind and the sort key's class rank are.
+	Background bool    `json:"background"`
+	SortKey    SortKey `json:"sort_key"`
 }
 
 // NewAgentView builds the view of one Agent. The Attention Class comes from
@@ -134,6 +144,8 @@ func NewAgentView(in AgentViewInput) AgentView {
 	if !in.Fold.Known {
 		class = ClassOf(in.Status, in.Fold.EverWorking)
 	}
+	background := in.Background && ChecksBackground(in.AgentProgram, in.Status) &&
+		(class == ClassFinished || class == ClassWorking)
 	var since int64
 	var exact bool
 	if in.Fold.Known && in.Fold.Since > 0 {
@@ -155,8 +167,9 @@ func NewAgentView(in AgentViewInput) AgentView {
 		WaitingExact: exact,
 		PaneTitle:    in.Context.PaneTitle,
 		ContextLine:  ContextLine(in.AgentProgram, in.Context.PaneTitle),
+		Background:   background,
 	}
-	v.SortKey = newSortKey(class, in.Status, in.Context.WorkspacePosition, since, in.Key)
+	v.SortKey = newSortKey(class, in.Status, background, in.Context.WorkspacePosition, since, in.Key)
 	return v
 }
 
@@ -169,8 +182,9 @@ func NewAgentView(in AgentViewInput) AgentView {
 //     herdr's order, with an unknown position (0) sorting last as
 //     SortUnknown.
 //   - ClassRank is needs_you 0; then, inside a workspace group, Working (class
-//     working with Status working) 1, finished 2, Idle (class working with any
-//     other Status) 3, unknown 4.
+//     working with Status working) 1, Background (finished, or Idle, waiting
+//     on background work; operator request 2026-10-21) 2, finished 3, Idle
+//     (class working with any other Status) 4, unknown 5.
 //   - Start is WaitingSince, so the longest wait comes first; an unknown one
 //     sorts after every known one, as SortUnknown.
 //   - Key breaks ties: host, server, epoch (numerically), then pane id.
@@ -189,20 +203,21 @@ type SortKey struct {
 // JavaScript's Number.MAX_SAFE_INTEGER, so the Board compares it exactly.
 const SortUnknown int64 = 1<<53 - 1
 
-func newSortKey(class AttentionClass, status Status, workspacePosition int, since int64, key AgentKey) SortKey {
+func newSortKey(class AttentionClass, status Status, background bool, workspacePosition int, since int64, key AgentKey) SortKey {
 	k := SortKey{Key: key, Start: since}
-	switch class {
-	case ClassNeedsYou:
+	switch {
+	case class == ClassNeedsYou:
 		k.ClassRank = 0
-	case ClassWorking:
+	case class == ClassWorking && status == StatusWorking:
 		k.ClassRank = 1
-		if status != StatusWorking {
-			k.ClassRank = 3
-		}
-	case ClassFinished:
+	case background:
 		k.ClassRank = 2
-	default:
+	case class == ClassFinished:
+		k.ClassRank = 3
+	case class == ClassWorking:
 		k.ClassRank = 4
+	default:
+		k.ClassRank = 5
 	}
 	if k.ClassRank > 0 {
 		k.Zone = 1

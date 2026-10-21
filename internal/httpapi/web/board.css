@@ -223,6 +223,14 @@ body {
   padding-left: calc(var(--space-4) - 5px);
 }
 .box--working .class { color: var(--working-accent); }
+/* Background (done or idle, a background task still running; 2026-10-21): Working's green
+   edge, dashed, flush with the page, so it reads as not yet done; Waiting Time in full ink, as
+   Finished's. */
+.box--background {
+  border-left: 6px dashed var(--working-edge);
+  padding-left: calc(var(--space-4) - 5px);
+}
+.box--background .class { color: var(--working-accent); }
 .box--unknown .class { color: var(--ink-muted); font-weight: 600; }
 .box--unknown .where { color: var(--ink-muted); font-weight: 600; }
 .box--unknown { border-style: dashed; border-color: var(--border-quiet); }

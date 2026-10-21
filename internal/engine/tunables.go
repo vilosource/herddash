@@ -43,6 +43,18 @@ const (
 	// Agent's first report waits for it, and running out gives
 	// core.ProfileUnresolved.
 	defaultProfileTimeout = 2 * time.Second
+	// defaultBackgroundCheckDelay is how long after a background-capable
+	// Agent's Status changes to done or idle, or its process becomes known,
+	// the engine first reads that process's children for background work: a
+	// turn's last tool shell is given a moment to exit.
+	defaultBackgroundCheckDelay = time.Second
+	// defaultBackgroundInterval is how often the engine reads those children
+	// again while the Status stays done or idle.
+	defaultBackgroundInterval = 5 * time.Second
+	// defaultBackgroundTimeout bounds one read of an Agent process's
+	// children; a read that outlives it is abandoned and counts as no
+	// background work.
+	defaultBackgroundTimeout = 2 * time.Second
 	// defaultRetentionSweepInterval is how often the engine sweeps the record
 	// for rows older than Retention, from the first connection of a run
 	// becoming ready on (FR-9, AD-4).
@@ -73,6 +85,9 @@ var (
 	refusedRecheckInterval = defaultRefusedRecheckInterval
 	profileTimeout         = defaultProfileTimeout
 	retentionSweepInterval = defaultRetentionSweepInterval
+	backgroundCheckDelay   = defaultBackgroundCheckDelay
+	backgroundInterval     = defaultBackgroundInterval
+	backgroundTimeout      = defaultBackgroundTimeout
 )
 
 // reconnectDelay is the wait after the nth consecutive failed attempt to start

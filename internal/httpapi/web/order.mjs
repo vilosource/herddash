@@ -113,20 +113,34 @@ export const IDLE_LABEL = "Idle";
 
 // isIdle reports whether the view is an idle Agent: class working (the
 // Daemon's) while its Status is anything but working, such as an Agent idle
-// since before it was ever seen working. Its Box reads Idle, in grey, and
+// since before it was ever seen working. Its Box reads Idle, in amber, and
 // gets no Waiting Time emphasis. It is the one thing the Board derives from
 // the Status; the Daemon ranks the same Agents Idle in the sort key.
 export function isIdle(view) {
   return view.attention_class === "working" && view.status !== "working";
 }
 
-// boxKind is the kind a Box is drawn as: its Attention Class, or "idle".
+// BACKGROUND_LABEL is what a Box says for an Agent waiting on background work.
+export const BACKGROUND_LABEL = "Background";
+
+// isBackground reports whether the view is an Agent waiting on background
+// work: the Daemon's background field, read as sent and never derived here
+// (operator request 2026-10-21). The Daemon sets it only for a done or idle
+// Agent, so it takes precedence over Finished and Idle.
+export function isBackground(view) {
+  return view.background === true;
+}
+
+// boxKind is the kind a Box is drawn as: "background", "idle", or its
+// Attention Class.
 export function boxKind(view) {
+  if (isBackground(view)) return "background";
   return isIdle(view) ? "idle" : view.attention_class;
 }
 
-// classLabel is the Attention Class as text, Idle for an idle Agent.
+// classLabel is the Attention Class as text, Background or Idle for those.
 export function classLabel(view) {
+  if (isBackground(view)) return BACKGROUND_LABEL;
   if (isIdle(view)) return IDLE_LABEL;
   return CLASS_LABEL[view.attention_class] || view.attention_class;
 }
@@ -159,15 +173,15 @@ export function headerLabel(view) {
   return view.workspace || "(no workspace)";
 }
 
-// groupCounts is a workspace group's counts, "2 working · 1 finished ·
-// 3 idle", leaving out zeros and Unknown.
+// groupCounts is a workspace group's counts, "2 working · 1 background ·
+// 1 finished · 3 idle", leaving out zeros and Unknown.
 export function groupCounts(views) {
-  const n = { working: 0, finished: 0, idle: 0 };
+  const n = { working: 0, background: 0, finished: 0, idle: 0 };
   for (const v of views) {
     const k = boxKind(v);
     if (k in n) n[k]++;
   }
-  return ["working", "finished", "idle"]
+  return ["working", "background", "finished", "idle"]
     .filter((k) => n[k] > 0)
     .map((k) => n[k] + " " + k)
     .join(" · ");
@@ -184,8 +198,8 @@ export function documentTitle(views) {
 }
 
 // layout splits views into what the Board draws: the top zone (Needs you
-// alone) and the lower zone's workspace groups (Working, Finished, Idle,
-// Unknown), each in Board order with its header label and counts.
+// alone) and the lower zone's workspace groups (Working, Background,
+// Finished, Idle, Unknown), each in Board order with its header label and counts.
 export function layout(views) {
   const sorted = sortViews(views);
   const headers = workspaceHeaders(sorted);

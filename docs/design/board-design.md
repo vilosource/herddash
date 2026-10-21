@@ -65,7 +65,8 @@ change a Box's height. Empty fields keep their row. The rows, in reading order:
    for Claude Code (`cldw`, `unresolved`), otherwise `profile · program` or the program alone
    (`codex`), in the quiet meta style; it is the part that gives way with an ellipsis in a narrow
    Box. On the right, in bold, the **class label** (uppercase text) and the **Waiting Time**,
-   which is never truncated. Class Working with a Status other than `working` reads `IDLE`. A
+   which is never truncated. Class Working with a Status other than `working` reads `IDLE`. An
+   Agent the Daemon marks `background` reads `BACKGROUND`, whatever its class. A
    lower bound reads `≥ 12m`. An absent `waiting_since` shows a dash. It ticks from
    `waiting_since`. Its format has defined boundaries, with the second unit always two digits:
    `0s` to `59s`, `1m` to `59m`, `1h 00m` to `23h 59m`, then `1d 00h` onwards.
@@ -85,7 +86,7 @@ read `IDLE`, and the Box shrank to 8.25rem. `docs/design/board.html` predates al
 
 **Order.** Boxes arrive sorted by `sort_key`, `[zone, group, class_rank, start, key]`. Zone 0 is
 Needs you alone; zone 1 is every other Agent, grouped by workspace position and ranked Working 1,
-Finished 2, Idle 3, Unknown 4. A Board that re-sorts must tie-break exactly as the Daemon does
+Background 2, Finished 3, Idle 4, Unknown 5 (Background added 2026-10-21). A Board that re-sorts must tie-break exactly as the Daemon does
 (`internal/core/view.go`, `SortKey.compare`): zone, group, class rank, start, then the AgentKey
 as host, server, epoch (numerically) and pane id. It must never compare `sort_key[4]` as one
 string. Otherwise it should trust the API's order.
@@ -110,15 +111,22 @@ Needs you fill moved from red-orange to red so it cannot be mistaken for amber.
   since before it was ever seen working, has a 6px amber leading edge (`--idle-edge`), an `IDLE`
   label in `--idle-accent`, and no Waiting Time emphasis: its time is set in `--ink-faint`. It is
   the one thing the Board derives from the Status, and the Daemon ranks the same Agents Idle.
+- **Background is Working's edge, dashed.** *Added 2026-10-21, operator request.* An Agent whose
+  Status is `done` or `idle` but whose process still runs a background task (the AgentView's
+  `background: true`, decided by the Daemon and never derived by the Board) has a 6px **dashed**
+  leading edge in `--working-edge` and a `BACKGROUND` label in `--working-accent`, flush with the
+  page like Working, so it reads as not yet done; its Waiting Time is in full ink, as Finished's,
+  counting from when the turn ended. It takes precedence over Finished and Idle. The dash, the
+  label and its place right after Working carry it without colour.
 
 ## Zones and workspace groups
 
 *Amended 2026-10-21 (operator decision).* The top zone holds **Needs you alone**, longest wait
 first, flat across workspaces, under a plain visible "Needs you" heading. Below it, one group per
 workspace in herdr's workspace order (`headers` gives where each starts), each holding that
-workspace's Working, then Finished, then Idle, then Unknown Agents. A group's heading is the
-workspace label, large and bold (`1.375rem`, 800), followed by its counts in muted meta text,
-`2 working · 1 finished · 3 idle`, leaving out zeros. Every heading but the first on the page
+workspace's Working, then Background, then Finished, then Idle, then Unknown Agents. A group's
+heading is the workspace label, large and bold (`1.375rem`, 800), followed by its counts in muted
+meta text, `2 working · 1 background · 1 finished · 3 idle`, leaving out zeros. Every heading but the first on the page
 draws a 1px rule above it. The page adds no other dividers.
 
 The browser tab's title carries the Needs you count: `(2) herddash · Needs you` when two Agents

@@ -10,6 +10,7 @@ import (
 	"slices"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/vilosource/herddash/internal/core"
@@ -39,6 +40,9 @@ type Options struct {
 	// Environ reads one variable from a process's environment, as
 	// procenv.Lookup does, which is the default. Tests inject a fake.
 	Environ EnvironFunc
+	// Children reads the direct children of a process, as procenv.Children
+	// does, which is the default. Tests inject a fake.
+	Children ChildrenFunc
 	// Store is where every Transition, every resync marker (Daemon start,
 	// connect and reconnect, resync, disagreeing reconcile) and the engine's
 	// epoch state are written (FR-6, FR-7, AD-3). Nil records nothing.
@@ -54,6 +58,9 @@ type Options struct {
 
 // EnvironFunc is the type of Options.Environ.
 type EnvironFunc = func(pid int, name string) (value string, set bool, err error)
+
+// ChildrenFunc is the type of Options.Children.
+type ChildrenFunc = func(pid int) ([]procenv.Process, error)
 
 // Engine is the single-writer actor (AD-2). Only its Run goroutine holds the
 // pane set, each Agent's Status and its tracked context. Subscription readers
@@ -107,6 +114,16 @@ type EnvironFunc = func(pid int, name string) (value string, set bool, err error
 // Profile, read from nothing. The Profile is resolved again when herdr detects
 // an agent in a tracked pane, or when an Agent's Agent Program changes; a
 // different result is reported to the Sink as a Profile change.
+//
+// Background (FR-2, operator request 2026-10-21): the foreground process a
+// Profile resolution read is remembered as the Agent's process. While an
+// Agent's program has a background rule and its Status is done or idle
+// (core.ChecksBackground), that process's children are read through Children
+// backgroundCheckDelay after the Status changes and every backgroundInterval
+// after, each read in a goroutine bounded by backgroundTimeout, and the
+// verdict arrives as a message. Only a changed verdict changes the view. A
+// failed read is not Background, and is logged at debug level once per pane.
+// Nothing is recorded: the record, the class and Waiting Time are unchanged.
 type Engine struct {
 	host, server string
 	client       Client
@@ -119,6 +136,8 @@ type Engine struct {
 	// read-only after New.
 	profiles map[core.AgentProgram]core.ProfileRule
 	environ  EnvironFunc
+	// children is Options.Children; read-only after New.
+	children ChildrenFunc
 	// store is Options.Store, nil when nothing is recorded.
 	store Recorder
 	// retentionDays is Options.RetentionDays; read-only after New.
@@ -295,6 +314,21 @@ type pane struct {
 	profile   string
 	resolved  bool
 	resolving uint64
+	// pid is the Agent's process: the foreground process its latest Profile
+	// resolution read, 0 when not known. It is cleared when the Agent Program
+	// changes.
+	pid int
+	// background is the latest verdict on pid's children, shown by the view
+	// while core.ChecksBackground holds. bgGen tags the background watch
+	// running for the pane, 0 when none, and bgCtx and bgCancel are its
+	// context; bgLogged is set once a failed read was logged.
+	background bool
+	bgGen      uint64
+	// bgBusy is set while a read of the children runs, off the actor.
+	bgBusy   *atomic.Bool
+	bgCtx    context.Context
+	bgCancel context.CancelFunc
+	bgLogged bool
 }
 
 // cause is why a resync runs: the reason the Sink and the record show, and,
@@ -382,6 +416,16 @@ type (
 		profile string
 		matched string
 		err     error
+		// pid is the foreground process read, 0 when none was.
+		pid int
+	}
+	// backgroundMsg is the outcome of one read of a pane's Agent process's
+	// children: whether one is a background task, or why the read failed.
+	backgroundMsg struct {
+		paneID     string
+		gen        uint64
+		background bool
+		err        error
 	}
 )
 
@@ -398,6 +442,7 @@ func New(o Options) *Engine {
 		allowUnsupported: o.AllowUnsupportedHerdr,
 		profiles:         maps.Clone(o.Profiles),
 		environ:          o.Environ,
+		children:         o.Children,
 		store:            o.Store,
 		retentionDays:    o.RetentionDays,
 		home:             o.Home,
@@ -415,6 +460,9 @@ func New(o Options) *Engine {
 	}
 	if e.environ == nil {
 		e.environ = procenv.Lookup
+	}
+	if e.children == nil {
+		e.children = procenv.Children
 	}
 	e.truth = core.ConnectionTruth{HerdrMinimum: core.HerdrMinimum}
 	e.pub.subs = map[*ViewSubscription]struct{}{}
@@ -750,6 +798,8 @@ func (e *Engine) handle(m any) {
 		m.reply <- e.agents()
 	case profileMsg:
 		e.onProfile(m)
+	case backgroundMsg:
+		e.onBackground(m)
 	}
 }
 
@@ -1374,6 +1424,7 @@ func (e *Engine) remove(id, reason string) {
 	}
 	delete(e.panes, id)
 	delete(e.resyncPending, id) // the caller settles the resync
+	e.stopBackground(p)
 	if p.sub != nil {
 		p.sub.Close()
 	}
@@ -1403,6 +1454,7 @@ func (e *Engine) report(p *pane) {
 		now := e.now()
 		p.firstSkipped = e.firstSight(p, now)
 		p.seenBy, p.seenOrder, p.seenAt = "", nil, 0
+		e.followBackground(p)
 		e.sink.Agent(e.agent(p), now)
 		e.noteView(p)
 	case p.resolving == 0:
@@ -1418,6 +1470,9 @@ func (e *Engine) setProgram(p *pane, program core.AgentProgram) bool {
 		return false
 	}
 	p.program = program
+	// Another program is another process: the next resolution reads it.
+	p.pid, p.background = 0, false
+	e.followBackground(p)
 	if p.known || p.resolving != 0 {
 		e.resolve(p)
 	}
@@ -1465,10 +1520,10 @@ func (e *Engine) readProfile(paneID string, program core.AgentProgram, rule core
 		}
 		value, set, err := e.environ(fp.PID, rule.Variable)
 		if err != nil {
-			done <- profileMsg{err: fmt.Errorf("engine: environment of pid %d: %w", fp.PID, err)}
+			done <- profileMsg{pid: fp.PID, err: fmt.Errorf("engine: environment of pid %d: %w", fp.PID, err)}
 			return
 		}
-		m := profileMsg{profile: core.ResolveProfile(program, &rule, value, set)}
+		m := profileMsg{pid: fp.PID, profile: core.ResolveProfile(program, &rule, value, set)}
 		if set && m.profile != core.ProfileUnresolved {
 			m.matched = value
 		}
@@ -1511,6 +1566,12 @@ func (e *Engine) settleProfile(p *pane, m profileMsg) {
 	e.log.Debug("profile resolved", attrs...)
 	previous, had := p.profile, p.resolved
 	p.profile, p.resolved = m.profile, true
+	if m.pid != p.pid && (m.pid != 0 || m.err == nil) {
+		// Another process: its children are read afresh. A failed read keeps
+		// the process already known, so one slow lookup does not end the watch.
+		p.pid, p.background = m.pid, false
+		e.followBackground(p)
+	}
 	switch {
 	case !p.known:
 		e.report(p)
@@ -1519,6 +1580,116 @@ func (e *Engine) settleProfile(p *pane, m profileMsg) {
 		e.sink.Profile(e.agent(p), previous, e.now())
 		e.noteView(p)
 	}
+}
+
+// followBackground restarts p's background watch for its current Status,
+// process and program: a first read after backgroundCheckDelay, then one every
+// backgroundInterval. When core.ChecksBackground does not hold, or the Agent is
+// not reported or its process is not known, it stops the watch instead and
+// clears the verdict. A restart keeps the verdict until the next read.
+func (e *Engine) followBackground(p *pane) {
+	if !p.known || p.pid <= 0 || !core.ChecksBackground(p.program, p.status) {
+		e.stopBackground(p)
+		return
+	}
+	if p.bgCancel != nil {
+		p.bgCancel()
+	}
+	e.nextGen++
+	p.bgGen = e.nextGen
+	p.bgCtx, p.bgCancel = context.WithCancel(e.runCtx)
+	e.checkBackground(p, backgroundCheckDelay)
+}
+
+// stopBackground ends p's background watch, if any, and clears the verdict.
+func (e *Engine) stopBackground(p *pane) {
+	if p.bgCancel != nil {
+		p.bgCancel()
+	}
+	p.bgGen, p.bgCtx, p.bgCancel = 0, nil, nil
+	p.background = false
+}
+
+// checkBackground reads p's process's children after delay, off the actor,
+// and sends the verdict as a backgroundMsg tagged with the watch's generation.
+// Ending the watch's context abandons the wait.
+func (e *Engine) checkBackground(p *pane, delay time.Duration) {
+	if p.bgBusy == nil {
+		p.bgBusy = new(atomic.Bool)
+	}
+	id, gen, pid, program, ctx, busy := p.id, p.bgGen, p.pid, p.program, p.bgCtx, p.bgBusy
+	e.wg.Add(1)
+	go func() {
+		defer e.wg.Done()
+		t := time.NewTimer(delay)
+		defer t.Stop()
+		select {
+		case <-t.C:
+		case <-ctx.Done():
+			return
+		}
+		m := e.readBackground(ctx, busy, pid, program)
+		m.paneID, m.gen = id, gen
+		e.send(m)
+	}()
+}
+
+// readBackground reads the children of pid and applies program's background
+// rule, within backgroundTimeout. The process read cannot be cancelled, so it
+// runs apart and a read that outlives the timeout is abandoned; done is
+// buffered so it never blocks. busy is held while a read runs, so a read that
+// never returns is not joined by another every backgroundInterval.
+func (e *Engine) readBackground(ctx context.Context, busy *atomic.Bool, pid int, program core.AgentProgram) backgroundMsg {
+	if !busy.CompareAndSwap(false, true) {
+		return backgroundMsg{err: fmt.Errorf("engine: children of pid %d: the previous read has not returned", pid)}
+	}
+	ctx, cancel := context.WithTimeout(ctx, backgroundTimeout)
+	defer cancel()
+	done := make(chan backgroundMsg, 1)
+	go func() {
+		defer busy.Store(false)
+		ps, err := e.children(pid)
+		if err != nil {
+			done <- backgroundMsg{err: fmt.Errorf("engine: children of pid %d: %w", pid, err)}
+			return
+		}
+		argvs := make([][]string, len(ps))
+		for i, c := range ps {
+			argvs[i] = c.Argv
+		}
+		done <- backgroundMsg{background: core.HasBackground(program, argvs)}
+	}()
+	select {
+	case m := <-done:
+		return m
+	case <-ctx.Done():
+		return backgroundMsg{err: fmt.Errorf("engine: children of pid %d not read within %s: %w", pid, backgroundTimeout, ctx.Err())}
+	}
+}
+
+// onBackground records one read's verdict for the watch it belongs to and
+// schedules the next read. A failed read is not Background; the first failure
+// for a pane is logged at debug level, never as a warning, since a process
+// gone or an OS with no reader is ordinary. The view, noted at publish, changes
+// only when the verdict does.
+func (e *Engine) onBackground(m backgroundMsg) {
+	p, ok := e.panes[m.paneID]
+	if !ok || m.gen == 0 || p.bgGen != m.gen {
+		return // for a pane gone since, or a watch superseded
+	}
+	next := m.background
+	if m.err != nil {
+		next = false
+		if !p.bgLogged {
+			p.bgLogged = true
+			e.log.Debug("background not read", "pane", p.id, "pid", p.pid, "error", m.err.Error())
+		}
+	}
+	if next != p.background {
+		e.log.Debug("background changed", "pane", p.id, "background", next)
+		p.background = next
+	}
+	e.checkBackground(p, backgroundInterval)
 }
 
 func (e *Engine) transition(p *pane, next core.Status, prov core.Provenance, order *uint64) {
@@ -1543,6 +1714,7 @@ func (e *Engine) transition(p *pane, next core.Status, prov core.Provenance, ord
 	}
 	p.status = next
 	p.fold = p.fold.Add(t)
+	e.followBackground(p)
 	e.record(t)
 	e.sink.Transition(t, e.agent(p))
 	if p.known {

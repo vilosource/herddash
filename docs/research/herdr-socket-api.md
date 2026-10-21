@@ -486,6 +486,12 @@ string, so `events_lost` has no generated type. A client recognises it by matchi
   turning zoom off changed nothing either. Zoom on and zoom off each emitted one `layout_updated`.
   So pane positions computed from `rect` (`core.PanePositions`) do not change while a pane is
   zoomed, and herddash can ignore `zoomed`.
+- **`pane.process_info` lists only the foreground process group.** *Added 2026-10-21, against an
+  isolated herdr 0.9.5, as recorded in `docs/implementation/spec-background-tasks.md`.* Claude Code
+  runs every Bash tool call, foreground or background, as a direct child shell in its own process
+  group (pgid = its pid), so `pane.process_info` does not show those shells, and herdr reports a
+  Claude Code agent waiting on a background shell as `done`. herddash reads the agent process's
+  children itself (`procenv.Children`) to tell that apart from Finished.
 
 ## Open items
 

@@ -162,6 +162,7 @@ func (e *Engine) viewOf(p *pane) core.AgentView {
 		Fold:         p.fold,
 		Context:      p.context,
 		Home:         e.home,
+		Background:   p.background,
 	})
 }
 
