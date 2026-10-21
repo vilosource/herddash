@@ -20,18 +20,57 @@ Every command below runs from a clone of this repository unless it says otherwis
 
 Both units start `~/.local/bin/herddash`, so the binary goes there.
 
-Build it (Go 1.26 or newer):
+Either download a release binary or build one. Downloads start with the first release; until it
+is published, build it.
+
+**Download a release binary.** Each release on
+<https://github.com/vilosource/herddash/releases> carries one binary per platform, built with
+`CGO_ENABLED=0` so it needs no Go or C toolchain on the Host, named `herddash_<version>_<os>_<arch>`
+(the version without its `v`), and a `SHA256SUMS` file covering all four:
+
+| Platform | Asset |
+|---|---|
+| macOS, Apple silicon | `herddash_<version>_darwin_arm64` |
+| macOS, Intel | `herddash_<version>_darwin_amd64` |
+| Linux, x86-64 | `herddash_<version>_linux_amd64` |
+| Linux, ARM64 | `herddash_<version>_linux_arm64` |
+
+The macOS binaries need macOS 13 or newer. They are not signed or notarised. For example, 0.1.0
+on Apple silicon (set `ASSET` to your platform's name from the table):
+
+```bash
+V=0.1.0
+ASSET=herddash_${V}_darwin_arm64
+DL=$(mktemp -d)
+cd "$DL"
+curl -fLO "https://github.com/vilosource/herddash/releases/download/v$V/$ASSET"
+curl -fLO "https://github.com/vilosource/herddash/releases/download/v$V/SHA256SUMS"
+# or: gh release download "v$V" --repo vilosource/herddash --pattern "$ASSET" --pattern SHA256SUMS
+grep " $ASSET\$" SHA256SUMS | shasum -a 256 -c -    # Linux: sha256sum -c - instead of shasum -a 256 -c -
+mkdir -p ~/.local/bin
+install -m 755 "$ASSET" ~/.local/bin/herddash
+cd - >/dev/null
+```
+
+The check must print `herddash_<version>_<os>_<arch>: OK`. It fails if `SHA256SUMS` has no line
+for the asset or the hash differs; then do not install the file. A file downloaded through a
+browser rather than `curl` or `gh` is quarantined on macOS; clear that with
+`xattr -d com.apple.quarantine ~/.local/bin/herddash`.
+
+A release with no binaries attached (the release workflow missed it, for example because a later
+release-please run created it) is recovered by running the release workflow by hand:
+`gh workflow run release.yml --repo vilosource/herddash -f tag=vX.Y.Z`. It refuses a release that
+already has assets; add `-f force=true` to replace them.
+
+**Or build it** (Go 1.26 or newer):
 
 ```bash
 mkdir -p ~/.local/bin
 go build -o ~/.local/bin/herddash ./cmd/herddash
 ```
 
-**Once release binaries are published (Story 4.3)**, you can instead download the one for your
-platform from the GitHub release, check it against the release's SHA-256 checksums, and move it to
-`~/.local/bin/herddash` with `chmod 755`. On macOS a file downloaded through a browser is
-quarantined; clear that with `xattr -d com.apple.quarantine ~/.local/bin/herddash`. Until then,
-build it.
+`scripts/release-build.sh <version> <commit> <outdir>` builds the four release binaries and their
+`SHA256SUMS` the same way a release does; a release builds them with Go 1.27.2.
 
 Check it runs:
 

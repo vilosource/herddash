@@ -112,8 +112,32 @@ documentation and marked UNVERIFIED. Read it before a claim from it decides a de
 ## Releases, and the setting that is not in this repository
 
 Releases are release-please's job. It watches `main`, maintains a standing release pull request,
-and on merge tags the version and cuts the GitHub release. It never publishes artifacts; that would
-be a separate workflow keyed off the tag, and none exists yet.
+and on merge tags the version and cuts the GitHub release. It never publishes artifacts.
+
+**Binaries are `.github/workflows/release.yml`'s job.** It runs `scripts/release-build.sh` with Go
+1.27.2 (the spine's release toolchain), which builds `herddash_<version>_<os>_<arch>` with
+`CGO_ENABLED=0` and `-trimpath` for darwin/arm64, darwin/amd64, linux/amd64 and linux/arm64, the
+version and 12-character commit stamped in, plus one `SHA256SUMS`. It checks the checksums, each
+binary's build info (`go version -m`: target, `CGO_ENABLED=0`, `-trimpath`, the tagged commit,
+clean tree; Go records no `-ldflags` under `-trimpath`) and that the linux/amd64 binary's `version`
+prints the release's version and commit. Then it attaches the binaries, and `SHA256SUMS` last, to
+the existing release with `gh release upload --clobber`. It never creates a tag or a release, and
+holds only `contents: write`.
+
+It runs `on: workflow_run` of release-please, for any completed run on `main` from a push, **not**
+on a tag or release event: release-please creates both with `GITHUB_TOKEN`, and GitHub starts no
+workflow from events that token causes. It does not require release-please's run to succeed, since
+a release can exist even when a later step failed. `scripts/release-find.sh` decides: it looks for
+a `v*` tag with a GitHub release on the run's head commit and ends the run with nothing to do when
+there is none, which is every ordinary push. Only gh's "release not found" counts as no release;
+any other lookup failure, a tag that is not `vX.Y.Z[-prerelease]`, or a tag not on the checked-out
+commit fails the job, and so does a release that already has assets. Runs are grouped per head
+commit or tag, so a newer run never cancels the one carrying a release. A `workflow_run` workflow
+only fires once it is on the default branch, so it must be on `main` before a release PR is merged.
+To build a release's assets by hand, for example one created by a later release-please run, run it
+with the tag: `gh workflow run release.yml -f tag=v0.1.0`; add `-f force=true` to replace assets
+the release already has. `release_test.go` tests both scripts, `release-find.sh` against a
+temporary repository and a stub `gh`.
 
 **Two things about it are not obvious from the workflow file.**
 
@@ -168,14 +192,17 @@ diagram does not draw, on any package outside the spine, on any non-standard imp
 structural change and needs an ADR.
 
 `go run ./cmd/herddash version` prints `herddash dev (<commit>)`. Release builds stamp
-`-ldflags "-X main.version=... -X main.commit=..."`; unstamped builds take the commit from Go's
-embedded VCS info (`go run` embeds none, so it prints `unknown`).
+`-ldflags "-X main.version=... -X main.commit=..."`, which `scripts/release-build.sh <version>
+<commit> <outdir>` does, so a release binary prints e.g. `herddash 0.1.0 (<commit>)`. Unstamped
+builds take the commit from Go's embedded VCS info (`go run` embeds none, so it prints `unknown`).
+`release_test.go` runs that script (only the host's target under `-short`) and checks the release
+workflows' triggers, concurrency, permissions, pinned actions and Go version.
 
 No npm, no build step for assets. Web assets are embedded in the binary.
 
 ## Repository state
 
-**Epics 1 and 2 are built, and Epic 3 is through Story 3.6.** `docs/implementation/sprint-status.yaml`
+**Epics 1 to 3 are built, and Epic 4 (running unattended and releases) is in progress.** `docs/implementation/sprint-status.yaml`
 is the authority on which story is next; each story's spec, with its review triage log, is
 `docs/implementation/spec-<key>.md`. What exists:
 
@@ -192,9 +219,15 @@ is the authority on which story is next; each story's spec, with its review tria
   `/api/agents/{host}/{server}/{epoch}/{pane}/history`.
 - `internal/importer`: the plugin-log backfill.
 
-The Board itself is not served yet: its approved design is `docs/design/board-design.md` and
-`docs/design/board.html`, and Story 3.7 builds it. `main` and `develop` are kept level; if they are
-not, a `develop` into `main` pull request is open or overdue.
+- The Board at `/`, with its files under `internal/httpapi/web/` embedded in the binary: the
+  ordering and event logic is `order.mjs`, tested with `node --test` in CI, and
+  `internal/httpapi/web/check/board-browser.mjs` is a hand-run headless-Chrome check of its
+  drawing. Its approved design is `docs/design/board-design.md`.
+- `deploy/`: a launchd agent and a systemd user unit, installed by hand as `docs/install.md`
+  describes.
+
+`main` and `develop` are kept level; if they are not, a `develop` into `main` pull request is open
+or overdue.
 
 The remote is `git@github.com:vilosource/herddash.git`, public, MIT. This repository's git identity
 is **pinned locally** to the GitHub noreply address rather than the machine's global work email, so

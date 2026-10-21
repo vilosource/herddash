@@ -1,0 +1,119 @@
+name: release
+# Builds the release binaries and attaches them, with SHA256SUMS, to the GitHub
+# release that release-please created. It never creates a tag or a release.
+#
+# Why workflow_run and not a tag or release trigger: release-please creates its
+# tag and release with GITHUB_TOKEN, and GitHub starts no other workflow from
+# events that token causes, so `push: tags` or `release: published` would never
+# fire. Instead this runs after every release-please run on main from a push,
+# whatever its conclusion (a release can exist even if a later step failed),
+# and scripts/release-find.sh looks for a v* tag on that run's head commit that
+# has a GitHub release; an ordinary push has none, and the run ends with
+# nothing to do.
+#
+# workflow_dispatch with a tag builds that release's assets, for a release this
+# workflow missed. It refuses a release that already has assets unless force
+# is true, which replaces them.
+on:
+  workflow_run:
+    workflows: [release-please]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing release tag to build assets for, e.g. v0.1.0'
+        required: true
+        type: string
+      force:
+        description: 'Replace assets the release already has'
+        required: false
+        default: false
+        type: boolean
+permissions:
+  contents: write
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.workflow_run.head_sha || inputs.tag }}
+  cancel-in-progress: false
+jobs:
+  release:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: find the release
+        id: find
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.event.workflow_run.head_sha || inputs.tag }}
+          FORCE: ${{ inputs.force && 'true' || 'false' }}
+        run: |
+          set -euo pipefail
+          git fetch --force --tags origin
+          scripts/release-find.sh "$EVENT" "$REF" "$FORCE" | tee -a "$GITHUB_OUTPUT"
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        if: steps.find.outputs.found == 'true'
+        with:
+          # The spine's release toolchain; binaries built with it need macOS 13
+          # or newer.
+          go-version: '1.27.2'
+          cache: false
+      - name: build
+        if: steps.find.outputs.found == 'true'
+        env:
+          VERSION: ${{ steps.find.outputs.version }}
+          COMMIT: ${{ steps.find.outputs.commit }}
+        run: scripts/release-build.sh "$VERSION" "$COMMIT" "$RUNNER_TEMP/dist"
+      - name: verify
+        if: steps.find.outputs.found == 'true'
+        env:
+          VERSION: ${{ steps.find.outputs.version }}
+          COMMIT: ${{ steps.find.outputs.commit }}
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/dist"
+          sha256sum -c SHA256SUMS
+          [ "$(wc -l < SHA256SUMS)" -eq 4 ]
+          # Every binary's build info. Go leaves -ldflags out of it under
+          # -trimpath, so the stamped version and commit are checked by running
+          # the one binary this runner can execute; the four share one ldflags.
+          head="$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD)"
+          for t in darwin/arm64 darwin/amd64 linux/amd64 linux/arm64; do
+            bin="herddash_${VERSION}_${t%/*}_${t#*/}"
+            info="$(go version -m "$bin")"
+            for want in "GOOS=${t%/*}" "GOARCH=${t#*/}" "CGO_ENABLED=0" "-trimpath=true" \
+                "vcs.revision=$head" "vcs.modified=false"; do
+              if ! printf '%s\n' "$info" | grep -qxF "$(printf '\tbuild\t%s' "$want")"; then
+                echo "::error::$bin build info lacks $want"
+                exit 1
+              fi
+            done
+          done
+          got="$(./herddash_${VERSION}_linux_amd64 version)"
+          want="herddash ${VERSION} (${COMMIT})"
+          if [ "$got" != "$want" ]; then
+            echo "::error::version printed '$got', want '$want'"
+            exit 1
+          fi
+      - name: upload
+        if: steps.find.outputs.found == 'true'
+        env:
+          TAG: ${{ steps.find.outputs.tag }}
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/dist"
+          # The binaries first and SHA256SUMS last, so a release never carries
+          # checksums for binaries that failed to upload.
+          gh release upload "$TAG" herddash_* --clobber
+          gh release upload "$TAG" SHA256SUMS --clobber
