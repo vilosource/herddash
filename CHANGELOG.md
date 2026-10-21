@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/vilosource/herddash/compare/v0.3.0...v0.4.0) (2026-10-21)
+
+
+### Features
+
+* **httpapi:** group the Board by workspace, Needs you alone on top ([#51](https://github.com/vilosource/herddash/issues/51)) ([0903245](https://github.com/vilosource/herddash/commit/090324514fa1a3081e857cc24d02c6efe1c0f993))
+
 ## [0.3.0](https://github.com/vilosource/herddash/compare/v0.2.0...v0.3.0) (2026-10-21)
 
 
