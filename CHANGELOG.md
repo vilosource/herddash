@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0](https://github.com/vilosource/herddash/compare/v0.1.0...v0.2.0) (2026-10-21)
+
+
+### Features
+
+* **httpapi:** put workspace and tab second in each Box ([#47](https://github.com/vilosource/herddash/issues/47)) ([35087b0](https://github.com/vilosource/herddash/commit/35087b0540ee93c4d8f6ef435f7d5623e6578e37))
+
 ## 0.1.0 (2026-10-21)
 
 
