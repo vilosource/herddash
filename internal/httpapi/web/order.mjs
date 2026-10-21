@@ -150,7 +150,7 @@ export function boxLabel(view, nowMs) {
   const w = hasWaitingSince(view)
     ? "waiting " + waitingLabel(view, nowMs).replace("≥ ", "at least ")
     : "Waiting Time unknown";
-  return [classLabel(view), w, view.heading, view.context_line, view.directory, whereLabel(view)]
+  return [classLabel(view), w, whereLabel(view), view.context_line, view.directory, view.heading]
     .filter(Boolean)
     .join(", ");
 }

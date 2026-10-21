@@ -120,7 +120,7 @@ body {
   height: var(--box-h);
   overflow: hidden;
   display: grid;
-  grid-template-rows: 2.25rem 1.5rem 1.5rem 1.25rem 1.25rem;
+  grid-template-rows: 2.25rem 1.5rem 1.5rem 1.25rem 1.25rem; /* status, where, context, dir, heading */
   row-gap: var(--space-1);
   align-content: start;
   padding: var(--space-3) var(--space-4);
@@ -148,9 +148,9 @@ body {
   line-height: 1;
   white-space: nowrap;
 }
-.heading { font-size: var(--text-heading); font-weight: 600; line-height: 1.5rem; color: var(--ink); }
+.where { font-size: var(--text-heading); font-weight: 600; line-height: 1.5rem; color: var(--ink); }
 .context { font-size: var(--text-body); line-height: 1.5rem; }
-.dir, .where { font-size: var(--text-meta); line-height: 1.25rem; }
+.dir, .heading { font-size: var(--text-meta); line-height: 1.25rem; }
 /* Directory truncates from the start, so the last segment (the project) stays visible. */
 .dir { font-family: var(--font-mono); direction: rtl; text-align: left; }
 .dir > bdi { direction: ltr; unicode-bidi: isolate; }
@@ -166,7 +166,7 @@ body {
 .box--needs_you .wait { color: var(--needs-ink); font-size: var(--text-time-loud); font-weight: 800; }
 /* A narrow column steps the loud time down so "≥ 23h 59m" still fits; ellipsis is the last resort. */
 @container (max-width: 18.5rem) { .box--needs_you .wait { font-size: var(--text-time-loud-narrow); } }
-.box--needs_you .heading,
+.box--needs_you .where,
 .box--needs_you .context { color: var(--needs-ink); }
 .box--needs_you .context { font-weight: 600; }
 
@@ -184,8 +184,8 @@ body {
 /* Working and Unknown: recede. Flush with the page, muted text, regular weight. */
 .box--working .class,
 .box--unknown .class { color: var(--ink-muted); font-weight: 600; }
-.box--working .heading,
-.box--unknown .heading { color: var(--ink-muted); font-weight: 500; }
+.box--working .where,
+.box--unknown .where { color: var(--ink-muted); font-weight: 500; }
 .box--unknown { border-style: dashed; border-color: var(--border-quiet); }
 /* An idle Agent never seen working: no Waiting Time emphasis at all. */
 .box--never-working .wait { color: var(--ink-faint); font-size: var(--text-meta); }
