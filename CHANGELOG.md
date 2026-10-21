@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/vilosource/herddash/compare/v0.2.0...v0.3.0) (2026-10-21)
+
+
+### Features
+
+* **httpapi:** lead each Box with workspace and tab, state at the bottom ([#49](https://github.com/vilosource/herddash/issues/49)) ([c659675](https://github.com/vilosource/herddash/commit/c6596755cda11d59a204b5ab3929f3761e7b3342))
+
 ## [0.2.0](https://github.com/vilosource/herddash/compare/v0.1.0...v0.2.0) (2026-10-21)
 
 
