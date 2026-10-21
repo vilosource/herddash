@@ -15,8 +15,8 @@ network. Its striped, dashed toolbar is for design review only and is not part o
 System fonts only: `system-ui` for text and `ui-monospace` for Waiting Times and directories.
 Times use tabular figures so they do not jitter as they tick. Spacing runs on a 4px scale:
 `0.25, 0.5, 0.75, 1, 1.5, 2rem`. Type is set in rem: label `0.8125`, meta `0.875`, body `1`,
-heading `1.0625`, Finished time `1.25`, Needs you time `2` (`1.5` in a Box narrower than 18.5rem).
-Meta (`0.875`) sets both the directory and the workspace and tab.
+workspace and tab `1.25` (bold), Needs you time `1.125`. Meta (`0.875`) sets the directory and the
+heading.
 
 | Token | Light | Dark | Contrast (light / dark) |
 |---|---|---|---|
@@ -29,6 +29,8 @@ Meta (`0.875`) sets both the directory and the workspace and tab.
 | `--needs-ink` / `--needs-ink-2` | `#FFFFFF` / `#FFE1DC` | `#1A0703` / `#3D1307` | 6.6, 5.3 / 7.6, 6.3 on the fill |
 | `--finished-accent` label | `#17663F` | `#5BD69A` | 7.0 / 9.2 on surface |
 | `--finished-edge` leading edge | `#1F8A55` | `#3FB37B` | 4.0 / 7.2 on bg (non-text, ≥ 3) |
+| `--working-accent` label | `#2D5A96` | `#8DB6EE` | 6.3 / 9.1 on bg |
+| `--working-edge` leading edge | `#3E6FB0` | `#5B8FD6` | 4.7 / 5.8 on bg (non-text, ≥ 3) |
 | `--focus` outline | `#1D4ED8` | `#7AA2FF` | 6.1 / 7.7 on bg |
 | strips: disconnected, advisory, refused | slate, amber, red | the same, darkened | 10.2, 9.4, 8.9 / 9.7, 10.8, 7.4 |
 
@@ -38,32 +40,36 @@ wide margin in both themes. Dark mode switches every token: by the system settin
 
 ## The Box
 
-The grid is `repeat(auto-fill, minmax(min(100%, 17rem), 1fr))`. **Every Box is `height: 10.5rem`**,
-built from five fixed-height rows. Every text row is `nowrap` with an ellipsis, and so is the
-Waiting Time inside the first row, so no content can change a Box's height. Empty fields keep
-their row, with no stray separator and no tooltip. The rows, in reading order:
+The grid is `repeat(auto-fill, minmax(min(100%, 17rem), 1fr))`. **Every Box is `height: 9.5rem`**,
+built from four fixed-height rows. Every text row is `nowrap` with an ellipsis, and so is the
+Waiting Time in the last row, so no content can change a Box's height. Empty fields keep their
+row, with no stray separator and no tooltip. The rows, in reading order:
 
-1. **Attention Class label** (uppercase text) on the left, **Waiting Time** on the right. A lower
-   bound reads `≥ 12m`. An absent `waiting_since` shows a dash, labelled "Waiting Time unknown".
-   It ticks from `waiting_since`. Its format has defined boundaries, with the second unit always
-   two digits: `0s` to `59s`, `1m` to `59m`, `1h 00m` to `23h 59m`, then `1d 00h` onwards. In a
-   narrow Needs you Box the time steps down to 1.5rem, so `≥ 23h 59m` fits. An ellipsis is the
-   last resort.
-2. **Workspace › tab**, which is how the operator finds the pane in herdr, in the Box's most
-   prominent text (heading size and weight). An empty label is left out together with its `›`.
-3. **Context Line**: one line, ellipsis, full text in `title`. The row is always present, so an
+1. **Workspace › tab**, which is how the operator finds the pane in herdr, in the Box's largest
+   and boldest text (`1.25rem`, 700). When the line is too long, the workspace name gives way
+   first, with an ellipsis, so the tab stays whole; the tab is truncated only past 75% of the
+   width. In the lower zone the workspace is also the group's header. An empty label is left out
+   together with its `›`.
+2. **Context Line**: one line, ellipsis, full text in `title`. The row is always present, so an
    empty Context Line keeps its space.
-4. **Directory** (monospace), with full text in `title`. When it is too long it is truncated from
+3. **Directory** (monospace), with full text in `title`. When it is too long it is truncated from
    the start (`…sted/path/to/the-project-name`), so the last segment, the project, stays
    visible. `~` for the home directory is substituted by the Daemon (`core.ShortenDir`, AD-1),
-   not by the Board. Story 3.7 checks that it arrives that way.
-5. **Heading**, `profile · program` exactly as the API sends it, so `unresolved · claude` and
-   `codex`, in the quiet meta style.
+   not by the Board.
+4. **Heading and state.** On the left the heading, `profile · program` exactly as the API sends
+   it (`cldw · claude`, `unresolved · claude`, `codex`), in the quiet meta style; it is the part
+   that gives way with an ellipsis in a narrow Box. On the right, in bold, the **Attention Class
+   label** (uppercase text) and the **Waiting Time**. A lower bound reads `≥ 12m`. An absent
+   `waiting_since` shows a dash, labelled "Waiting Time unknown". It ticks from `waiting_since`.
+   Its format has defined boundaries, with the second unit always two digits: `0s` to `59s`, `1m`
+   to `59m`, `1h 00m` to `23h 59m`, then `1d 00h` onwards.
 
-*Changed 2026-10-21 at the operator's request:* workspace › tab moved from the last row to the
-second, taking the heading's prominence, and the heading moved to the last row. Glancing at a Box
-must say at once where the pane is. The rows' heights and the Box's height are unchanged.
-`docs/design/board.html` predates the change.
+*Changed 2026-10-21 at the operator's request, twice.* First, workspace › tab moved from the last
+row to the second and the heading to the last. Then the operator said the state matters less than
+where the pane is: workspace › tab became the first and largest line, and the Attention Class and
+Waiting Time moved to the last row, bold, beside the heading. The Box lost a row and shrank from
+10.5rem to 9.5rem. Working gained a blue leading edge to match Finished's green one.
+`docs/design/board.html` predates both changes.
 
 **Order.** Boxes arrive sorted by `sort_key`. A Board that re-sorts must tie-break exactly as the
 Daemon does (`internal/core/view.go`, `SortKey.compare`): zone, group, class rank, start, then
@@ -74,13 +80,15 @@ the same way.
 ## Emphasis by class
 
 - **Needs you is dominant.** It has a solid fill, a 3px ring, white (light) or near-black (dark)
-  text, a bold Context Line and a 2rem extra-bold Waiting Time. It never relies on colour alone:
-  the uppercase `NEEDS YOU` label, the heavy ring, the weight and the size all carry it in
-  greyscale too, and it is always first on the page.
-- **Finished is quieter.** It sits on a raised surface with a 6px green leading edge, a green
-  `FINISHED` label and a 1.25rem semibold time.
-- **Working and Unknown recede.** They sit flush with the page, with a hairline border, muted
-  text and a body-size, regular-weight time. Unknown's border is dashed.
+  text, a bold Context Line and an extra-bold Waiting Time. It never relies on colour alone: the
+  uppercase `NEEDS YOU` label, the heavy ring and the weight carry it in greyscale too, and it is
+  always first on the page.
+- **Finished is quieter.** It sits on a raised surface with a 6px green leading edge and a green
+  `FINISHED` label.
+- **Working has a blue leading edge**, the same 6px bar as Finished in blue, flush with the page
+  rather than raised, with a blue `WORKING` label. Blue says busy, green says done; the label
+  says it in text too.
+- **Unknown recedes.** It sits flush with the page with a dashed hairline border and muted text.
 - **An `idle` Agent never seen `working`** (status `idle`, class Working) gets no Waiting Time
   emphasis: its time is set small in `--ink-faint`.
 

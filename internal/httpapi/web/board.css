@@ -13,13 +13,11 @@
   --text-label: 0.8125rem;   /* class label, workspace header */
   --text-meta: 0.875rem;     /* directory, workspace and tab */
   --text-body: 1rem;         /* Context Line, quiet Waiting Time */
-  --text-heading: 1.0625rem; /* profile · program */
-  --text-time: 1.25rem;      /* Finished Waiting Time */
-  --text-time-loud: 2rem;    /* Needs you Waiting Time */
-  --text-time-loud-narrow: 1.5rem; /* the same, in a Box narrower than 18.5rem */
+  --text-where: 1.25rem;     /* workspace › tab, a Box's first and largest line */
+  --text-time-loud: 1.125rem; /* Needs you Waiting Time, in the last row */
 
   --box-min: 17rem;   /* narrowest column before the grid drops one */
-  --box-h: 10.5rem;   /* every Box, whatever its content: 5 rows + gaps + padding */
+  --box-h: 9.5rem;    /* every Box, whatever its content: 4 rows + gaps + padding */
   --radius: 0.5rem;
 
   --bg: #F3F4F6;
@@ -38,6 +36,9 @@
   --finished-accent: #17663F;
   --finished-edge: #1F8A55;
 
+  --working-accent: #2D5A96;
+  --working-edge: #3E6FB0;
+
   --focus: #1D4ED8;
 
   --strip-disc-bg: #3A4150;  --strip-disc-ink: #FFFFFF;
@@ -54,6 +55,7 @@
     --border: #2D323C; --border-quiet: #3A404B;
     --needs-bg: #FF7A59; --needs-ink: #1A0703; --needs-ink-2: #3D1307; --needs-ring: #FFB199;
     --finished-accent: #5BD69A; --finished-edge: #3FB37B;
+    --working-accent: #8DB6EE; --working-edge: #5B8FD6;
     --focus: #7AA2FF;
     --strip-disc-bg: #323946; --strip-disc-ink: #E9EBEF;
     --strip-adv-bg: #3D2E05;  --strip-adv-ink: #FFE7A3;
@@ -120,7 +122,7 @@ body {
   height: var(--box-h);
   overflow: hidden;
   display: grid;
-  grid-template-rows: 2.25rem 1.5rem 1.5rem 1.25rem 1.25rem; /* status, where, context, dir, heading */
+  grid-template-rows: 2rem 1.5rem 1.25rem 1.75rem; /* where, context, dir, status row */
   row-gap: var(--space-1);
   align-content: start;
   padding: var(--space-3) var(--space-4);
@@ -131,7 +133,9 @@ body {
 }
 .box > * { min-width: 0; margin: 0; }
 .line { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.status-row { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-3); align-self: center; min-width: 0; }
+.status-row { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-3); align-self: end; min-width: 0; }
+.status-row .heading { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.status-row .state { flex: 0 1 auto; min-width: 0; display: flex; align-items: baseline; gap: var(--space-2); white-space: nowrap; }
 .status-row .class { flex: 0 0 auto; }
 .class {
   font-size: var(--text-label);
@@ -145,12 +149,22 @@ body {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   font-size: var(--text-body);
+  font-weight: 700;
   line-height: 1;
   white-space: nowrap;
 }
-.where { font-size: var(--text-heading); font-weight: 600; line-height: 1.5rem; color: var(--ink); }
+.where {
+  display: flex; align-items: baseline; gap: 0.35em; min-width: 0; white-space: nowrap;
+  font-size: var(--text-where); font-weight: 700; line-height: 2rem; color: var(--ink); align-self: center;
+}
+/* The workspace shrinks first; the tab keeps its width unless it alone is too long. */
+.where .ws { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.where .sep { flex: 0 0 auto; }
+.where .tab { flex: 0 0 auto; min-width: 0; max-width: 75%; overflow: hidden; text-overflow: ellipsis; }
+.where .tab:only-child, .where .ws:only-child { max-width: none; }
 .context { font-size: var(--text-body); line-height: 1.5rem; }
 .dir, .heading { font-size: var(--text-meta); line-height: 1.25rem; }
+.heading { font-weight: 400; }
 /* Directory truncates from the start, so the last segment (the project) stays visible. */
 .dir { font-family: var(--font-mono); direction: rtl; text-align: left; }
 .dir > bdi { direction: ltr; unicode-bidi: isolate; }
@@ -164,8 +178,6 @@ body {
 }
 .box--needs_you .class { color: var(--needs-ink); font-size: var(--text-meta); }
 .box--needs_you .wait { color: var(--needs-ink); font-size: var(--text-time-loud); font-weight: 800; }
-/* A narrow column steps the loud time down so "≥ 23h 59m" still fits; ellipsis is the last resort. */
-@container (max-width: 18.5rem) { .box--needs_you .wait { font-size: var(--text-time-loud-narrow); } }
 .box--needs_you .where,
 .box--needs_you .context { color: var(--needs-ink); }
 .box--needs_you .context { font-weight: 600; }
@@ -178,14 +190,18 @@ body {
   padding-left: calc(var(--space-4) - 5px);
 }
 .box--finished .class { color: var(--finished-accent); }
-.box--finished .wait { color: var(--ink); font-size: var(--text-time); font-weight: 600; }
+.box--finished .wait { color: var(--ink); }
 .box--finished .context { color: var(--ink); }
 
-/* Working and Unknown: recede. Flush with the page, muted text, regular weight. */
-.box--working .class,
+/* Working: a blue leading edge like Finished's green one, flush with the page, so it reads as
+   busy rather than done. Unknown recedes. */
+.box--working {
+  border-left: 6px solid var(--working-edge);
+  padding-left: calc(var(--space-4) - 5px);
+}
+.box--working .class { color: var(--working-accent); }
 .box--unknown .class { color: var(--ink-muted); font-weight: 600; }
-.box--working .where,
-.box--unknown .where { color: var(--ink-muted); font-weight: 500; }
+.box--unknown .where { color: var(--ink-muted); font-weight: 600; }
 .box--unknown { border-style: dashed; border-color: var(--border-quiet); }
 /* An idle Agent never seen working: no Waiting Time emphasis at all. */
 .box--never-working .wait { color: var(--ink-faint); font-size: var(--text-meta); }

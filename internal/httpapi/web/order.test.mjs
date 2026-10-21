@@ -180,11 +180,11 @@ test("box label carries everything, in full", () => {
   };
   assert.equal(
     boxLabel(v, now),
-    "Needs you, waiting at least 2m, ops › 1, a long context line that the Box truncates, ~/src/p, unresolved · claude",
+    "ops › 1, a long context line that the Box truncates, ~/src/p, unresolved · claude, Needs you, waiting at least 2m",
   );
   assert.equal(
     boxLabel({ ...v, waiting_since: undefined, context_line: "", attention_class: "unknown" }, now),
-    "Unknown, Waiting Time unknown, ops › 1, ~/src/p, unresolved · claude",
+    "ops › 1, ~/src/p, unresolved · claude, Unknown, Waiting Time unknown",
   );
 });
 
