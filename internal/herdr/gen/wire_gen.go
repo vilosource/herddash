@@ -408,6 +408,11 @@ const (
 	SubscriptionEventKindPaneScrollChanged      SubscriptionEventKind = "pane.scroll_changed"
 )
 
+// SubscriptionLayoutUpdated is the variant of Subscription whose type is "layout.updated".
+type SubscriptionLayoutUpdated struct {
+	Type SubscriptionType `json:"type"`
+}
+
 // SubscriptionPaneAgentDetected is the variant of Subscription whose type is "pane.agent_detected".
 type SubscriptionPaneAgentDetected struct {
 	Type SubscriptionType `json:"type"`
@@ -460,6 +465,7 @@ type SubscriptionType string
 
 // SubscriptionType values.
 const (
+	SubscriptionTypeLayoutUpdated          SubscriptionType = "layout.updated"
 	SubscriptionTypePaneAgentDetected      SubscriptionType = "pane.agent_detected"
 	SubscriptionTypePaneAgentStatusChanged SubscriptionType = "pane.agent_status_changed"
 	SubscriptionTypePaneClosed             SubscriptionType = "pane.closed"

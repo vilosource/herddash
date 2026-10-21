@@ -105,6 +105,7 @@ func TestSubscribeLifecycle(t *testing.T) {
 		`{"event":"tab_renamed","data":{"type":"tab_renamed","tab_id":"w1:t1","workspace_id":"w1","label":"main"}}`,
 		`{"event":"tab_moved","data":{"type":"tab_moved","tab_id":"w1:t1","workspace_id":"w1","insert_index":0,"tabs":[]}}`,
 		`{"event":"pane_updated","data":{"type":"pane_updated","pane":{"pane_id":"w1:p1","terminal_id":"term_x","workspace_id":"w1","tab_id":"w1:t1","focused":false,"agent_status":"idle","revision":1}}}`,
+		`{"event":"layout_updated","data":{"type":"layout_updated","layout":{"workspace_id":"w1","tab_id":"w1:t1","zoomed":false,"area":{"x":0,"y":0,"width":120,"height":40},"focused_pane_id":"w1:p1","panes":[],"splits":[]}}}`,
 	}
 	lines := append([]string{created, moved, detected, closed, exited, detectedFinal, released}, contextLines...)
 	s, requests := streamFake(t, false, lines...)
@@ -123,7 +124,7 @@ func TestSubscribeLifecycle(t *testing.T) {
 		types = append(types, r.Type)
 	}
 	wantTypes := []string{"pane.created", "pane.closed", "pane.moved", "pane.exited", "pane.agent_detected",
-		"workspace.renamed", "workspace.moved", "workspace.reordered", "tab.renamed", "tab.moved", "pane.updated"}
+		"workspace.renamed", "workspace.moved", "workspace.reordered", "tab.renamed", "tab.moved", "pane.updated", "layout.updated"}
 	if !reflect.DeepEqual(types, wantTypes) {
 		t.Errorf("subscribed %v, want %v", types, wantTypes)
 	}

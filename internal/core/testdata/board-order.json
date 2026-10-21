@@ -1,5 +1,5 @@
 {
-  "description": "Golden Board order (Story 3.1). input holds shuffled Agent inputs, each with view: the expected AgentView exactly as NewAgentView serialises it (key, class, heading, shortened directory, context line, waiting_since, waiting_exact, sort_key). order is the expected AgentKey strings after sorting; headers are the indexes, in sorted order, where a zone-1 workspace group starts. Shared fixture: the Go test in internal/core/view_test.go checks every view, the order and the headers; the Board's ordering tests (Story 3.7) sort the expected views by their sort_key arrays, compared element by element, and must not re-derive class, zone, group, rank or sentinels. An unknown group or start is 9007199254740991 (Number.MAX_SAFE_INTEGER). since is FoldResult.Since (absent: fold not known); exact says the class began live.",
+  "description": "Golden Board order (Story 3.1; regenerated 2026-10-21 for Needs you alone on top and every other class grouped by workspace, ranked Working 1, Finished 2, Idle 3, Unknown 4). input holds shuffled Agent inputs, each with view: the expected AgentView exactly as NewAgentView serialises it (key, class, heading, shortened directory, context line, waiting_since, waiting_exact, sort_key). order is the expected AgentKey strings after sorting; headers are the indexes, in sorted order, where a zone-1 workspace group starts. Shared fixture: the Go test in internal/core/view_test.go checks every view, the order and the headers; the Board's ordering tests (Story 3.7) sort the expected views by their sort_key arrays, compared element by element, and must not re-derive class, zone, group, rank or sentinels. An unknown group or start is 9007199254740991 (Number.MAX_SAFE_INTEGER). since is FoldResult.Since (absent: fold not known); exact says the class began live.",
   "home": "/Users/op",
   "input": [
     {
@@ -29,10 +29,11 @@
         },
         "agent_program": "claude",
         "profile": "cldp",
-        "heading": "cldp · claude",
+        "heading": "cldp",
         "directory": "/tmp",
         "workspace": "",
         "tab": "",
+        "pane_position": "",
         "status": "working",
         "attention_class": "working",
         "waiting_since": 1,
@@ -42,7 +43,7 @@
         "sort_key": [
           1,
           9007199254740991,
-          2,
+          1,
           1,
           "mac/default/1/w9:p1"
         ]
@@ -75,10 +76,11 @@
         },
         "agent_program": "claude",
         "profile": "cldp",
-        "heading": "cldp · claude",
+        "heading": "cldp",
         "directory": "~",
         "workspace": "notes",
         "tab": "2",
+        "pane_position": "",
         "status": "idle",
         "attention_class": "finished",
         "waiting_since": 30,
@@ -86,9 +88,9 @@
         "pane_title": "",
         "context_line": "",
         "sort_key": [
-          0,
-          0,
           1,
+          3,
+          2,
           30,
           "mac/default/10/w3:p2"
         ]
@@ -121,10 +123,11 @@
         },
         "agent_program": "claude",
         "profile": "cldw",
-        "heading": "cldw · claude",
+        "heading": "cldw",
         "directory": "~/src/api",
         "workspace": "api",
         "tab": "main",
+        "pane_position": "",
         "status": "blocked",
         "attention_class": "needs_you",
         "waiting_since": 10,
@@ -167,10 +170,11 @@
         },
         "agent_program": "claude",
         "profile": "cldw",
-        "heading": "cldw · claude",
+        "heading": "cldw",
         "directory": "/Users/opx/elsewhere",
         "workspace": "herddash",
         "tab": "aux",
+        "pane_position": "",
         "status": "unknown",
         "attention_class": "unknown",
         "waiting_since": 15,
@@ -180,7 +184,7 @@
         "sort_key": [
           1,
           1,
-          3,
+          4,
           15,
           "mac/default/1/w1:p4"
         ]
@@ -217,6 +221,7 @@
         "directory": "~/src/api",
         "workspace": "api",
         "tab": "aux",
+        "pane_position": "",
         "status": "working",
         "attention_class": "working",
         "waiting_since": 40,
@@ -226,7 +231,7 @@
         "sort_key": [
           1,
           2,
-          2,
+          1,
           40,
           "mac/default/1/w2:p3"
         ]
@@ -261,6 +266,7 @@
         "directory": "~/notes",
         "workspace": "notes",
         "tab": "1",
+        "pane_position": "",
         "status": "blocked",
         "attention_class": "needs_you",
         "waiting_exact": false,
@@ -302,10 +308,11 @@
         },
         "agent_program": "claude",
         "profile": "cldp",
-        "heading": "cldp · claude",
+        "heading": "cldp",
         "directory": "~/src/herddash",
         "workspace": "herddash",
         "tab": "aux",
+        "pane_position": "",
         "status": "idle",
         "attention_class": "working",
         "waiting_since": 60,
@@ -315,7 +322,7 @@
         "sort_key": [
           1,
           1,
-          2,
+          3,
           60,
           "mac/default/1/w1:p5"
         ]
@@ -338,6 +345,7 @@
       "workspace": "herddash",
       "workspace_position": 1,
       "tab": "build",
+      "pane_position": "bottom-right",
       "pane_title": "write-tests",
       "view": {
         "key": {
@@ -348,10 +356,11 @@
         },
         "agent_program": "claude",
         "profile": "unresolved",
-        "heading": "unresolved · claude",
+        "heading": "unresolved",
         "directory": "~/src/herddash",
         "workspace": "herddash",
         "tab": "build",
+        "pane_position": "bottom-right",
         "status": "done",
         "attention_class": "finished",
         "waiting_since": 5,
@@ -359,9 +368,9 @@
         "pane_title": "write-tests",
         "context_line": "write-tests",
         "sort_key": [
-          0,
-          0,
           1,
+          1,
+          2,
           5,
           "mac/default/1/w1:p2"
         ]
@@ -392,10 +401,11 @@
         },
         "agent_program": "claude",
         "profile": "cldw",
-        "heading": "cldw · claude",
+        "heading": "cldw",
         "directory": "~/src/api",
         "workspace": "api",
         "tab": "aux",
+        "pane_position": "",
         "status": "unknown",
         "attention_class": "unknown",
         "waiting_exact": false,
@@ -404,7 +414,7 @@
         "sort_key": [
           1,
           2,
-          3,
+          4,
           9007199254740991,
           "mac/default/1/w2:p4"
         ]
@@ -427,6 +437,7 @@
       "workspace": "herddash",
       "workspace_position": 1,
       "tab": "build",
+      "pane_position": "top-right",
       "pane_title": "Claude Code",
       "view": {
         "key": {
@@ -437,10 +448,11 @@
         },
         "agent_program": "claude",
         "profile": "cldp",
-        "heading": "cldp · claude",
+        "heading": "cldp",
         "directory": "~/src/herddash",
         "workspace": "herddash",
         "tab": "build",
+        "pane_position": "top-right",
         "status": "blocked",
         "attention_class": "needs_you",
         "waiting_since": 20,
@@ -483,10 +495,11 @@
         },
         "agent_program": "claude",
         "profile": "cldp",
-        "heading": "cldp · claude",
+        "heading": "cldp",
         "directory": "~/notes",
         "workspace": "notes",
         "tab": "1",
+        "pane_position": "",
         "status": "working",
         "attention_class": "working",
         "waiting_since": 12,
@@ -496,7 +509,7 @@
         "sort_key": [
           1,
           3,
-          2,
+          1,
           12,
           "mac/default/1/w3:p3"
         ]
@@ -529,10 +542,11 @@
         },
         "agent_program": "claude",
         "profile": "cldw",
-        "heading": "cldw · claude",
+        "heading": "cldw",
         "directory": "/opt/work",
         "workspace": "api",
         "tab": "main",
+        "pane_position": "",
         "status": "done",
         "attention_class": "finished",
         "waiting_since": 30,
@@ -540,9 +554,9 @@
         "pane_title": "  ",
         "context_line": "",
         "sort_key": [
-          0,
-          0,
           1,
+          2,
+          2,
           30,
           "mac/default/2/w2:p2"
         ]
@@ -565,6 +579,7 @@
       "workspace": "herddash",
       "workspace_position": 1,
       "tab": "build",
+      "pane_position": "left",
       "pane_title": "refactor-store",
       "view": {
         "key": {
@@ -575,10 +590,11 @@
         },
         "agent_program": "claude",
         "profile": "cldp",
-        "heading": "cldp · claude",
+        "heading": "cldp",
         "directory": "~/src/herddash",
         "workspace": "herddash",
         "tab": "build",
+        "pane_position": "left",
         "status": "working",
         "attention_class": "working",
         "waiting_since": 50,
@@ -588,7 +604,7 @@
         "sort_key": [
           1,
           1,
-          2,
+          1,
           50,
           "mac/default/1/w1:p3"
         ]
@@ -599,21 +615,21 @@
     "mac/default/1/w2:p1",
     "mac/default/1/w1:p1",
     "mac/default/1/w3:p1",
-    "mac/default/1/w1:p2",
-    "mac/default/2/w2:p2",
-    "mac/default/10/w3:p2",
     "mac/default/1/w1:p3",
+    "mac/default/1/w1:p2",
     "mac/default/1/w1:p5",
     "mac/default/1/w1:p4",
     "mac/default/1/w2:p3",
+    "mac/default/2/w2:p2",
     "mac/default/1/w2:p4",
     "mac/default/1/w3:p3",
+    "mac/default/10/w3:p2",
     "mac/default/1/w9:p1"
   ],
   "headers": [
-    6,
-    9,
-    11,
+    3,
+    7,
+    10,
     12
   ]
 }

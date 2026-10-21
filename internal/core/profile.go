@@ -47,10 +47,16 @@ func ResolveProfile(program AgentProgram, rule *ProfileRule, value string, set b
 
 // Heading is how an Agent is named by its Profile and Agent Program: the name
 // once when they are equal (a program with no rule), the program alone when
-// the Profile is empty, "profile · program" otherwise.
+// the Profile is empty, the Profile alone for Claude Code ("cldw",
+// "unresolved": every Claude Code Profile is a Claude Code configuration, so
+// the program adds nothing; operator decision 2026-10-21), and
+// "profile · program" otherwise.
 func Heading(profile string, program AgentProgram) string {
 	if profile == string(program) || profile == "" {
 		return string(program)
+	}
+	if program == "claude" {
+		return profile
 	}
 	return profile + " · " + string(program)
 }

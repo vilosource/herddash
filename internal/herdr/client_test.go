@@ -116,8 +116,9 @@ func TestSnapshot(t *testing.T) {
 		}
 	}
 	wantContext := []core.PaneContext{
-		{ProjectDir: "/private/tmp/hd13", WorkspaceLabel: "probe", TabLabel: "1", WorkspacePosition: 1},
-		{ProjectDir: "/private/tmp/hd13", WorkspaceLabel: "probe", TabLabel: "1", WorkspacePosition: 1},
+		// w1:t1 is split side by side; w2:t1 has one pane, so no position.
+		{ProjectDir: "/private/tmp/hd13", WorkspaceLabel: "probe", TabLabel: "1", WorkspacePosition: 1, PanePosition: "left"},
+		{ProjectDir: "/private/tmp/hd13", WorkspaceLabel: "probe", TabLabel: "1", WorkspacePosition: 1, PanePosition: "right"},
 		{ProjectDir: "/private/tmp", WorkspaceLabel: "second", TabLabel: "1", WorkspacePosition: 2},
 	}
 	for i, w := range wantContext {
@@ -410,6 +411,37 @@ func TestMapSnapshot(t *testing.T) {
 			{PaneID: "w3:p1", WorkspaceID: "w2", TabID: "w2:t1",
 				Context: core.PaneContext{ProjectDir: "/d", WorkspaceLabel: "second", TabLabel: "aux", WorkspacePosition: 1},
 				Agent:   &core.AgentObservation{AgentProgram: "codex", Status: core.StatusWorking}},
+		},
+	})
+	rect := func(x, y, w, h uint16) gen.PaneLayoutRect { return gen.PaneLayoutRect{X: x, Y: y, Width: w, Height: h} }
+	tests = append(tests, struct {
+		name string
+		in   gen.SessionSnapshot
+		want []core.PaneObservation
+	}{
+		name: "pane positions from the tab's layout",
+		in: gen.SessionSnapshot{
+			Panes: []gen.PaneInfo{
+				{PaneID: "w1:p1", TabID: "w1:t1"}, {PaneID: "w1:p2", TabID: "w1:t1"}, {PaneID: "w1:p3", TabID: "w1:t1"},
+				{PaneID: "w1:p4", TabID: "w1:t2"},
+				// a tab herdr sent no layout for
+				{PaneID: "w1:p5", TabID: "w1:t3"},
+			},
+			Layouts: []gen.PaneLayoutSnapshot{
+				{TabID: "w1:t1", Panes: []gen.PaneLayoutPane{
+					{PaneID: "w1:p1", Rect: rect(0, 0, 60, 40)},
+					{PaneID: "w1:p2", Rect: rect(60, 0, 60, 20)},
+					{PaneID: "w1:p3", Rect: rect(60, 20, 60, 20)},
+				}},
+				{TabID: "w1:t2", Panes: []gen.PaneLayoutPane{{PaneID: "w1:p4", Rect: rect(0, 0, 120, 40)}}},
+			},
+		},
+		want: []core.PaneObservation{
+			{PaneID: "w1:p1", TabID: "w1:t1", Context: core.PaneContext{PanePosition: "left"}},
+			{PaneID: "w1:p2", TabID: "w1:t1", Context: core.PaneContext{PanePosition: "top-right"}},
+			{PaneID: "w1:p3", TabID: "w1:t1", Context: core.PaneContext{PanePosition: "bottom-right"}},
+			{PaneID: "w1:p4", TabID: "w1:t2"},
+			{PaneID: "w1:p5", TabID: "w1:t3"},
 		},
 	})
 	for _, tt := range tests {

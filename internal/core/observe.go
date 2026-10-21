@@ -57,6 +57,10 @@ type PaneContext struct {
 	// PaneTitle is the one-line label the Agent Program set on its pane, which
 	// herdr reports as the pane's terminal title. Log it only at debug level.
 	PaneTitle string
+	// PanePosition is where the pane sits in its tab, as PanePositions names
+	// it ("left", "top-right" and the like); "" when the tab has one pane or
+	// herdr reported no layout for it.
+	PanePosition string
 }
 
 // AgentObservation is the agent herdr reports in a pane.

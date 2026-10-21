@@ -26,7 +26,14 @@ import {
   keyId,
   layout,
   modelViews,
-  neverWorking,
+  isIdle,
+  boxKind,
+  classLabel,
+  documentTitle,
+  groupCounts,
+  inNeedsYou,
+  paneLabel,
+  tabLabel,
   nextReconnectDelay,
   sortViews,
   streamDecision,
@@ -170,21 +177,26 @@ test("box label carries everything, in full", () => {
   const now = 10_000_000;
   const v = {
     attention_class: "needs_you",
-    heading: "unresolved · claude",
+    heading: "unresolved",
     context_line: "a long context line that the Box truncates",
     directory: "~/src/p",
     workspace: "ops",
     tab: "1",
+    pane_position: "top-left",
     waiting_since: now - 120_000,
     waiting_exact: false,
   };
   assert.equal(
     boxLabel(v, now),
-    "ops › 1, a long context line that the Box truncates, ~/src/p, unresolved · claude, Needs you, waiting at least 2m",
+    "ops › 1, top-left pane, a long context line that the Box truncates, ~/src/p, unresolved, Needs you, waiting at least 2m",
   );
   assert.equal(
-    boxLabel({ ...v, waiting_since: undefined, context_line: "", attention_class: "unknown" }, now),
-    "ops › 1, ~/src/p, unresolved · claude, Unknown, Waiting Time unknown",
+    boxLabel({ ...v, pane_position: "", waiting_since: undefined, context_line: "", attention_class: "unknown" }, now),
+    "ops › 1, ~/src/p, unresolved, Unknown, Waiting Time unknown",
+  );
+  assert.equal(
+    boxLabel({ ...v, attention_class: "working", status: "idle", pane_position: "" }, now),
+    "ops › 1, a long context line that the Box truncates, ~/src/p, unresolved, Idle, waiting at least 2m",
   );
 });
 
@@ -204,11 +216,71 @@ test("header label: the workspace, or (no workspace)", () => {
   assert.equal(headerLabel({}), "(no workspace)");
 });
 
-test("never working: idle with class working only", () => {
-  assert.equal(neverWorking({ status: "idle", attention_class: "working" }), true);
-  assert.equal(neverWorking({ status: "working", attention_class: "working" }), false);
-  assert.equal(neverWorking({ status: "idle", attention_class: "finished" }), false);
-  assert.equal(neverWorking({ status: "unknown", attention_class: "unknown" }), false);
+test("idle: class working with any Status but working", () => {
+  assert.equal(isIdle({ status: "idle", attention_class: "working" }), true);
+  assert.equal(isIdle({ status: "unknown", attention_class: "working" }), true);
+  assert.equal(isIdle({ status: "working", attention_class: "working" }), false);
+  assert.equal(isIdle({ status: "idle", attention_class: "finished" }), false);
+  assert.equal(isIdle({ status: "unknown", attention_class: "unknown" }), false);
+});
+
+test("idle label: class working, status idle reads Idle and draws as idle", () => {
+  const v = { status: "idle", attention_class: "working" };
+  assert.equal(classLabel(v), "Idle");
+  assert.equal(boxKind(v), "idle");
+  assert.equal(classLabel({ status: "working", attention_class: "working" }), "Working");
+  assert.equal(boxKind({ status: "working", attention_class: "working" }), "working");
+  assert.equal(classLabel({ status: "done", attention_class: "finished" }), "Finished");
+  assert.equal(boxKind({ status: "blocked", attention_class: "needs_you" }), "needs_you");
+});
+
+test("tab label: the tab, else the workspace", () => {
+  assert.equal(tabLabel({ workspace: "ops", tab: "2: api" }), "2: api");
+  assert.equal(tabLabel({ workspace: "ops", tab: "" }), "ops");
+  assert.equal(tabLabel({ workspace: "", tab: "" }), "");
+});
+
+test("pane label: the position, or nothing for a one-pane tab", () => {
+  assert.equal(paneLabel({ pane_position: "top-right" }), "top-right pane");
+  assert.equal(paneLabel({ pane_position: "" }), "");
+  assert.equal(paneLabel({}), "");
+});
+
+test("needs you zone is the Daemon's zone 0", () => {
+  for (const { view: v } of fixture.input) assert.equal(inNeedsYou(v), v.attention_class === "needs_you", keyString(v));
+});
+
+test("group counts: working, finished and idle, zeros left out", () => {
+  const w = { status: "working", attention_class: "working" };
+  const f = { status: "done", attention_class: "finished" };
+  const i = { status: "idle", attention_class: "working" };
+  const u = { status: "unknown", attention_class: "unknown" };
+  assert.equal(groupCounts([w, f, i, i, u]), "1 working · 1 finished · 2 idle");
+  assert.equal(groupCounts([i, f]), "1 finished · 1 idle");
+  assert.equal(groupCounts([u]), "");
+});
+
+test("title: the Needs you count, or plain herddash", () => {
+  const n = { attention_class: "needs_you" };
+  const w = { attention_class: "working" };
+  assert.equal(documentTitle([n, w, n]), "(2) herddash · Needs you");
+  assert.equal(documentTitle([w]), "herddash");
+  assert.equal(documentTitle([]), "herddash");
+});
+
+test("golden fixture: needs you alone on top, then each group working, finished, idle, unknown", () => {
+  const { top, groups } = layout(fixture.input.map((i) => i.view).reverse());
+  assert.ok(top.length > 0);
+  for (const v of top) assert.equal(v.attention_class, "needs_you");
+  const rank = { working: 1, finished: 2, idle: 3, unknown: 4 };
+  for (const g of groups) {
+    const ranks = g.views.map((v) => rank[boxKind(v)]);
+    assert.deepEqual(ranks, ranks.slice().sort((a, b) => a - b), g.label);
+    assert.ok(g.views.every((v) => v.attention_class !== "needs_you"));
+  }
+  const one = groups.find((g) => g.label === "herddash");
+  assert.deepEqual(one.views.map(boxKind), ["working", "finished", "idle", "unknown"]);
+  assert.equal(one.counts, "1 working · 1 finished · 1 idle");
 });
 
 test("layout: golden fixture's top zone and groups", () => {
@@ -237,7 +309,7 @@ test("layout: no top zone, no lower zone, nothing", () => {
   assert.deepEqual(lower.groups.map((g) => [g.label, g.views]), [["one", [w1]], ["(no workspace)", [w2]]]);
 
   const n = view([0, 0, 0, 1], "h", "s", 1, "n");
-  const f = view([0, 0, 1, 1], "h", "s", 1, "f");
+  const f = view([0, 0, 0, 2], "h", "s", 1, "f");
   const upper = layout([f, n]);
   assert.deepEqual(upper.top, [n, f]);
   assert.deepEqual(upper.groups, []);
@@ -320,7 +392,7 @@ test("state replaces the AgentViews and the ConnectionTruth", () => {
 test("agent adds an unseen Agent in its sort position", () => {
   const model = fixtureModel();
   const base = fixtureView("w2:p3");
-  const v = changed(base, { key: { ...base.key, pane_id: "w2:p9" } }, [1, 2, 2, 45]);
+  const v = changed(base, { key: { ...base.key, pane_id: "w2:p9" } }, [1, 2, 1, 45]);
   v.sort_key[4] = "mac/default/1/w2:p9";
   const { model: next, warning } = applyEvent(model, "agent", JSON.stringify(v));
   assert.equal(warning, undefined);
@@ -350,13 +422,13 @@ test("transition into blocked lands in Needs you at its longest-waiting position
 
 test("transition into working moves the Box out of the top zone into its workspace group", () => {
   const model = fixtureModel();
-  const v = changed(fixtureView("w1:p1"), { status: "working", attention_class: "working", waiting_since: 200, waiting_exact: true }, [1, 1, 2, 200]);
+  const v = changed(fixtureView("w1:p1"), { status: "working", attention_class: "working", waiting_since: 200, waiting_exact: true }, [1, 1, 1, 200]);
   const { model: next } = applyEvent(model, "transition", transitionData(v, "blocked"));
   const { top, groups } = layout(modelViews(next));
   assert.ok(!top.some((x) => keyString(x) === "mac/default/1/w1:p1"));
   const g = groups.find((g) => g.views.some((x) => keyString(x) === "mac/default/1/w1:p1"));
   assert.equal(g.label, "herddash");
-  assert.deepEqual(g.views.map(keyString), ["mac/default/1/w1:p3", "mac/default/1/w1:p5", "mac/default/1/w1:p1", "mac/default/1/w1:p4"]);
+  assert.deepEqual(g.views.map(keyString), ["mac/default/1/w1:p3", "mac/default/1/w1:p1", "mac/default/1/w1:p2", "mac/default/1/w1:p5", "mac/default/1/w1:p4"]);
 });
 
 test("applyEvent keeps the sort key and waiting_since a done-to-idle transition carries (core owns the guarantee)", () => {

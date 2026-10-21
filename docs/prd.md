@@ -188,6 +188,15 @@ Realizes UJ-2, UJ-3.
   text on hover, never wrapped, so no title can change a Box's height or the grid.
 - The Context Line's space is reserved even when empty, so Boxes stay uniform.
 
+*Amended 2026-10-21, operator decision, approved from a mock of the live Board:* the Box leads
+with the tab, large and bold, plus a pane-position badge (`left`, `top-right` and the like) when
+the tab holds more than one pane, so two Agents in one tab can be told apart; the badge is part of
+the Box's location with the workspace and tab, not a new element. The second line is the
+workspace in the Needs you zone and the directory in a workspace group, whose heading already
+names the workspace. The heading of a Claude Code Agent is its Profile alone (`cldw`,
+`unresolved`). An Agent of class Working whose Status is not `working` reads `IDLE`. See
+[the Board design](design/board-design.md).
+
 #### FR-2a: Context Line derivation
 
 The Daemon derives each Agent's Context Line through a per-Agent-Program rule with a global
@@ -218,6 +227,16 @@ Realizes UJ-1.
 - A `done` Agent becoming `idle` keeps its place and its Waiting Time.
 - An `idle` Agent never seen `working` sits with the Working Boxes, with no Waiting Time emphasis.
 - Order within a class changes as Waiting Times grow, without reload.
+
+*Amended 2026-10-21, operator decision, approved from a mock of the live Board:* the top zone
+holds Needs you alone, longest wait first, flat across workspaces. Every other Agent sits in its
+workspace's group, in herdr's workspace order, ranked Working (Status `working`), Finished, Idle
+(class Working with any other Status), Unknown, each by Waiting Time descending. The operator's
+first question is which workspace, tab and pane to go to, and a Finished Agent belongs beside
+its workspace. Each group's heading carries its counts of working, finished and idle Agents, and
+the browser tab's title carries the Needs you count, `(2) herddash · Needs you`. The consequences
+above hold with "top zone" read as the Needs you zone: a `done` Agent becoming `idle` keeps its
+place, and an `idle` Agent never seen `working` is an Idle Box in its group.
 
 #### FR-4: Live without reload
 
@@ -516,7 +535,10 @@ browser never reaches the herdr socket.
 - **SM-C1: Elements on the Board.** The Board carries only Boxes, workspace labels, and the
   connection and version strips. Any proposal to add a control, an excerpt, or a second data type
   per Box is a request for a different product and needs an ADR superseding ADR-0003, not a story.
-  Counterbalances SM-1.
+  Counterbalances SM-1. *Amended 2026-10-21 (operator decision, Board layout v4):* a workspace
+  label is the group heading, which carries that group's working, finished and idle counts, and
+  the Needs you zone has a plain heading. Both are labels for the zones, not a control, an excerpt
+  or a second data type per Box, so they need no ADR.
 - **SM-C2: herdr load.** The Daemon issues no on-demand herdr reads to serve a page view; snapshot
   frequency is bounded by the reconcile timer. Counterbalances SM-2.
 

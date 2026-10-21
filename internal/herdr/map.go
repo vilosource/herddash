@@ -20,8 +20,10 @@ import (
 // rather than dropped.
 //
 // Each pane's context comes from its pane record, falling back to its agent
-// record field by field, plus the labels of its workspace and tab and the
-// workspace's position in the snapshot's workspace list, which is herdr's order.
+// record field by field, plus the labels of its workspace and tab, the
+// workspace's position in the snapshot's workspace list, which is herdr's order,
+// and the pane's position in its tab, from the tab's layout rectangles
+// (core.PanePositions).
 func mapSnapshot(s gen.SessionSnapshot) core.Snapshot {
 	type workspace struct {
 		label    string
@@ -35,7 +37,16 @@ func mapSnapshot(s gen.SessionSnapshot) core.Snapshot {
 	for _, t := range s.Tabs {
 		tabs[t.TabID] = t.Label
 	}
-	paneContext := func(workspaceID, tabID, projectDir, paneTitle string) core.PaneContext {
+	positions := make(map[string]map[string]string, len(s.Layouts))
+	for _, l := range s.Layouts {
+		rects := make([]core.PaneRect, 0, len(l.Panes))
+		for _, p := range l.Panes {
+			rects = append(rects, core.PaneRect{PaneID: p.PaneID, X: int(p.Rect.X), Y: int(p.Rect.Y),
+				Width: int(p.Rect.Width), Height: int(p.Rect.Height)})
+		}
+		positions[l.TabID] = core.PanePositions(rects)
+	}
+	paneContext := func(paneID, workspaceID, tabID, projectDir, paneTitle string) core.PaneContext {
 		w := workspaces[workspaceID]
 		return core.PaneContext{
 			ProjectDir:        projectDir,
@@ -43,6 +54,7 @@ func mapSnapshot(s gen.SessionSnapshot) core.Snapshot {
 			TabLabel:          tabs[tabID],
 			WorkspacePosition: w.position,
 			PaneTitle:         paneTitle,
+			PanePosition:      positions[tabID][paneID],
 		}
 	}
 	agentRecords := make(map[string]gen.AgentInfo, len(s.Agents))
@@ -69,7 +81,7 @@ func mapSnapshot(s gen.SessionSnapshot) core.Snapshot {
 			TerminalID:  p.TerminalID,
 			WorkspaceID: p.WorkspaceID,
 			TabID:       p.TabID,
-			Context: paneContext(p.WorkspaceID, p.TabID,
+			Context: paneContext(p.PaneID, p.WorkspaceID, p.TabID,
 				first(p.ForegroundCWD, a.ForegroundCWD, p.CWD, a.CWD),
 				first(p.TerminalTitleStripped, a.TerminalTitleStripped, p.TerminalTitle, a.TerminalTitle)),
 			Agent: agent,
@@ -85,7 +97,7 @@ func mapSnapshot(s gen.SessionSnapshot) core.Snapshot {
 			TerminalID:  a.TerminalID,
 			WorkspaceID: a.WorkspaceID,
 			TabID:       a.TabID,
-			Context: paneContext(a.WorkspaceID, a.TabID,
+			Context: paneContext(a.PaneID, a.WorkspaceID, a.TabID,
 				first(a.ForegroundCWD, a.CWD), first(a.TerminalTitleStripped, a.TerminalTitle)),
 			Agent: agents[a.PaneID],
 		})
@@ -170,7 +182,7 @@ func decodeLifecycle(line []byte) (core.LifecycleEvent, error) {
 		}
 		return lifecycle(e)
 	case gen.EventKindWorkspaceRenamed, gen.EventKindWorkspaceMoved, gen.EventKindWorkspaceReordered,
-		gen.EventKindTabRenamed, gen.EventKindTabMoved, gen.EventKindPaneUpdated:
+		gen.EventKindTabRenamed, gen.EventKindTabMoved, gen.EventKindPaneUpdated, gen.EventKindLayoutUpdated:
 		// Only a signal to read again: the snapshot is the truth for context, so
 		// the payload is not decoded.
 		return core.LifecycleEvent{Kind: core.LifecycleContextChanged}, nil

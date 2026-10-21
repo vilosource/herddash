@@ -103,13 +103,17 @@ type AgentViewInput struct {
 // describes one Agent (AD-1). It is built only by NewAgentView, so the
 // description is computed once, in core.
 type AgentView struct {
-	Key          AgentKey       `json:"key"`
-	AgentProgram AgentProgram   `json:"agent_program"`
-	Profile      string         `json:"profile"`
-	Heading      string         `json:"heading"`
-	Directory    string         `json:"directory"`
-	Workspace    string         `json:"workspace"`
-	Tab          string         `json:"tab"`
+	Key          AgentKey     `json:"key"`
+	AgentProgram AgentProgram `json:"agent_program"`
+	Profile      string       `json:"profile"`
+	Heading      string       `json:"heading"`
+	Directory    string       `json:"directory"`
+	Workspace    string       `json:"workspace"`
+	Tab          string       `json:"tab"`
+	// PanePosition is where the pane sits in its tab ("left", "top-right");
+	// "" when the tab has one pane. It is part of the Box's location, with
+	// the workspace and tab.
+	PanePosition string         `json:"pane_position"`
 	Status       Status         `json:"status"`
 	Class        AttentionClass `json:"attention_class"`
 	// WaitingSince is when the current class began (UTC Unix ms); 0 when not
@@ -144,6 +148,7 @@ func NewAgentView(in AgentViewInput) AgentView {
 		Directory:    ShortenDir(in.Context.ProjectDir, in.Home),
 		Workspace:    in.Context.WorkspaceLabel,
 		Tab:          in.Context.TabLabel,
+		PanePosition: in.Context.PanePosition,
 		Status:       in.Status,
 		Class:        class,
 		WaitingSince: since,
@@ -151,19 +156,21 @@ func NewAgentView(in AgentViewInput) AgentView {
 		PaneTitle:    in.Context.PaneTitle,
 		ContextLine:  ContextLine(in.AgentProgram, in.Context.PaneTitle),
 	}
-	v.SortKey = newSortKey(class, in.Context.WorkspacePosition, since, in.Key)
+	v.SortKey = newSortKey(class, in.Status, in.Context.WorkspacePosition, since, in.Key)
 	return v
 }
 
 // SortKey is where an Agent sorts on the Board (FR-3):
 // [zone, group, class_rank, start, agent_key], compared element by element.
 //
-//   - Zone 0 holds needs_you and finished, flat across workspaces; zone 1
-//     holds working and unknown, grouped by workspace.
+//   - Zone 0 holds only needs_you, flat across workspaces; zone 1 holds every
+//     other class, grouped by workspace (operator decision 2026-10-21).
 //   - Group is 0 in zone 0. In zone 1 it is the workspace's position in
 //     herdr's order, with an unknown position (0) sorting last as
 //     SortUnknown.
-//   - ClassRank is needs_you 0, finished 1, working 2, unknown 3.
+//   - ClassRank is needs_you 0; then, inside a workspace group, Working (class
+//     working with Status working) 1, finished 2, Idle (class working with any
+//     other Status) 3, unknown 4.
 //   - Start is WaitingSince, so the longest wait comes first; an unknown one
 //     sorts after every known one, as SortUnknown.
 //   - Key breaks ties: host, server, epoch (numerically), then pane id.
@@ -182,19 +189,22 @@ type SortKey struct {
 // JavaScript's Number.MAX_SAFE_INTEGER, so the Board compares it exactly.
 const SortUnknown int64 = 1<<53 - 1
 
-func newSortKey(class AttentionClass, workspacePosition int, since int64, key AgentKey) SortKey {
+func newSortKey(class AttentionClass, status Status, workspacePosition int, since int64, key AgentKey) SortKey {
 	k := SortKey{Key: key, Start: since}
 	switch class {
 	case ClassNeedsYou:
 		k.ClassRank = 0
-	case ClassFinished:
-		k.ClassRank = 1
 	case ClassWorking:
+		k.ClassRank = 1
+		if status != StatusWorking {
+			k.ClassRank = 3
+		}
+	case ClassFinished:
 		k.ClassRank = 2
 	default:
-		k.ClassRank = 3
+		k.ClassRank = 4
 	}
-	if k.ClassRank >= 2 {
+	if k.ClassRank > 0 {
 		k.Zone = 1
 		k.Group = int64(workspacePosition)
 		if k.Group <= 0 {

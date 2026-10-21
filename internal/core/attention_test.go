@@ -60,8 +60,10 @@ func TestFold(t *testing.T) {
 			FoldResult{Known: true, Status: StatusIdle, Class: ClassFinished, Since: 5, SinceProvenance: L, EverWorking: true}},
 		{"never working", []step{{StatusIdle, 3, S}},
 			FoldResult{Known: true, Status: StatusIdle, Class: ClassWorking, Since: 3, SinceProvenance: S}},
-		{"never working, then working", []step{{StatusIdle, 3, S}, {StatusWorking, 6, L}},
-			FoldResult{Known: true, Status: StatusWorking, Class: ClassWorking, Since: 3, SinceProvenance: S, EverWorking: true}},
+		{"never working, then working: Idle ends, Working starts", []step{{StatusIdle, 3, S}, {StatusWorking, 6, L}},
+			FoldResult{Known: true, Status: StatusWorking, Class: ClassWorking, Since: 6, SinceProvenance: L, EverWorking: true}},
+		{"working stays working", []step{{StatusIdle, 3, S}, {StatusWorking, 6, L}, {StatusWorking, 8, S}},
+			FoldResult{Known: true, Status: StatusWorking, Class: ClassWorking, Since: 6, SinceProvenance: L, EverWorking: true}},
 		{"idle after working", []step{{StatusWorking, 1, L}, {StatusIdle, 4, L}},
 			FoldResult{Known: true, Status: StatusIdle, Class: ClassFinished, Since: 4, SinceProvenance: L, EverWorking: true}},
 		{"lower bound", []step{{StatusWorking, 1, L}, {StatusBlocked, 7, S}},
@@ -124,22 +126,27 @@ func TestAddEqualsFold(t *testing.T) {
 
 // referenceFold computes a fold from its definition, independently of Add:
 // each Transition's Class from the ever-working prefix, and Since from the
-// earliest Transition of the trailing run in the final Class.
+// earliest Transition of the trailing run in the final Class, where Idle (class
+// working before any working Status) and Working count as different runs.
 func referenceFold(ts []Transition) FoldResult {
 	if len(ts) == 0 {
 		return FoldResult{Class: ClassUnknown}
 	}
-	classes := make([]AttentionClass, len(ts))
+	type run struct {
+		class AttentionClass
+		ever  bool
+	}
+	runs := make([]run, len(ts))
 	ever := false
 	for i, x := range ts {
 		ever = ever || x.New() == StatusWorking
-		classes[i] = ClassOf(x.New(), ever)
+		runs[i] = run{ClassOf(x.New(), ever), ever}
 	}
 	last := len(ts) - 1
 	start := last
-	for start > 0 && classes[start-1] == classes[last] {
+	for start > 0 && runs[start-1] == runs[last] {
 		start--
 	}
-	return FoldResult{Known: true, Status: ts[last].New(), Class: classes[last], Since: ts[start].ObservedAt(),
+	return FoldResult{Known: true, Status: ts[last].New(), Class: runs[last].class, Since: ts[start].ObservedAt(),
 		SinceProvenance: ts[start].Provenance(), EverWorking: ever}
 }

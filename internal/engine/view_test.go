@@ -556,7 +556,7 @@ func TestViewProfileChange(t *testing.T) {
 			c = ch
 		}
 	}
-	if c.Agent.Profile != "cldp" || c.Agent.Heading != "cldp · claude" {
+	if c.Agent.Profile != "cldp" || c.Agent.Heading != "cldp" {
 		t.Fatalf("agent change %+v, want Profile cldp", c.Agent)
 	}
 	if v := h.engine.View(); v.Agents[0] != c.Agent {
@@ -582,7 +582,7 @@ func TestViewSorted(t *testing.T) {
 		return len(ps) > 0 && len(ps[len(ps)-1].View.Agents) == 5
 	})
 	v := ps[len(ps)-1].View
-	if got, want := keysOf(v.Agents), []string{"w2:p2", "w1:p3", "w1:p1", "w1:p2", "w2:p1"}; !slices.Equal(got, want) {
+	if got, want := keysOf(v.Agents), []string{"w2:p2", "w1:p1", "w1:p3", "w1:p2", "w2:p1"}; !slices.Equal(got, want) {
 		t.Errorf("order %v, want %v", got, want)
 	}
 	sorted := slices.Clone(v.Agents)
@@ -590,7 +590,7 @@ func TestViewSorted(t *testing.T) {
 	if !reflect.DeepEqual(sorted, v.Agents) {
 		t.Error("not in SortViews order")
 	}
-	if !slices.Equal(v.Headers, core.WorkspaceHeaders(v.Agents)) || !slices.Equal(v.Headers, []int{2, 4}) {
-		t.Errorf("headers %v, want [2 4]", v.Headers)
+	if !slices.Equal(v.Headers, core.WorkspaceHeaders(v.Agents)) || !slices.Equal(v.Headers, []int{1, 4}) {
+		t.Errorf("headers %v, want [1 4]", v.Headers)
 	}
 }

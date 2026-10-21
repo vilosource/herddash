@@ -47,9 +47,10 @@ func TestHeading(t *testing.T) {
 		want    string
 	}{
 		{"codex", "codex", "codex"},
-		{"cldw", "claude", "cldw · claude"},
+		{"cldw", "claude", "cldw"},
 		{"claude", "claude", "claude"},
-		{ProfileUnresolved, "claude", "unresolved · claude"},
+		{ProfileUnresolved, "claude", "unresolved"},
+		{"work", "codex", "work · codex"},
 		{"", "claude", "claude"},
 	}
 	for _, c := range cases {

@@ -62,7 +62,9 @@ func TestViewHeading(t *testing.T) {
 		want    string
 	}{
 		{"codex", "codex", "codex"},
-		{"cldw", "claude", "cldw · claude"},
+		{"cldw", "claude", "cldw"},
+		{ProfileUnresolved, "claude", "unresolved"},
+		{"work", "codex", "work · codex"},
 	}
 	for _, tt := range tests {
 		v := NewAgentView(AgentViewInput{Key: key("p"), AgentProgram: tt.program, Profile: tt.profile})
@@ -89,6 +91,19 @@ func view(pane string, status Status, since int64, pos int) AgentView {
 	})
 }
 
+// neverWorkingView builds the view of an idle Agent never seen working: class
+// working with Status idle, which the Board labels Idle.
+func neverWorkingView(pane string, since int64, pos int) AgentView {
+	f := FoldResult{Class: ClassUnknown}
+	if since != 0 {
+		f = FoldResult{Known: true, Status: StatusIdle, Class: ClassWorking, Since: since, SinceProvenance: ProvenanceLive}
+	}
+	return NewAgentView(AgentViewInput{
+		Key: key(pane), AgentProgram: "claude", Profile: "cldp", Status: StatusIdle, Fold: f,
+		Context: PaneContext{WorkspacePosition: pos},
+	})
+}
+
 func panes(vs []AgentView) []string {
 	out := make([]string, len(vs))
 	for i, v := range vs {
@@ -103,11 +118,24 @@ func TestBoardOrder(t *testing.T) {
 		views []AgentView
 		want  []string
 	}{
-		{"top zone flat", []AgentView{
+		{"needs you alone on top, flat", []AgentView{
 			view("fin", StatusDone, 5, 1),
 			view("ws1", StatusBlocked, 20, 1),
 			view("ws2", StatusBlocked, 10, 2),
 		}, []string{"ws2", "ws1", "fin"}},
+		{"one workspace: needs you, then working, finished, idle", []AgentView{
+			neverWorkingView("idle", 1, 1),
+			view("fin-idle", StatusIdle, 2, 1),
+			view("unknown", StatusUnknown, 3, 1),
+			view("working", StatusWorking, 4, 1),
+			view("needs", StatusBlocked, 5, 1),
+			view("fin-done", StatusDone, 6, 1),
+			neverWorkingView("idle-unknown-start", 0, 1),
+		}, []string{"needs", "working", "fin-idle", "fin-done", "idle", "idle-unknown-start", "unknown"}},
+		{"finished grouped by workspace", []AgentView{
+			view("ws2-fin", StatusDone, 1, 2),
+			view("ws1-fin", StatusDone, 9, 1),
+		}, []string{"ws1-fin", "ws2-fin"}},
 		{"lower grouped", []AgentView{
 			view("ws2-working", StatusWorking, 1, 2),
 			view("ws1-unknown", StatusUnknown, 2, 1),
@@ -188,14 +216,14 @@ func TestNewAgentView(t *testing.T) {
 		Key: k, AgentProgram: "claude", Profile: "cldw", Status: StatusIdle,
 		Fold: FoldResult{Known: true, Status: StatusIdle, Class: ClassFinished, Since: 500, SinceProvenance: ProvenanceSnapshot, EverWorking: true},
 		Context: PaneContext{ProjectDir: "/Users/x/proj", WorkspaceLabel: "ws", TabLabel: "t",
-			WorkspacePosition: 2, PaneTitle: "fix-auth-bug"},
+			WorkspacePosition: 2, PaneTitle: "fix-auth-bug", PanePosition: "top-left"},
 		Home: "/Users/x",
 	})
 	want := AgentView{
-		Key: k, AgentProgram: "claude", Profile: "cldw", Heading: "cldw · claude",
-		Directory: "~/proj", Workspace: "ws", Tab: "t", Status: StatusIdle, Class: ClassFinished,
+		Key: k, AgentProgram: "claude", Profile: "cldw", Heading: "cldw",
+		Directory: "~/proj", Workspace: "ws", Tab: "t", PanePosition: "top-left", Status: StatusIdle, Class: ClassFinished,
 		WaitingSince: 500, WaitingExact: false, PaneTitle: "fix-auth-bug", ContextLine: "fix-auth-bug",
-		SortKey: SortKey{Zone: 0, Group: 0, ClassRank: 1, Start: 500, Key: k},
+		SortKey: SortKey{Zone: 1, Group: 2, ClassRank: 2, Start: 500, Key: k},
 	}
 	if v != want {
 		t.Errorf("view =\n%+v\nwant\n%+v", v, want)
@@ -241,7 +269,8 @@ func TestAgentViewJSON(t *testing.T) {
 		`"key":{"host":"mac","server":"default","epoch":2,"pane_id":"w1:p1"}`,
 		`"attention_class":"working"`,
 		`"waiting_exact":false`,
-		`"sort_key":[1,9007199254740991,2,9007199254740991,"mac/default/2/w1:p1"]`,
+		`"sort_key":[1,9007199254740991,1,9007199254740991,"mac/default/2/w1:p1"]`,
+		`"pane_position":""`,
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("JSON %s lacks %s", s, want)
@@ -259,7 +288,7 @@ func TestAgentViewJSON(t *testing.T) {
 		t.Errorf("sort_key = %#v, want an array of five", m["sort_key"])
 	}
 	for _, f := range []string{"key", "agent_program", "profile", "heading", "directory", "workspace", "tab",
-		"status", "attention_class", "waiting_exact", "pane_title", "context_line", "sort_key"} {
+		"pane_position", "status", "attention_class", "waiting_exact", "pane_title", "context_line", "sort_key"} {
 		if _, ok := m[f]; !ok {
 			t.Errorf("JSON lacks %q", f)
 		}
@@ -288,6 +317,7 @@ type boardFixture struct {
 		Workspace         string       `json:"workspace"`
 		WorkspacePosition int          `json:"workspace_position"`
 		Tab               string       `json:"tab"`
+		PanePosition      string       `json:"pane_position"`
 		PaneTitle         string       `json:"pane_title"`
 		// View is the expected AgentView, as NewAgentView serialises it.
 		View json.RawMessage `json:"view"`
@@ -320,7 +350,7 @@ func loadBoard(t *testing.T) ([]AgentView, boardFixture) {
 		views = append(views, NewAgentView(AgentViewInput{
 			Key: in.Key, AgentProgram: in.AgentProgram, Profile: in.Profile, Status: in.Status, Fold: f,
 			Context: PaneContext{ProjectDir: in.Directory, WorkspaceLabel: in.Workspace, TabLabel: in.Tab,
-				WorkspacePosition: in.WorkspacePosition, PaneTitle: in.PaneTitle},
+				WorkspacePosition: in.WorkspacePosition, PaneTitle: in.PaneTitle, PanePosition: in.PanePosition},
 			Home: fx.Home,
 		}))
 	}
@@ -381,10 +411,15 @@ func TestWorkspaceHeaders(t *testing.T) {
 	if h := WorkspaceHeaders(nil); len(h) != 0 {
 		t.Errorf("headers of nothing = %v", h)
 	}
-	vs := []AgentView{view("a", StatusBlocked, 1, 1), view("b", StatusDone, 1, 2)}
+	vs := []AgentView{view("a", StatusBlocked, 1, 1), view("b", StatusBlocked, 1, 2)}
 	SortViews(vs)
 	if h := WorkspaceHeaders(vs); len(h) != 0 {
 		t.Errorf("top zone only: headers = %v", h)
+	}
+	vs = []AgentView{view("a", StatusBlocked, 1, 1), view("b", StatusDone, 1, 2), view("c", StatusWorking, 1, 1)}
+	SortViews(vs)
+	if h := WorkspaceHeaders(vs); !reflect.DeepEqual(h, []int{1, 2}) {
+		t.Errorf("finished in its group: headers = %v, want [1 2]", h)
 	}
 	vs = []AgentView{view("a", StatusWorking, 1, 1), view("b", StatusWorking, 2, 1)}
 	SortViews(vs)
@@ -415,5 +450,47 @@ func TestConnectionTruthJSON(t *testing.T) {
 		if string(b) != c.want {
 			t.Errorf("%s: got %s, want %s", c.name, b, c.want)
 		}
+	}
+}
+
+func TestPanePositions(t *testing.T) {
+	r := func(id string, x, y, w, h int) PaneRect { return PaneRect{PaneID: id, X: x, Y: y, Width: w, Height: h} }
+	tests := []struct {
+		name  string
+		rects []PaneRect
+		want  map[string]string
+	}{
+		{"one pane", []PaneRect{r("a", 0, 0, 80, 24)}, map[string]string{}},
+		{"no panes", nil, map[string]string{}},
+		{"two columns", []PaneRect{r("a", 0, 0, 40, 24), r("b", 41, 0, 39, 24)},
+			map[string]string{"a": "left", "b": "right"}},
+		{"three panes: one left, two stacked right",
+			[]PaneRect{r("a", 0, 0, 40, 24), r("b", 41, 0, 39, 12), r("c", 41, 13, 39, 11)},
+			map[string]string{"a": "left", "b": "top-right", "c": "bottom-right"}},
+		{"two rows", []PaneRect{r("a", 0, 0, 80, 12), r("b", 0, 13, 80, 11)},
+			map[string]string{"a": "top", "b": "bottom"}},
+		{"three columns", []PaneRect{r("a", 0, 0, 20, 24), r("b", 21, 0, 20, 24), r("c", 42, 0, 20, 24)},
+			map[string]string{"a": "left", "b": "middle", "c": "right"}},
+		{"quadrants", []PaneRect{r("a", 0, 0, 40, 12), r("b", 41, 0, 39, 12), r("c", 0, 13, 40, 11), r("d", 41, 13, 39, 11)},
+			map[string]string{"a": "top-left", "b": "top-right", "c": "bottom-left", "d": "bottom-right"}},
+		{"four columns: the inner two numbered", []PaneRect{r("a", 0, 0, 19, 24), r("b", 20, 0, 19, 24), r("c", 40, 0, 19, 24), r("d", 60, 0, 20, 24)},
+			map[string]string{"a": "left", "b": "middle 1", "c": "middle 2", "d": "right"}},
+		{"three rows", []PaneRect{r("a", 0, 0, 80, 7), r("b", 0, 8, 80, 7), r("c", 0, 16, 80, 8)},
+			map[string]string{"a": "top", "b": "middle", "c": "bottom"}},
+		{"one wide pane over a column of three and one tall pane",
+			[]PaneRect{r("t", 0, 0, 120, 10), r("l1", 0, 10, 60, 10), r("l2", 0, 20, 60, 10), r("l3", 0, 30, 60, 10), r("r", 60, 10, 60, 30)},
+			map[string]string{"t": "top", "l1": "top-left", "l2": "middle-left", "l3": "bottom-left", "r": "bottom-right"}},
+		{"one wide pane over two", []PaneRect{r("a", 0, 0, 80, 12), r("b", 0, 13, 40, 11), r("c", 41, 13, 39, 11)},
+			map[string]string{"a": "top", "b": "bottom-left", "c": "bottom-right"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := PanePositions(tt.rects)
+			for _, rect := range tt.rects {
+				if got[rect.PaneID] != tt.want[rect.PaneID] {
+					t.Errorf("%s = %q, want %q", rect.PaneID, got[rect.PaneID], tt.want[rect.PaneID])
+				}
+			}
+		})
 	}
 }
