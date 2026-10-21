@@ -70,7 +70,7 @@ an ADR.
 - **View, not record.** `AgentView` gains `background_tasks` (a count). The Attention Class, the
   Fold, Waiting Time and the stored record are unchanged: no stored schema change.
 - **Board.** Working with open tasks reads `WORKING · 2 bg` (green); `done`/`idle` with open tasks
-  reads **BACKGROUND** (green, dashed edge, ranked after Working), as built; Finished only when
+  reads **BACKGROUND** (green, dashed edge, ranked just before Working), as built; Finished only when
   none are open. Group counts as built.
 - **Failure is quiet and safe.** A missing or unreadable session file or transcript, a file
   larger than the bound, or a format that no longer yields markers falls back to the process

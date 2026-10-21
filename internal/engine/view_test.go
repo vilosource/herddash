@@ -207,13 +207,15 @@ func TestViewFirstStart(t *testing.T) {
 		t.Errorf("connection %+v, want connected at the snapshot", c)
 	}
 	v := ps[1].View
-	if got := keysOf(v.Agents); !slices.Equal(got, []string{"w1:p1", "w1:p2"}) {
+	// Idle w1:p2 sorts before Working w1:p1 (operator decision 2026-10-21);
+	// the changes come in key order.
+	if got := keysOf(v.Agents); !slices.Equal(got, []string{"w1:p2", "w1:p1"}) {
 		t.Errorf("agents %v", got)
 	}
-	if v.Agents[0].Directory != "~/w1:p1" || v.Agents[0].Heading != "claude" || v.Agents[0].Class != core.ClassWorking {
-		t.Errorf("agent view %+v", v.Agents[0])
+	if v.Agents[1].Directory != "~/w1:p1" || v.Agents[1].Heading != "claude" || v.Agents[1].Class != core.ClassWorking {
+		t.Errorf("agent view %+v", v.Agents[1])
 	}
-	if ps[1].Changes[1].Agent != v.Agents[0] || ps[1].Changes[2].Agent != v.Agents[1] {
+	if ps[1].Changes[1].Agent != v.Agents[1] || ps[1].Changes[2].Agent != v.Agents[0] {
 		t.Error("agent changes do not carry the views published")
 	}
 	h.settle()
@@ -292,7 +294,7 @@ func TestViewLost(t *testing.T) {
 	if !slices.Equal(kinds(p), []ChangeKind{ChangeConnection}) || p.Changes[0].Connection.Connected {
 		t.Fatalf("publication %+v", p.Changes)
 	}
-	if got := keysOf(p.View.Agents); !slices.Equal(got, []string{"w1:p1", "w1:p2"}) {
+	if got := keysOf(p.View.Agents); !slices.Equal(got, []string{"w1:p2", "w1:p1"}) {
 		t.Errorf("agents %v, want both kept", got)
 	}
 	if p.View.Connection.LastSnapshotAt == 0 {
@@ -529,8 +531,9 @@ func TestViewContextChange(t *testing.T) {
 	if len(got) != 1 || got[0].Key.PaneID != "w1:p1" || got[0].Directory != "/src/elsewhere" || got[0].PaneTitle != "new title" {
 		t.Fatalf("agent changes %+v, want one for w1:p1 with the new context", got)
 	}
-	if v := h.engine.View(); v.Agents[0] != got[0] {
-		t.Errorf("View() has %+v, want %+v", v.Agents[0], got[0])
+	// Working w1:p1 sorts after Idle w1:p2.
+	if v := h.engine.View(); v.Agents[1] != got[0] {
+		t.Errorf("View() has %+v, want %+v", v.Agents[1], got[0])
 	}
 }
 
@@ -582,7 +585,7 @@ func TestViewSorted(t *testing.T) {
 		return len(ps) > 0 && len(ps[len(ps)-1].View.Agents) == 5
 	})
 	v := ps[len(ps)-1].View
-	if got, want := keysOf(v.Agents), []string{"w2:p2", "w1:p1", "w1:p3", "w1:p2", "w2:p1"}; !slices.Equal(got, want) {
+	if got, want := keysOf(v.Agents), []string{"w2:p2", "w1:p3", "w1:p1", "w1:p2", "w2:p1"}; !slices.Equal(got, want) {
 		t.Errorf("order %v, want %v", got, want)
 	}
 	sorted := slices.Clone(v.Agents)

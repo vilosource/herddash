@@ -174,6 +174,18 @@ shows such an Agent as **Background**, a separate state ranked right after Worki
 
 ## Spec Change Log
 
+- **2026-10-21 — Board order inside a workspace group (operator decision).** "I want the box to
+  be sorted according to their status, Most recently Finished first, and then the Idles and then
+  the Working - this allows me to prioritize which ones to deal with." Background goes just
+  before Working, and every class in a workspace group is newest first. `ClassRank` is now
+  needs_you 0, Finished 1, Idle 2, **Background 3**, Working 4, Unknown 5, and a zone-1 `Start`
+  is the negated class start; Needs you is unchanged, longest wait first. The ranks stated above
+  (Approach, the I/O matrix, the Implementation notes) are the original ones and are superseded:
+  Background shell rank 3, Really finished rank 1, Working with a shell rank 4, Idle never
+  worked with a shell rank 3. The golden fixture was regenerated from core's output, and
+  `groupCounts` reads `finished · idle · background · working`. PRD FR-3 and the Board design
+  carry the same amendment.
+
 ## Review Triage Log
 
 One combined reviewer (correctness, edge cases, verification gaps), 2026-10-21. Nothing high.

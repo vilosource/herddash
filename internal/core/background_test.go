@@ -63,13 +63,13 @@ func TestBackgroundView(t *testing.T) {
 		want     bool
 		rank     int
 	}{
-		{"background shell", "claude", StatusDone, ClassFinished, [][]string{toolShell}, true, 2},
-		{"background shell, idle", "claude", StatusIdle, ClassFinished, [][]string{mcpServer, toolShell}, true, 2},
-		{"really finished", "claude", StatusIdle, ClassFinished, [][]string{mcpServer, gopls, caffeine}, false, 3},
-		{"working with a shell", "claude", StatusWorking, ClassWorking, [][]string{toolShell}, false, 1},
-		{"idle never worked, shell", "claude", StatusIdle, ClassWorking, [][]string{toolShell}, true, 2},
-		{"idle never worked, no shell", "claude", StatusIdle, ClassWorking, nil, false, 4},
-		{"other program", "codex", StatusDone, ClassFinished, [][]string{toolShell}, false, 3},
+		{"background shell", "claude", StatusDone, ClassFinished, [][]string{toolShell}, true, 3},
+		{"background shell, idle", "claude", StatusIdle, ClassFinished, [][]string{mcpServer, toolShell}, true, 3},
+		{"really finished", "claude", StatusIdle, ClassFinished, [][]string{mcpServer, gopls, caffeine}, false, 1},
+		{"working with a shell", "claude", StatusWorking, ClassWorking, [][]string{toolShell}, false, 4},
+		{"idle never worked, shell", "claude", StatusIdle, ClassWorking, [][]string{toolShell}, true, 3},
+		{"idle never worked, no shell", "claude", StatusIdle, ClassWorking, nil, false, 2},
+		{"other program", "codex", StatusDone, ClassFinished, [][]string{toolShell}, false, 1},
 		{"needs you", "claude", StatusBlocked, ClassNeedsYou, [][]string{toolShell}, false, 0},
 		{"unknown", "claude", StatusUnknown, ClassUnknown, [][]string{toolShell}, false, 5},
 		// A fold whose class is needs_you while the Status reads done: never
@@ -99,7 +99,8 @@ func TestBackgroundView(t *testing.T) {
 }
 
 // TestBackgroundOrder: inside a workspace group, Background sorts after
-// Working and before Finished, longest wait first.
+// Finished and Idle and before Working, the most recent first (operator
+// decision 2026-10-21).
 func TestBackgroundOrder(t *testing.T) {
 	bg := func(pane string, status Status, class AttentionClass, since int64) AgentView {
 		return NewAgentView(AgentViewInput{
@@ -117,7 +118,7 @@ func TestBackgroundOrder(t *testing.T) {
 		view("needs", StatusBlocked, 60, 1),
 	}
 	SortViews(vs)
-	want := []string{"needs", "working", "bg-early", "bg-late", "fin", "idle"}
+	want := []string{"needs", "fin", "idle", "bg-late", "bg-early", "working"}
 	if got := panes(vs); !reflect.DeepEqual(got, want) {
 		t.Errorf("order = %v, want %v", got, want)
 	}

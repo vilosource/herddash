@@ -85,8 +85,10 @@ the group heading (or the second line in Needs you), the heading lost ` · claud
 read `IDLE`, and the Box shrank to 8.25rem. `docs/design/board.html` predates all three.
 
 **Order.** Boxes arrive sorted by `sort_key`, `[zone, group, class_rank, start, key]`. Zone 0 is
-Needs you alone; zone 1 is every other Agent, grouped by workspace position and ranked Working 1,
-Background 2, Finished 3, Idle 4, Unknown 5 (Background added 2026-10-21). A Board that re-sorts must tie-break exactly as the Daemon does
+Needs you alone, longest wait first; zone 1 is every other Agent, grouped by workspace position
+and ranked Finished 1, Idle 2, Background 3, Working 4, Unknown 5, each class newest first, so a
+zone-1 `start` is the negated class start (operator decision 2026-10-21, which replaced Working 1,
+Background 2, Finished 3, Idle 4, Unknown 5). A Board that re-sorts must tie-break exactly as the Daemon does
 (`internal/core/view.go`, `SortKey.compare`): zone, group, class rank, start, then the AgentKey
 as host, server, epoch (numerically) and pane id. It must never compare `sort_key[4]` as one
 string. Otherwise it should trust the API's order.
@@ -117,16 +119,17 @@ Needs you fill moved from red-orange to red so it cannot be mistaken for amber.
   leading edge in `--working-edge` and a `BACKGROUND` label in `--working-accent`, flush with the
   page like Working, so it reads as not yet done; its Waiting Time is in full ink, as Finished's,
   counting from when the turn ended. It takes precedence over Finished and Idle. The dash, the
-  label and its place right after Working carry it without colour.
+  label and its place right before Working carry it without colour.
 
 ## Zones and workspace groups
 
 *Amended 2026-10-21 (operator decision).* The top zone holds **Needs you alone**, longest wait
 first, flat across workspaces, under a plain visible "Needs you" heading. Below it, one group per
 workspace in herdr's workspace order (`headers` gives where each starts), each holding that
-workspace's Working, then Background, then Finished, then Idle, then Unknown Agents. A group's
+workspace's Finished, then Idle, then Background, then Working, then Unknown Agents, each class
+most recent first: what to deal with first comes first (operator decision 2026-10-21). A group's
 heading is the workspace label, large and bold (`1.375rem`, 800), followed by its counts in muted
-meta text, `2 working · 1 background · 1 finished · 3 idle`, leaving out zeros. Every heading but the first on the page
+meta text in the same order, `1 finished · 3 idle · 1 background · 2 working`, leaving out zeros. Every heading but the first on the page
 draws a 1px rule above it. The page adds no other dividers.
 
 The browser tab's title carries the Needs you count: `(2) herddash · Needs you` when two Agents

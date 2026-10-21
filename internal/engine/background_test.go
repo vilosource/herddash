@@ -134,21 +134,21 @@ func flips(ps []Publication) int {
 
 // TestBackgroundShell covers the matrix's "Background shell" and "Shell ends"
 // rows: a done claude Agent whose process has a tool-shell child reads
-// Background, ranked 2, and reads Finished again once the shell is gone, with
+// Background, ranked 3, and reads Finished again once the shell is gone, with
 // nothing recorded either way.
 func TestBackgroundShell(t *testing.T) {
 	kids := newFakeChildren()
 	kids.set(p1PID, mcpServer, toolShell)
 	h, w, logs := startBackground(t, "claude", core.StatusDone, kids)
 	v := awaitBackground(w, true)
-	if v.Class != core.ClassFinished || v.SortKey.ClassRank != 2 || v.Status != core.StatusDone {
+	if v.Class != core.ClassFinished || v.SortKey.ClassRank != 3 || v.Status != core.StatusDone {
 		t.Errorf("background view %+v", v)
 	}
 	n := len(w.all())
 	kids.set(p1PID, mcpServer)
 	v = awaitBackground(w, false)
-	if v.SortKey.ClassRank != 3 {
-		t.Errorf("finished view rank %d, want 3", v.SortKey.ClassRank)
+	if v.SortKey.ClassRank != 1 {
+		t.Errorf("finished view rank %d, want 1", v.SortKey.ClassRank)
 	}
 	after := w.all()[n:]
 	for _, p := range after {
@@ -197,7 +197,7 @@ func TestBackgroundWorking(t *testing.T) {
 	if n := kids.calls.Load(); n != 0 {
 		t.Errorf("%d children reads for a working Agent", n)
 	}
-	if v := lastAgent(w.all()); v.Background || v.SortKey.ClassRank != 1 {
+	if v := lastAgent(w.all()); v.Background || v.SortKey.ClassRank != 4 {
 		t.Errorf("view %+v", v)
 	}
 }
@@ -209,7 +209,7 @@ func TestBackgroundIdleNeverWorked(t *testing.T) {
 	kids.set(p1PID, toolShell)
 	_, w, _ := startBackground(t, "claude", core.StatusIdle, kids)
 	v := awaitBackground(w, true)
-	if v.Class != core.ClassWorking || v.Status != core.StatusIdle || v.SortKey.ClassRank != 2 {
+	if v.Class != core.ClassWorking || v.Status != core.StatusIdle || v.SortKey.ClassRank != 3 {
 		t.Errorf("view %+v", v)
 	}
 }
@@ -267,7 +267,7 @@ func TestBackgroundStatusLeaves(t *testing.T) {
 	h.fake.statusSub("w1:p1").event(core.StatusEvent{PaneID: "w1:p1", Status: core.StatusWorking, AgentProgram: "claude"})
 	ps := w.await("the working transition", func(ps []Publication) bool { return hasKind(ChangeTransition)(ps[len(ps)-1]) })
 	for _, c := range ps[len(ps)-1].Changes {
-		if c.Kind == ChangeTransition && (c.Agent.Background || c.Agent.SortKey.ClassRank != 1) {
+		if c.Kind == ChangeTransition && (c.Agent.Background || c.Agent.SortKey.ClassRank != 4) {
 			t.Errorf("transition view %+v", c.Agent)
 		}
 	}

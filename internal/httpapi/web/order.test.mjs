@@ -271,12 +271,12 @@ test("background box label says Background", () => {
   assert.equal(boxLabel(v, now), "ops › 1, await-ci, ~/src/p, cldw, Background, waiting 1m");
 });
 
-test("golden fixture: Background views are the Daemon's, ranked 2", () => {
+test("golden fixture: Background views are the Daemon's, ranked 3", () => {
   const bg = fixture.input.filter((i) => i.view.background);
   assert.ok(bg.length > 0, "no Background view in the fixture");
   for (const { view: v } of bg) {
     assert.equal(boxKind(v), "background", keyString(v));
-    assert.equal(v.sort_key[2], 2, keyString(v));
+    assert.equal(v.sort_key[2], 3, keyString(v));
     assert.ok(v.status === "done" || v.status === "idle", keyString(v));
   }
   // An input marked background that the Daemon did not show as such (another
@@ -300,16 +300,16 @@ test("needs you zone is the Daemon's zone 0", () => {
   for (const { view: v } of fixture.input) assert.equal(inNeedsYou(v), v.attention_class === "needs_you", keyString(v));
 });
 
-test("group counts: working, background, finished and idle, zeros left out", () => {
+test("group counts: finished, idle, background and working, zeros left out", () => {
   const w = { status: "working", attention_class: "working" };
   const f = { status: "done", attention_class: "finished" };
   const i = { status: "idle", attention_class: "working" };
   const u = { status: "unknown", attention_class: "unknown" };
   const b = { status: "done", attention_class: "finished", background: true };
-  assert.equal(groupCounts([w, f, i, i, u]), "1 working · 1 finished · 2 idle");
+  assert.equal(groupCounts([w, f, i, i, u]), "1 finished · 2 idle · 1 working");
   assert.equal(groupCounts([i, f]), "1 finished · 1 idle");
   assert.equal(groupCounts([u]), "");
-  assert.equal(groupCounts([f, b, w, b]), "1 working · 2 background · 1 finished");
+  assert.equal(groupCounts([f, b, w, b]), "1 finished · 2 background · 1 working");
   assert.equal(groupCounts([b]), "1 background");
 });
 
@@ -321,19 +321,26 @@ test("title: the Needs you count, or plain herddash", () => {
   assert.equal(documentTitle([]), "herddash");
 });
 
-test("golden fixture: needs you alone on top, then each group working, background, finished, idle, unknown", () => {
+test("golden fixture: needs you alone on top, then each group finished, idle, background, working, unknown", () => {
   const { top, groups } = layout(fixture.input.map((i) => i.view).reverse());
   assert.ok(top.length > 0);
   for (const v of top) assert.equal(v.attention_class, "needs_you");
-  const rank = { working: 1, background: 2, finished: 3, idle: 4, unknown: 5 };
+  const rank = { finished: 1, idle: 2, background: 3, working: 4, unknown: 5 };
   for (const g of groups) {
     const ranks = g.views.map((v) => rank[boxKind(v)]);
     assert.deepEqual(ranks, ranks.slice().sort((a, b) => a - b), g.label);
+    // Inside a class the most recent comes first (operator decision 2026-10-21).
+    for (let j = 1; j < g.views.length; j++) {
+      const [p, v] = [g.views[j - 1], g.views[j]];
+      if (rank[boxKind(p)] === rank[boxKind(v)] && p.waiting_since !== undefined && v.waiting_since !== undefined) {
+        assert.ok(p.waiting_since >= v.waiting_since, keyString(v));
+      }
+    }
     assert.ok(g.views.every((v) => v.attention_class !== "needs_you"));
   }
   const one = groups.find((g) => g.label === "herddash");
-  assert.deepEqual(one.views.map(boxKind), ["working", "background", "finished", "idle", "unknown"]);
-  assert.equal(one.counts, "1 working · 1 background · 1 finished · 1 idle");
+  assert.deepEqual(one.views.map(boxKind), ["finished", "idle", "background", "working", "unknown"]);
+  assert.equal(one.counts, "1 finished · 1 idle · 1 background · 1 working");
 });
 
 test("layout: golden fixture's top zone and groups", () => {
@@ -445,13 +452,14 @@ test("state replaces the AgentViews and the ConnectionTruth", () => {
 test("agent adds an unseen Agent in its sort position", () => {
   const model = fixtureModel();
   const base = fixtureView("w2:p3");
-  const v = changed(base, { key: { ...base.key, pane_id: "w2:p9" } }, [1, 2, 1, 45]);
+  // Working since 45, more recent than w2:p3's 40, so just before it.
+  const v = changed(base, { key: { ...base.key, pane_id: "w2:p9" }, waiting_since: 45 }, [1, 2, 4, -45]);
   v.sort_key[4] = "mac/default/1/w2:p9";
   const { model: next, warning } = applyEvent(model, "agent", JSON.stringify(v));
   assert.equal(warning, undefined);
   assert.equal(next.agents.size, model.agents.size + 1);
   const order = boardOrder(next);
-  assert.equal(order.indexOf("mac/default/1/w2:p9"), order.indexOf("mac/default/1/w2:p3") + 1);
+  assert.equal(order.indexOf("mac/default/1/w2:p9"), order.indexOf("mac/default/1/w2:p3") - 1);
 });
 
 test("agent replaces a known Agent", () => {
@@ -475,13 +483,13 @@ test("transition into blocked lands in Needs you at its longest-waiting position
 
 test("transition into working moves the Box out of the top zone into its workspace group", () => {
   const model = fixtureModel();
-  const v = changed(fixtureView("w1:p1"), { status: "working", attention_class: "working", waiting_since: 200, waiting_exact: true }, [1, 1, 1, 200]);
+  const v = changed(fixtureView("w1:p1"), { status: "working", attention_class: "working", waiting_since: 200, waiting_exact: true }, [1, 1, 4, -200]);
   const { model: next } = applyEvent(model, "transition", transitionData(v, "blocked"));
   const { top, groups } = layout(modelViews(next));
   assert.ok(!top.some((x) => keyString(x) === "mac/default/1/w1:p1"));
   const g = groups.find((g) => g.views.some((x) => keyString(x) === "mac/default/1/w1:p1"));
   assert.equal(g.label, "herddash");
-  assert.deepEqual(g.views.map(keyString), ["mac/default/1/w1:p3", "mac/default/1/w1:p1", "mac/default/1/w1:p6", "mac/default/1/w1:p2", "mac/default/1/w1:p5", "mac/default/1/w1:p4"]);
+  assert.deepEqual(g.views.map(keyString), ["mac/default/1/w1:p2", "mac/default/1/w1:p5", "mac/default/1/w1:p6", "mac/default/1/w1:p1", "mac/default/1/w1:p3", "mac/default/1/w1:p4"]);
 });
 
 test("applyEvent keeps the sort key and waiting_since a done-to-idle transition carries (core owns the guarantee)", () => {

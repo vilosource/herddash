@@ -181,12 +181,15 @@ func NewAgentView(in AgentViewInput) AgentView {
 //   - Group is 0 in zone 0. In zone 1 it is the workspace's position in
 //     herdr's order, with an unknown position (0) sorting last as
 //     SortUnknown.
-//   - ClassRank is needs_you 0; then, inside a workspace group, Working (class
-//     working with Status working) 1, Background (finished, or Idle, waiting
-//     on background work; operator request 2026-10-21) 2, finished 3, Idle
-//     (class working with any other Status) 4, unknown 5.
-//   - Start is WaitingSince, so the longest wait comes first; an unknown one
-//     sorts after every known one, as SortUnknown.
+//   - ClassRank is needs_you 0; then, inside a workspace group, finished 1,
+//     Idle (class working with a Status other than working) 2, Background
+//     (finished or Idle, waiting on background work) 3, Working (Status
+//     working) 4, unknown 5: what to deal with first comes first (operator
+//     decision 2026-10-21).
+//   - Start orders a class by WaitingSince. In zone 0 it is WaitingSince, so
+//     the longest wait comes first. In zone 1 it is its negation, so the most
+//     recent comes first. An unknown one sorts after every known one, as
+//     SortUnknown.
 //   - Key breaks ties: host, server, epoch (numerically), then pane id.
 //
 // It serialises as a JSON array of five values, the last being the key
@@ -208,14 +211,14 @@ func newSortKey(class AttentionClass, status Status, background bool, workspaceP
 	switch {
 	case class == ClassNeedsYou:
 		k.ClassRank = 0
-	case class == ClassWorking && status == StatusWorking:
-		k.ClassRank = 1
 	case background:
-		k.ClassRank = 2
-	case class == ClassFinished:
 		k.ClassRank = 3
-	case class == ClassWorking:
+	case class == ClassFinished:
+		k.ClassRank = 1
+	case class == ClassWorking && status == StatusWorking:
 		k.ClassRank = 4
+	case class == ClassWorking:
+		k.ClassRank = 2
 	default:
 		k.ClassRank = 5
 	}
@@ -225,6 +228,7 @@ func newSortKey(class AttentionClass, status Status, background bool, workspaceP
 		if k.Group <= 0 {
 			k.Group = SortUnknown
 		}
+		k.Start = -since // the most recent first
 	}
 	if since == 0 {
 		k.Start = SortUnknown

@@ -173,15 +173,16 @@ export function headerLabel(view) {
   return view.workspace || "(no workspace)";
 }
 
-// groupCounts is a workspace group's counts, "2 working · 1 background ·
-// 1 finished · 3 idle", leaving out zeros and Unknown.
+// groupCounts is a workspace group's counts in the group's reading order,
+// "1 finished · 3 idle · 1 background · 2 working", leaving out zeros and
+// Unknown.
 export function groupCounts(views) {
-  const n = { working: 0, background: 0, finished: 0, idle: 0 };
+  const n = { finished: 0, idle: 0, background: 0, working: 0 };
   for (const v of views) {
     const k = boxKind(v);
     if (k in n) n[k]++;
   }
-  return ["working", "background", "finished", "idle"]
+  return ["finished", "idle", "background", "working"]
     .filter((k) => n[k] > 0)
     .map((k) => n[k] + " " + k)
     .join(" · ");
@@ -198,8 +199,8 @@ export function documentTitle(views) {
 }
 
 // layout splits views into what the Board draws: the top zone (Needs you
-// alone) and the lower zone's workspace groups (Working, Background,
-// Finished, Idle, Unknown), each in Board order with its header label and counts.
+// alone) and the lower zone's workspace groups (Finished, Idle, Background,
+// Working, Unknown), each in Board order with its header label and counts.
 export function layout(views) {
   const sorted = sortViews(views);
   const headers = workspaceHeaders(sorted);

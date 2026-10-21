@@ -123,7 +123,7 @@ func TestBoardOrder(t *testing.T) {
 			view("ws1", StatusBlocked, 20, 1),
 			view("ws2", StatusBlocked, 10, 2),
 		}, []string{"ws2", "ws1", "fin"}},
-		{"one workspace: needs you, then working, finished, idle", []AgentView{
+		{"one workspace: needs you, then finished, idle, working", []AgentView{
 			neverWorkingView("idle", 1, 1),
 			view("fin-idle", StatusIdle, 2, 1),
 			view("unknown", StatusUnknown, 3, 1),
@@ -131,7 +131,18 @@ func TestBoardOrder(t *testing.T) {
 			view("needs", StatusBlocked, 5, 1),
 			view("fin-done", StatusDone, 6, 1),
 			neverWorkingView("idle-unknown-start", 0, 1),
-		}, []string{"needs", "working", "fin-idle", "fin-done", "idle", "idle-unknown-start", "unknown"}},
+		}, []string{"needs", "fin-done", "fin-idle", "idle", "idle-unknown-start", "working", "unknown"}},
+		// Operator decision 2026-10-21: every class in a workspace group is
+		// newest first, while Needs you stays longest-waiting first.
+		{"workspace group newest first, needs you longest first", []AgentView{
+			view("fin-old", StatusDone, 1, 1),
+			view("needs-new", StatusBlocked, 9, 1),
+			view("fin-new", StatusDone, 5, 1),
+			view("working-old", StatusWorking, 2, 1),
+			view("needs-old", StatusBlocked, 3, 2),
+			view("fin-mid", StatusDone, 3, 1),
+			view("working-new", StatusWorking, 8, 1),
+		}, []string{"needs-old", "needs-new", "fin-new", "fin-mid", "fin-old", "working-new", "working-old"}},
 		{"finished grouped by workspace", []AgentView{
 			view("ws2-fin", StatusDone, 1, 2),
 			view("ws1-fin", StatusDone, 9, 1),
@@ -223,7 +234,7 @@ func TestNewAgentView(t *testing.T) {
 		Key: k, AgentProgram: "claude", Profile: "cldw", Heading: "cldw",
 		Directory: "~/proj", Workspace: "ws", Tab: "t", PanePosition: "top-left", Status: StatusIdle, Class: ClassFinished,
 		WaitingSince: 500, WaitingExact: false, PaneTitle: "fix-auth-bug", ContextLine: "fix-auth-bug",
-		SortKey: SortKey{Zone: 1, Group: 2, ClassRank: 3, Start: 500, Key: k},
+		SortKey: SortKey{Zone: 1, Group: 2, ClassRank: 1, Start: -500, Key: k},
 	}
 	if v != want {
 		t.Errorf("view =\n%+v\nwant\n%+v", v, want)
@@ -269,7 +280,7 @@ func TestAgentViewJSON(t *testing.T) {
 		`"key":{"host":"mac","server":"default","epoch":2,"pane_id":"w1:p1"}`,
 		`"attention_class":"working"`,
 		`"waiting_exact":false`,
-		`"sort_key":[1,9007199254740991,1,9007199254740991,"mac/default/2/w1:p1"]`,
+		`"sort_key":[1,9007199254740991,4,9007199254740991,"mac/default/2/w1:p1"]`,
 		`"pane_position":""`,
 		`"background":false`,
 	} {

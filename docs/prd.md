@@ -202,8 +202,8 @@ agent waiting for a subagent or background task vs really Finished." herdr repor
 Agent that ended its turn with a background shell still running as `done`, then `idle`, so the
 Board showed it Finished. A Claude Code Agent whose Status is `done` or `idle` and whose process
 still has a tool-shell child (a direct child whose arguments name its
-`/shell-snapshots/snapshot-` file) reads `BACKGROUND`, ranked right after Working in its
-workspace group. The Daemon finds this by reading the Agent process's direct children locally,
+`/shell-snapshots/snapshot-` file) reads `BACKGROUND`, ranked right before Working in its
+workspace group (right after Working until the FR-3 amendment of 2026-10-21). The Daemon finds this by reading the Agent process's direct children locally,
 never from herdr and never from pane output. The Attention Class, Waiting Time and the record are
 unchanged: Waiting Time still counts from when the turn ended. A running subagent already reads
 Working; a Working, Needs you or Unknown Agent is never Background. Other Agent Programs have no
@@ -256,6 +256,16 @@ its workspace. Each group's heading carries its counts of working, finished and 
 the browser tab's title carries the Needs you count, `(2) herddash · Needs you`. The consequences
 above hold with "top zone" read as the Needs you zone: a `done` Agent becoming `idle` keeps its
 place, and an `idle` Agent never seen `working` is an Idle Box in its group.
+
+*Amended again 2026-10-21, operator decision:* "I want the box to be sorted according to their
+status, Most recently Finished first, and then the Idles and then the Working - this allows me to
+prioritize which ones to deal with." Inside each workspace group the order is now Finished, Idle,
+Background (an Agent waiting on background work, just before Working), Working, Unknown, and
+every class is ordered **newest first**: the most recent class start leads. Needs you is
+unchanged: alone on top, longest wait first. A group's counts read in the same order,
+`1 finished · 3 idle · 1 background · 2 working`. This supersedes the ranking and the "by
+Waiting Time descending" of the amendment above for the workspace groups only; the consequences
+hold as amended.
 
 #### FR-4: Live without reload
 
