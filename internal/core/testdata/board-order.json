@@ -1,5 +1,5 @@
 {
-  "description": "Golden Board order (Story 3.1; regenerated 2026-10-21 for Needs you alone on top and every other class grouped by workspace, ranked Working 1, Finished 2, Idle 3, Unknown 4; regenerated again 2026-10-21 for Background, ranked 2 between Working and Finished, which moves Finished to 3, Idle to 4 and Unknown to 5; regenerated a third time 2026-10-21 for the operator's order inside a workspace group, ranked Finished 1, Idle 2, Background 3, Working 4, Unknown 5, each class most recent first, so a zone-1 start is the negated since; Needs you stays longest-waiting first). input holds shuffled Agent inputs, each with view: the expected AgentView exactly as NewAgentView serialises it (key, class, heading, shortened directory, context line, waiting_since, waiting_exact, background, sort_key). order is the expected AgentKey strings after sorting; headers are the indexes, in sorted order, where a zone-1 workspace group starts. Shared fixture: the Go test in internal/core/view_test.go checks every view, the order and the headers; the Board's ordering tests (Story 3.7) sort the expected views by their sort_key arrays, compared element by element, and must not re-derive class, zone, group, rank or sentinels. An unknown group or start is 9007199254740991 (Number.MAX_SAFE_INTEGER). background is AgentViewInput.Background, the process read's verdict, which the view shows only for a done or idle Agent of a program with a rule. since is FoldResult.Since (absent: fold not known); exact says the class began live.",
+  "description": "Golden Board order (Story 3.1; regenerated 2026-10-21 for Needs you alone on top and every other class grouped by workspace, ranked Working 1, Finished 2, Idle 3, Unknown 4; regenerated again 2026-10-21 for Background, ranked 2 between Working and Finished, which moves Finished to 3, Idle to 4 and Unknown to 5; regenerated a third time 2026-10-21 for the operator's order inside a workspace group, ranked Finished 1, Idle 2, Background 3, Working 4, Unknown 5, each class most recent first, so a zone-1 start is the negated since; Needs you stays longest-waiting first). input holds shuffled Agent inputs, each with view: the expected AgentView exactly as NewAgentView serialises it (key, class, heading, shortened directory, context line, waiting_since, waiting_exact, background, sort_key). order is the expected AgentKey strings after sorting; headers are the indexes, in sorted order, where a zone-1 workspace group starts. Shared fixture: the Go test in internal/core/view_test.go checks every view, the order and the headers; the Board's ordering tests (Story 3.7) sort the expected views by their sort_key arrays, compared element by element, and must not re-derive class, zone, group, rank or sentinels. An unknown group or start is 9007199254740991 (Number.MAX_SAFE_INTEGER). background is AgentViewInput.Background, the process read's verdict, which the view shows only for a done or idle Agent of a program with a rule. tasks are background subagent ids the Agent's transcript shows open and turn_ended whether its main turn ended (ADR-0009, added 2026-10-21): with tasks open a working Agent is Background, ranked 3, when its turn ended, and Working with background_tasks otherwise; background_tasks counts the open tasks plus one for the process read's verdict. since is FoldResult.Since (absent: fold not known); exact says the class began live.",
   "home": "/Users/op",
   "input": [
     {
@@ -41,6 +41,7 @@
         "pane_title": "stray",
         "context_line": "stray",
         "background": false,
+        "background_tasks": 0,
         "sort_key": [
           1,
           9007199254740991,
@@ -90,6 +91,7 @@
         "pane_title": "",
         "context_line": "",
         "background": false,
+        "background_tasks": 0,
         "sort_key": [
           1,
           3,
@@ -138,6 +140,7 @@
         "pane_title": "",
         "context_line": "",
         "background": false,
+        "background_tasks": 0,
         "sort_key": [
           1,
           3,
@@ -186,6 +189,7 @@
         "pane_title": "fix-auth-bug",
         "context_line": "fix-auth-bug",
         "background": false,
+        "background_tasks": 0,
         "sort_key": [
           0,
           0,
@@ -234,6 +238,7 @@
         "pane_title": "Claude Code",
         "context_line": "",
         "background": false,
+        "background_tasks": 0,
         "sort_key": [
           1,
           1,
@@ -283,6 +288,7 @@
         "pane_title": "await-ci",
         "context_line": "await-ci",
         "background": true,
+        "background_tasks": 1,
         "sort_key": [
           1,
           1,
@@ -331,12 +337,67 @@
         "pane_title": "busy",
         "context_line": "",
         "background": false,
+        "background_tasks": 0,
         "sort_key": [
           1,
           2,
           4,
           -40,
           "mac/default/1/w2:p3"
+        ]
+      }
+    },
+    {
+      "key": {
+        "host": "mac",
+        "server": "default",
+        "epoch": 1,
+        "pane_id": "w3:p5"
+      },
+      "agent_program": "claude",
+      "profile": "cldw",
+      "status": "working",
+      "ever_working": true,
+      "since": 35,
+      "exact": true,
+      "directory": "/Users/op/notes",
+      "workspace": "notes",
+      "workspace_position": 3,
+      "tab": "5",
+      "pane_title": "wait-for-agents",
+      "tasks": [
+        "a0f1e2d3c4b5a6978",
+        "b9z8y7x6w"
+      ],
+      "turn_ended": true,
+      "view": {
+        "key": {
+          "host": "mac",
+          "server": "default",
+          "epoch": 1,
+          "pane_id": "w3:p5"
+        },
+        "agent_program": "claude",
+        "profile": "cldw",
+        "heading": "cldw",
+        "directory": "~/notes",
+        "workspace": "notes",
+        "tab": "5",
+        "pane_position": "",
+        "status": "working",
+        "attention_class": "working",
+        "waiting_since": 35,
+        "waiting_exact": true,
+        "pane_title": "wait-for-agents",
+        "context_line": "wait-for-agents",
+        "background": true,
+        "background_tasks": 2,
+        "sort_key": [
+          1,
+          3,
+          3,
+          -35,
+          "mac/default/1/w3:p5"
         ]
       }
     },
@@ -376,6 +437,7 @@
         "pane_title": "anything",
         "context_line": "",
         "background": false,
+        "background_tasks": 0,
         "sort_key": [
           0,
           0,
@@ -424,6 +486,7 @@
         "pane_title": "new-session",
         "context_line": "new-session",
         "background": false,
+        "background_tasks": 0,
         "sort_key": [
           1,
           1,
@@ -473,6 +536,7 @@
         "pane_title": "write-tests",
         "context_line": "write-tests",
         "background": false,
+        "background_tasks": 0,
         "sort_key": [
           1,
           1,
@@ -523,6 +587,7 @@
         "pane_title": "watch-logs",
         "context_line": "watch-logs",
         "background": true,
+        "background_tasks": 1,
         "sort_key": [
           1,
           2,
@@ -568,6 +633,7 @@
         "pane_title": "",
         "context_line": "",
         "background": false,
+        "background_tasks": 0,
         "sort_key": [
           1,
           2,
@@ -617,6 +683,7 @@
         "pane_title": "Claude Code",
         "context_line": "",
         "background": false,
+        "background_tasks": 0,
         "sort_key": [
           0,
           0,
@@ -644,6 +711,9 @@
       "workspace_position": 3,
       "tab": "1",
       "pane_title": "summarise",
+      "tasks": [
+        "a1b2c3d4e5f6a7b8c"
+      ],
       "view": {
         "key": {
           "host": "mac",
@@ -665,6 +735,7 @@
         "pane_title": "summarise",
         "context_line": "summarise",
         "background": false,
+        "background_tasks": 1,
         "sort_key": [
           1,
           3,
@@ -713,6 +784,7 @@
         "pane_title": "  ",
         "context_line": "",
         "background": false,
+        "background_tasks": 0,
         "sort_key": [
           1,
           2,
@@ -762,6 +834,7 @@
         "pane_title": "refactor-store",
         "context_line": "refactor-store",
         "background": false,
+        "background_tasks": 0,
         "sort_key": [
           1,
           1,
@@ -787,6 +860,7 @@
     "mac/default/1/w2:p4",
     "mac/default/1/w3:p4",
     "mac/default/10/w3:p2",
+    "mac/default/1/w3:p5",
     "mac/default/1/w3:p3",
     "mac/default/1/w9:p1"
   ],
@@ -794,6 +868,6 @@
     3,
     8,
     12,
-    15
+    16
   ]
 }

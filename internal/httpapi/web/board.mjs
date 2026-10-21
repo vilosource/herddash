@@ -14,6 +14,7 @@ import {
   boxKind,
   boxLabel,
   classLabel,
+  stateCount,
   documentTitle,
   hasWaitingSince,
   inNeedsYou,
@@ -84,7 +85,10 @@ function fillBox(box, view, now) {
   const row = el("p", "status-row");
   row.appendChild(el("span", "heading", view.heading));
   const state = el("span", "state");
-  state.appendChild(el("span", "class", classLabel(view)));
+  const cls = el("span", "class", classLabel(view));
+  const count = stateCount(view);
+  if (count) cls.appendChild(el("span", "count", count));
+  state.appendChild(cls);
   const known = hasWaitingSince(view);
   const wait = el("span", known ? "wait" : "wait wait--none", waitingLabel(view, now));
   state.appendChild(wait);

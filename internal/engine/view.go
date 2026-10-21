@@ -163,6 +163,7 @@ func (e *Engine) viewOf(p *pane) core.AgentView {
 		Context:      p.context,
 		Home:         e.home,
 		Background:   p.background,
+		Transcript:   p.tasks,
 	})
 }
 

@@ -31,6 +31,10 @@ import {
   BACKGROUND_LABEL,
   boxKind,
   classLabel,
+  backgroundTasks,
+  stateCount,
+  stateLabel,
+  tasksLabel,
   documentTitle,
   groupCounts,
   inNeedsYou,
@@ -277,8 +281,12 @@ test("golden fixture: Background views are the Daemon's, ranked 3", () => {
   for (const { view: v } of bg) {
     assert.equal(boxKind(v), "background", keyString(v));
     assert.equal(v.sort_key[2], 3, keyString(v));
-    assert.ok(v.status === "done" || v.status === "idle", keyString(v));
+    assert.ok(v.status === "done" || v.status === "idle" || v.status === "working", keyString(v));
   }
+  // A working one is Background only with its main turn over (ADR-0009).
+  const working = bg.filter((i) => i.view.status === "working");
+  assert.ok(working.length > 0, "no working Background view in the fixture");
+  for (const i of working) assert.equal(i.turn_ended, true, keyString(i.view));
   // An input marked background that the Daemon did not show as such (another
   // program) stays Finished.
   assert.ok(fixture.input.some((i) => i.background && !i.view.background));
@@ -970,4 +978,62 @@ test("stream: a state from another Daemon run reloads the page; the same run doe
   ({ st } = streamDecision(st, { kind: "open", source }));
   d = streamDecision(st, { kind: "event", source, name: "state", data: state("run-b") });
   assert.equal(d.reload, true, "a restarted Daemon");
+});
+
+test("state label: WORKING · N bg, BACKGROUND · N when N > 1 (ADR-0009)", () => {
+  const working = { status: "working", attention_class: "working" };
+  const bg = { status: "working", attention_class: "working", background: true };
+  const done = { status: "done", attention_class: "finished", background: true };
+  assert.equal(stateLabel({ ...working, background_tasks: 1 }), "Working · 1 bg");
+  assert.equal(stateLabel({ ...working, background_tasks: 3 }), "Working · 3 bg");
+  assert.equal(stateLabel({ ...working, background_tasks: 0 }), "Working");
+  assert.equal(stateLabel(working), "Working");
+  assert.equal(stateLabel({ ...bg, background_tasks: 1 }), "Background");
+  assert.equal(stateLabel({ ...bg, background_tasks: 2 }), "Background · 2");
+  assert.equal(stateLabel({ ...done, background_tasks: 4 }), "Background · 4");
+  assert.equal(stateCount({ ...done, background_tasks: 1 }), "");
+  // Read as sent: never a count from anything but a positive whole number.
+  for (const n of [-1, 1.5, "2", null, undefined]) assert.equal(backgroundTasks({ background_tasks: n }), 0);
+  // Other kinds show no count, whatever is sent.
+  const others = [
+    { status: "done", attention_class: "finished", background_tasks: 2 },
+    { status: "idle", attention_class: "working", background_tasks: 2 },
+    { status: "blocked", attention_class: "needs_you", background_tasks: 2 },
+    { status: "unknown", attention_class: "unknown", background_tasks: 2 },
+  ];
+  for (const v of others) assert.equal(stateCount(v), "", JSON.stringify(v));
+});
+
+test("accessible name says the background tasks", () => {
+  const now = 1_000_000;
+  const v = {
+    key: { host: "h", server: "default", epoch: 1, pane_id: "w1:p1" },
+    attention_class: "working",
+    status: "working",
+    background: false,
+    background_tasks: 2,
+    heading: "cldw",
+    context_line: "build",
+    directory: "~/src/p",
+    workspace: "ops",
+    tab: "1",
+    pane_position: "",
+    waiting_since: now - 75_000,
+    waiting_exact: true,
+  };
+  assert.equal(boxLabel(v, now), "ops › 1, build, ~/src/p, cldw, Working, 2 background tasks, waiting 1m");
+  assert.equal(tasksLabel({ background_tasks: 1 }), "1 background task");
+  assert.equal(tasksLabel({}), "");
+  // Group counts are unchanged by the count.
+  assert.equal(groupCounts([v, { ...v, background: true }]), "1 background · 1 working");
+});
+
+test("golden fixture: background_tasks as the Daemon sent it", () => {
+  const w = fixture.input.find((i) => i.view.status === "working" && i.view.background_tasks > 0 && !i.view.background);
+  assert.ok(w, "no Working view with background tasks in the fixture");
+  assert.equal(stateLabel(w.view), "Working · " + w.view.background_tasks + " bg");
+  for (const { view: v } of fixture.input) {
+    assert.ok(Number.isInteger(v.background_tasks), keyString(v));
+    if (v.attention_class === "needs_you" || v.attention_class === "unknown") assert.equal(v.background_tasks, 0);
+  }
 });

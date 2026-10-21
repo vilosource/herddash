@@ -123,3 +123,60 @@ func TestBackgroundOrder(t *testing.T) {
 		t.Errorf("order = %v, want %v", got, want)
 	}
 }
+
+// TestTranscriptView covers the matrix's display rows (ADR-0009): the count is
+// the transcript's open tasks, plus one for a tool shell no open command
+// accounts for; a working Agent with tasks open is Background only once its
+// main turn ended; Needs you and Unknown never change.
+func TestTranscriptView(t *testing.T) {
+	tasks := func(turnEnded bool, lines ...TranscriptLine) BackgroundTasks {
+		var b BackgroundTasks
+		for _, l := range lines {
+			b.Apply(l)
+		}
+		b.Apply(TranscriptLine{TurnEnded: turnEnded})
+		return b
+	}
+	cmd := TranscriptLine{StartID: "bx1", StartCommand: true}
+	sub := TranscriptLine{StartID: "ag1"}
+	cases := []struct {
+		name   string
+		status Status
+		class  AttentionClass
+		tr     BackgroundTasks
+		shell  bool
+		count  int
+		bg     bool
+		rank   int
+	}{
+		{"bg command open, idle", StatusDone, ClassFinished, tasks(true, cmd), false, 1, true, 3},
+		{"bg command closes", StatusDone, ClassFinished, tasks(true, cmd, TranscriptLine{EndID: "bx1", EndStatus: "completed"}), false, 0, false, 1},
+		{"main turn over, subagent running", StatusWorking, ClassWorking, tasks(true, sub), false, 1, true, 3},
+		{"working with bg", StatusWorking, ClassWorking, tasks(false, cmd), false, 1, false, 4},
+		{"working, turn ended, none open", StatusWorking, ClassWorking, tasks(true), false, 0, false, 4},
+		{"idle with two open", StatusIdle, ClassWorking, tasks(false, cmd, sub), false, 2, true, 3},
+		{"shell accounted for by a command", StatusDone, ClassFinished, tasks(true, cmd), true, 1, true, 3},
+		{"shell beside a subagent", StatusDone, ClassFinished, tasks(true, sub), true, 2, true, 3},
+		{"shell alone, as built", StatusDone, ClassFinished, tasks(true), true, 1, true, 3},
+		{"needs you", StatusBlocked, ClassNeedsYou, tasks(true, cmd, sub), true, 0, false, 0},
+		{"unknown", StatusUnknown, ClassUnknown, tasks(true, sub), true, 0, false, 5},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			in := AgentViewInput{
+				Key: key("w1:p1"), AgentProgram: "claude", Profile: "cldw", Status: c.status,
+				Fold:       FoldResult{Known: true, Status: c.status, Class: c.class, Since: 100, SinceProvenance: ProvenanceLive},
+				Context:    PaneContext{WorkspacePosition: 1},
+				Background: c.shell,
+				Transcript: c.tr,
+			}
+			v := NewAgentView(in)
+			if v.BackgroundTasks != c.count || v.Background != c.bg || v.SortKey.ClassRank != c.rank {
+				t.Errorf("tasks %d background %v rank %d, want %d %v %d", v.BackgroundTasks, v.Background, v.SortKey.ClassRank, c.count, c.bg, c.rank)
+			}
+			if v.Class != c.class || v.Status != c.status {
+				t.Errorf("class %s status %s changed", v.Class, v.Status)
+			}
+		})
+	}
+}

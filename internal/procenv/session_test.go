@@ -28,7 +28,8 @@ func sessionDir(t *testing.T, files map[string]string) string {
 }
 
 // TestClaudeSessionFixture pins the record's shape as observed on
-// 2026-10-21: only pid, status and statusUpdatedAt are taken from it.
+// 2026-10-21: only pid, status, statusUpdatedAt, sessionId and cwd are taken
+// from it.
 func TestClaudeSessionFixture(t *testing.T) {
 	body, err := os.ReadFile(filepath.Join("testdata", "claude-session-2026-10-21.json"))
 	if err != nil {
@@ -39,8 +40,29 @@ func TestClaudeSessionFixture(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := (Session{PID: 4242, Status: "waiting", StatusUpdatedAt: 1792595595000}); s != want {
+	if want := (Session{PID: 4242, Status: "waiting", StatusUpdatedAt: 1792595595000,
+		SessionID: "00000000-0000-4000-8000-000000000000", CWD: "/h/projects/dns"}); s != want {
 		t.Errorf("session %+v, want %+v", s, want)
+	}
+}
+
+// TestClaudeSessionOptionalFields: sessionId and cwd are optional, and one
+// that is not a string is ignored rather than failing the record, whose
+// status still counts.
+func TestClaudeSessionOptionalFields(t *testing.T) {
+	for name, tc := range map[string]struct {
+		body    string
+		id, cwd string
+	}{
+		"absent":      {`{"pid":7,"status":"busy"}`, "", ""},
+		"strings":     {`{"pid":7,"status":"busy","sessionId":"s-1","cwd":"/w"}`, "s-1", "/w"},
+		"not strings": {`{"pid":7,"status":"busy","sessionId":5,"cwd":{"a":1}}`, "", ""},
+		"null":        {`{"pid":7,"status":"busy","sessionId":null,"cwd":null}`, "", ""},
+	} {
+		s, err := ClaudeSession(sessionDir(t, map[string]string{"7.json": tc.body}), 7)
+		if err != nil || s.Status != "busy" || s.SessionID != tc.id || s.CWD != tc.cwd {
+			t.Errorf("%s: %+v, error %v", name, s, err)
+		}
 	}
 }
 

@@ -1,0 +1,11 @@
+{"type":"user","isSidechain":false,"uuid":"u-1","sessionId":"s-1","message":{"role":"user","content":"PROMPT-SECRET please refactor the parser"},"timestamp":"2026-10-21T10:00:00.000Z"}
+{"type":"assistant","isSidechain":false,"uuid":"u-2","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"INPUT-SECRET make test","run_in_background":true}}],"stop_reason":"tool_use"}}
+{"type":"user","isSidechain":false,"uuid":"u-3","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"RESULT-SECRET Command running in background with ID: bk7q2x9"}]},"toolUseResult":{"stdout":"OUTPUT-SECRET","stderr":"","interrupted":false,"backgroundTaskId":"bk7q2x9"}}
+{"type":"assistant","isSidechain":false,"uuid":"u-4","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_2","name":"Agent","input":{"description":"DESC-SECRET","prompt":"PROMPT-SECRET review it","run_in_background":true}}],"stop_reason":"tool_use"}}
+{"type":"user","isSidechain":false,"uuid":"u-5","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_2","content":"RESULT-SECRET launched"}]},"toolUseResult":{"isAsync":true,"status":"async_launched","agentId":"a3f9c2d1e0b4a5968","description":"DESC-SECRET","prompt":"PROMPT-SECRET review it"}}
+{"type":"assistant","isSidechain":true,"uuid":"u-6","message":{"role":"assistant","content":[{"type":"text","text":"TEXT-SECRET subagent done"}],"stop_reason":"end_turn"}}
+{"type":"assistant","isSidechain":false,"uuid":"u-7","message":{"role":"assistant","content":[{"type":"text","text":"TEXT-SECRET I will wait"}],"stop_reason":"end_turn"}}
+not json at all TEXT-SECRET
+{"type":"queue-operation","operation":"enqueue","timestamp":"2026-10-21T10:05:00.000Z","content":"<task-notification>\n<task-id>bk7q2x9</task-id>\n<summary>SUMMARY-SECRET</summary>\n</task-notification>"}
+{"type":"queue-operation","operation":"enqueue","timestamp":"2026-10-21T10:06:00.000Z","content":"<task-notification>\n<task-id>bk7q2x9</task-id>\n<status>completed</status>\n<summary>SUMMARY-SECRET exit 0</summary>\n<result>RESULT-SECRET</result>\n</task-notification>"}
+{"type":"queue-operation","operation":"dequeue","timestamp":"2026-10-21T10:06:01.000Z"}

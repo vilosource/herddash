@@ -216,6 +216,32 @@ rule yet and never read Background.
   unchanged.
 - A `working` Agent with a shell child reads Working.
 
+*Amended 2026-10-21, [ADR-0009](adr/0009-background-work-from-claude-code-transcripts.md)
+(accepted by the operator):* "I want to know when you are Working and you have background tasks
+or you are finished and have background tasks", including subagents. For a Claude Code Agent
+whose session record (FR-6's ADR-0008 amendment) names its `sessionId` and `cwd`, the Daemon also
+tails that session's transcript, `<config dir>/projects/<cwd with "/" and "." as "-">/<sessionId>.jsonl`,
+on the same 2 s watch, and decodes only three structural markers: a background command's or
+subagent's start (its task id), a task notification's end (its task id and status), and whether
+the main thread's turn has ended. Text, inputs, outputs, prompts and results are never kept,
+logged, stored, sent or shown. The AgentView gains `background_tasks`, the open tasks plus one
+for a tool shell the process check finds that no open command accounts for. A Working Agent with
+tasks open reads `WORKING · N bg`; one whose main turn has ended while tasks are open (herdr
+reports `working` while a background subagent runs) reads `BACKGROUND`, not Working; a `done` or
+`idle` one with tasks open reads `BACKGROUND` (`BACKGROUND · N` when N > 1). Needs you and Unknown
+never change, nor do the record, the Attention Class, the Fold or Waiting Time. A missing or
+unreadable record or transcript falls back to the process check alone. This supersedes "A running
+subagent already reads Working" above for a subagent running after the main turn. Workflows are
+not claimed until one has been observed.
+
+**Consequences (testable):**
+- A `working` Claude Code Agent whose transcript shows its main turn ended while a background
+  subagent runs reads `BACKGROUND`, not Working; when the subagent's notification arrives it reads
+  Working (or whatever herdr then says).
+- A `working` Agent with one background command open and its turn not ended reads `WORKING · 1 bg`.
+- A task notification without a status leaves its task open.
+- No transcript text appears in any log, API response or the record.
+
 #### FR-2a: Context Line derivation
 
 The Daemon derives each Agent's Context Line through a per-Agent-Program rule with a global

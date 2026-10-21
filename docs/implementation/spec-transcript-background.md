@@ -103,15 +103,79 @@ main thread's turn has ended, and show `WORKING · N bg`, BACKGROUND or FINISHED
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] adapter: session fields + transcript tail with bounds, tests with temp files
-- [ ] core: decoder (privacy test), state, view/display rules, tests
-- [ ] engine: watch, fallback, tests
-- [ ] Board: labels, node tests
-- [ ] docs
+- [x] adapter: session fields + transcript tail with bounds, tests with temp files
+- [x] core: decoder (privacy test), state, view/display rules, tests
+- [x] engine: watch, fallback, tests
+- [x] Board: labels, node tests
+- [x] docs
 
 **Acceptance Criteria:**
 - Given the module, when `go build ./... && go vet ./... && go test -race ./...`, `gofmt -l .` and `node --test internal/httpapi/web/*.test.mjs` run, then all pass and every matrix row has a test.
 - Given a dev build installed locally, when this session ends its turn while a background subagent runs, then its Box reads BACKGROUND, not WORKING.
+
+## Implementation Notes
+
+- **Adapter (`internal/procenv`, no new package, `arch_test.go` unchanged).** `Session` gains
+  `SessionID` and `CWD`, decoded only when they are JSON strings (absent or another type is "",
+  and the record's status still counts). `ClaudeTranscriptPath(configDir, cwd, sessionID)` builds
+  `<configDir>/projects/<slug>/<sessionId>.jsonl`, slug = cwd with every "/" and "." as "-"
+  (`/Users/jasonviloria/GitHub/herddash` gives `-Users-jasonviloria-GitHub-herddash`), and refuses
+  a relative config dir or cwd and a session id that is not 1 to 128 of `[A-Za-z0-9_-]`, so the
+  path cannot leave `projects/`. `TailTranscript(tail, path, line)` is value-in, value-out: the
+  `Tail` (path, file identity, offset, skip flag) lives on the engine's pane. First sight, another
+  path, a shrink or another inode restart from the bound (last 8 MiB, from the byte before it so a
+  line starting exactly at the bound is kept) and report `restarted`; later reads take at most
+  1 MiB, complete lines only. The session reader's file-type safety is now `openRegular` (Lstat,
+  `O_NOFOLLOW|O_NONBLOCK`, re-Stat and `SameFile`), shared by both readers. Errors wrap
+  `ErrTranscript` and never name the path (it carries the cwd).
+- **Core.** `DecodeTranscriptLine` decodes only `type`, `isSidechain`, `toolUseResult`
+  (`backgroundTaskId`, `isAsync`, `status`, `agentId`), `message.stop_reason`, `operation`,
+  `content` (only `<task-id>` and `<status>` out of a string starting `<task-notification>`) and
+  `attachment.type`, and returns a `TranscriptLine` of two ids, a closing status and three bools.
+  Ids must be 1 to 128 of `[A-Za-z0-9_-]`, and a status other than completed/failed/killed is
+  dropped, so no text can travel in an id or a status. `BackgroundTasks` keeps the open ids
+  (insertion order, capped at `MaxOpenTasks` = 256, the oldest dropped) with whether each is a
+  command, and `turnEnded`. `AgentViewInput.Transcript` and `AgentView.BackgroundTasks`
+  (`background_tasks`); `backgroundOf` applies the display rules. The golden fixture gained
+  `tasks`/`turn_ended` inputs (w3:p3 now Working with 1 bg; new w3:p5 working with its turn over
+  and two subagents open, Background) and `background_tasks` on every view, regenerated from
+  `NewAgentView`'s own output.
+- **Engine.** No new watch: the session watch's read (`readSession`, same goroutine, 1 s timeout,
+  busy flag, generation tag) tails the transcript after a successful record read when it names a
+  session and cwd. The pane's `Tail` and a clone of its `BackgroundTasks` go into the read; only
+  decoded `TranscriptLine`s are collected, folded after the read (a restart starts afresh), and
+  returned in the `sessionMsg`. `onTranscript` keeps them; a transcript that cannot be named or
+  read drops them (debug-logged once per pane, `claude transcript not read`, by kind only); a
+  session read failure drops them only when the record's verdict ends (the ADR-0008 rule), so a
+  passing failure keeps them. `followSession` (report, process change, program change) and
+  `dropSession` (removal, epoch change, release) drop them; shutdown ends the watch's context.
+  `Options.Transcript` (default `procenv.TailTranscript`) is injectable like `Session`; tests use
+  temp dirs. Changes log `claude background tasks` with the count and `turn_ended` only.
+- **Board.** `order.mjs`: `backgroundTasks`, `stateCount`, `stateLabel`, `tasksLabel`;
+  `board.mjs` appends the count as a `.count` span inside `.class`, which CSS keeps lower case so
+  the label reads `WORKING · 2 bg`; `boxLabel` adds "N background tasks" (singular for 1).
+  `groupCounts` unchanged.
+- **Docs.** PRD FR-2 amendment (ADR-0009) with its own consequences, the design doc's State label
+  and Background paragraphs, the spine's procenv adapter row, `procenv/doc.go`.
+- **Judgment calls.**
+  1. "Plus the process check when it finds a shell no id accounts for": the shell is taken as
+     accounted for when any open task is a background *command*; a shell beside only subagents
+     adds 1 (the ADR's subagent-own-shell case). The process table cannot be matched to ids
+     without reading arguments more closely than the background rule does.
+  2. A line longer than one 1 MiB read is skipped (counted as undecodable) rather than failing
+     every read, so "bound exceeded every read" cannot happen; the fallback covers a transcript
+     that cannot be named, opened or read.
+  3. A new process for the same Agent (and every `followSession`) re-reads the transcript from
+     the bound, so tasks a previous process left unclosed may reappear if their start is in the
+     last 8 MiB. Known gap; leaked ids (a start with no closing notification) stay open until they
+     fall out of a restart's window.
+  4. Only the slug rule the spec states is applied; whether Claude Code also replaces other
+     characters (for example "_" or a space) was not checked against real directories (not
+     allowed here). A wrong slug is a missing transcript, so the process check alone.
+  5. Needs you and Unknown views carry `background_tasks: 0`.
+- **Not done here.** The acceptance criterion's live check (a dev build showing BACKGROUND while
+  this session waits on a background subagent) and the authorised workflow observation are the
+  orchestrator's. The hand-run headless-Chrome check (`web/check/board-browser.mjs`) was not run.
 
 ## Spec Change Log
 

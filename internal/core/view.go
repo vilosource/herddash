@@ -102,6 +102,9 @@ type AgentViewInput struct {
 	// it only while ChecksBackground holds for the Status and the class is
 	// finished or working.
 	Background bool
+	// Transcript is the Agent's background work as its Claude Code
+	// transcript shows it (ADR-0009); the zero value when it is not read.
+	Transcript BackgroundTasks
 }
 
 // AgentView is how every surface (the API, the event stream and the Board)
@@ -130,11 +133,18 @@ type AgentView struct {
 	// ContextLine is never omitted: an empty one is sent as "".
 	ContextLine string `json:"context_line"`
 	// Background is set when the Agent is waiting on background work: its
-	// Status is done or idle and its process still runs a background task.
-	// The class, the Waiting Time and the record are unchanged by it; only
-	// the Board's kind and the sort key's class rank are.
-	Background bool    `json:"background"`
-	SortKey    SortKey `json:"sort_key"`
+	// Status is done or idle, or working with its main turn over (ADR-0009),
+	// and it has background tasks open. The class, the Waiting Time and the
+	// record are unchanged by it; only the Board's kind and the sort key's
+	// class rank are.
+	Background bool `json:"background"`
+	// BackgroundTasks is how many background tasks the Agent has open
+	// (ADR-0009): its transcript's open tasks, plus one for a live tool
+	// shell the process check finds that no open command accounts for. It
+	// is shown on a Working Box ("WORKING · 2 bg") and a Background one,
+	// and is 0 for Needs you and Unknown.
+	BackgroundTasks int     `json:"background_tasks"`
+	SortKey         SortKey `json:"sort_key"`
 }
 
 // NewAgentView builds the view of one Agent. The Attention Class comes from
@@ -144,8 +154,7 @@ func NewAgentView(in AgentViewInput) AgentView {
 	if !in.Fold.Known {
 		class = ClassOf(in.Status, in.Fold.EverWorking)
 	}
-	background := in.Background && ChecksBackground(in.AgentProgram, in.Status) &&
-		(class == ClassFinished || class == ClassWorking)
+	tasks, background := backgroundOf(in, class)
 	var since int64
 	var exact bool
 	if in.Fold.Known && in.Fold.Since > 0 {
@@ -168,9 +177,42 @@ func NewAgentView(in AgentViewInput) AgentView {
 		PaneTitle:    in.Context.PaneTitle,
 		ContextLine:  ContextLine(in.AgentProgram, in.Context.PaneTitle),
 		Background:   background,
+
+		BackgroundTasks: tasks,
 	}
 	v.SortKey = newSortKey(class, in.Status, background, in.Context.WorkspacePosition, since, in.Key)
 	return v
+}
+
+// backgroundOf is an Agent's open background tasks and whether its Box is
+// Background (ADR-0009). The count is the transcript's open tasks, plus one
+// when the process check (shown only while ChecksBackground holds) finds a
+// tool shell and no open command accounts for it. With any open:
+//   - Status done or idle, class finished or working: Background;
+//   - Status working and the main turn ended: Background, as an idle one;
+//   - Status working otherwise: Working, with the count shown.
+//
+// Needs you and Unknown never change: no count, never Background.
+func backgroundOf(in AgentViewInput, class AttentionClass) (int, bool) {
+	if class != ClassFinished && class != ClassWorking {
+		return 0, false
+	}
+	switch in.Status {
+	case StatusDone, StatusIdle, StatusWorking:
+	default:
+		return 0, false
+	}
+	n := in.Transcript.Count()
+	if in.Background && ChecksBackground(in.AgentProgram, in.Status) && !in.Transcript.OpenCommand() {
+		n++
+	}
+	switch {
+	case n == 0:
+		return 0, false
+	case in.Status == StatusWorking:
+		return n, in.Transcript.TurnEnded()
+	}
+	return n, true
 }
 
 // SortKey is where an Agent sorts on the Board (FR-3):
@@ -183,7 +225,8 @@ func NewAgentView(in AgentViewInput) AgentView {
 //     SortUnknown.
 //   - ClassRank is needs_you 0; then, inside a workspace group, finished 1,
 //     Idle (class working with a Status other than working) 2, Background
-//     (finished or Idle, waiting on background work) 3, Working (Status
+//     (finished, Idle, or Working with its main turn over, waiting on
+//     background work; ADR-0009) 3, Working (Status
 //     working) 4, unknown 5: what to deal with first comes first (operator
 //     decision 2026-10-21).
 //   - Start orders a class by WaitingSince. In zone 0 it is WaitingSince, so

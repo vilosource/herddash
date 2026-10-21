@@ -300,7 +300,7 @@ func TestAgentViewJSON(t *testing.T) {
 		t.Errorf("sort_key = %#v, want an array of five", m["sort_key"])
 	}
 	for _, f := range []string{"key", "agent_program", "profile", "heading", "directory", "workspace", "tab",
-		"pane_position", "status", "attention_class", "waiting_exact", "pane_title", "context_line", "background", "sort_key"} {
+		"pane_position", "status", "attention_class", "waiting_exact", "pane_title", "context_line", "background", "background_tasks", "sort_key"} {
 		if _, ok := m[f]; !ok {
 			t.Errorf("JSON lacks %q", f)
 		}
@@ -332,6 +332,10 @@ type boardFixture struct {
 		PanePosition      string       `json:"pane_position"`
 		PaneTitle         string       `json:"pane_title"`
 		Background        bool         `json:"background"`
+		// Tasks are background subagents the transcript shows open, and
+		// TurnEnded says its main turn ended (ADR-0009).
+		Tasks     []string `json:"tasks"`
+		TurnEnded bool     `json:"turn_ended"`
 		// View is the expected AgentView, as NewAgentView serialises it.
 		View json.RawMessage `json:"view"`
 	} `json:"input"`
@@ -360,11 +364,16 @@ func loadBoard(t *testing.T) ([]AgentView, boardFixture) {
 			f = FoldResult{Known: true, Status: in.Status, Class: ClassOf(in.Status, in.EverWorking),
 				Since: *in.Since, SinceProvenance: prov, EverWorking: in.EverWorking}
 		}
+		var tr BackgroundTasks
+		for _, id := range in.Tasks {
+			tr.Apply(TranscriptLine{StartID: id})
+		}
+		tr.Apply(TranscriptLine{TurnEnded: in.TurnEnded})
 		views = append(views, NewAgentView(AgentViewInput{
 			Key: in.Key, AgentProgram: in.AgentProgram, Profile: in.Profile, Status: in.Status, Fold: f,
 			Context: PaneContext{ProjectDir: in.Directory, WorkspaceLabel: in.Workspace, TabLabel: in.Tab,
 				WorkspacePosition: in.WorkspacePosition, PaneTitle: in.PaneTitle, PanePosition: in.PanePosition},
-			Home: fx.Home, Background: in.Background,
+			Home: fx.Home, Background: in.Background, Transcript: tr,
 		}))
 	}
 	return views, fx

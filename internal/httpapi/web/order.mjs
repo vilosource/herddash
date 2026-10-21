@@ -125,8 +125,9 @@ export const BACKGROUND_LABEL = "Background";
 
 // isBackground reports whether the view is an Agent waiting on background
 // work: the Daemon's background field, read as sent and never derived here
-// (operator request 2026-10-21). The Daemon sets it only for a done or idle
-// Agent, so it takes precedence over Finished and Idle.
+// (operator request 2026-10-21). The Daemon sets it for a done or idle Agent,
+// or a working one whose main turn is over (ADR-0009), so it takes precedence
+// over Finished, Idle and Working.
 export function isBackground(view) {
   return view.background === true;
 }
@@ -143,6 +144,37 @@ export function classLabel(view) {
   if (isBackground(view)) return BACKGROUND_LABEL;
   if (isIdle(view)) return IDLE_LABEL;
   return CLASS_LABEL[view.attention_class] || view.attention_class;
+}
+
+// backgroundTasks is the Daemon's background_tasks count, read as sent: 0
+// when it is absent or not a positive whole number.
+export function backgroundTasks(view) {
+  const n = view.background_tasks;
+  return Number.isInteger(n) && n > 0 ? n : 0;
+}
+
+// stateCount is what follows the class in a Box's State label (ADR-0009):
+// " · N bg" on a Working Box with background tasks open, " · N" on a
+// Background Box with more than one, "" otherwise.
+export function stateCount(view) {
+  const n = backgroundTasks(view);
+  const kind = boxKind(view);
+  if (kind === "working" && n > 0) return " · " + n + " bg";
+  if (kind === "background" && n > 1) return " · " + n;
+  return "";
+}
+
+// stateLabel is a Box's State label as text: the class label and its count.
+export function stateLabel(view) {
+  return classLabel(view) + stateCount(view);
+}
+
+// tasksLabel is the background task count in words for the accessible name,
+// "" when there are none.
+export function tasksLabel(view) {
+  const n = backgroundTasks(view);
+  if (n === 0) return "";
+  return n === 1 ? "1 background task" : n + " background tasks";
 }
 
 // whereLabel is "workspace › tab", leaving out an empty one and its separator.
@@ -215,12 +247,13 @@ export function layout(views) {
 
 // boxLabel is a Box's accessible name at nowMs: everything it shows,
 // untruncated, so keyboard and screen-reader users can read it in full:
-// workspace and tab, pane, Context Line, directory, heading, class and time.
+// workspace and tab, pane, Context Line, directory, heading, class, its
+// background tasks, and time.
 export function boxLabel(view, nowMs) {
   const w = hasWaitingSince(view)
     ? "waiting " + waitingLabel(view, nowMs).replace("≥ ", "at least ")
     : "Waiting Time unknown";
-  return [whereLabel(view), paneLabel(view), view.context_line, view.directory, view.heading, classLabel(view), w]
+  return [whereLabel(view), paneLabel(view), view.context_line, view.directory, view.heading, classLabel(view), tasksLabel(view), w]
     .filter(Boolean)
     .join(", ");
 }

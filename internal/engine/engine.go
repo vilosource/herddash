@@ -48,6 +48,10 @@ type Options struct {
 	// configuration directory, as procenv.ClaudeSession does, which is the
 	// default. Tests inject a fake.
 	Session SessionFunc
+	// Transcript tails a Claude Code session transcript, as
+	// procenv.TailTranscript does, which is the default. Tests may inject a
+	// fake.
+	Transcript TranscriptFunc
 	// Store is where every Transition, every resync marker (Daemon start,
 	// connect and reconnect, resync, disagreeing reconcile) and the engine's
 	// epoch state are written (FR-6, FR-7, AD-3). Nil records nothing.
@@ -69,6 +73,9 @@ type ChildrenFunc = func(pid int) ([]procenv.Process, error)
 
 // SessionFunc is the type of Options.Session.
 type SessionFunc = func(configDir string, pid int) (procenv.Session, error)
+
+// TranscriptFunc is the type of Options.Transcript.
+type TranscriptFunc = func(t procenv.Tail, path string, line func([]byte)) (procenv.Tail, bool, error)
 
 // Engine is the single-writer actor (AD-2). Only its Run goroutine holds the
 // pane set, each Agent's Status and its tracked context. Subscription readers
@@ -147,6 +154,17 @@ type SessionFunc = func(configDir string, pid int) (procenv.Session, error)
 // change while waiting holds changes herdr's Status only. A failed read is no
 // record, logged at debug level once per pane. The watch stops when the
 // Agent is removed, its program or process changes, or the run ends.
+//
+// Claude Code's transcript (ADR-0009): each successful session read that
+// names a session id and working directory also tails that session's
+// transcript through Transcript, in the same goroutine, timeout and busy
+// flag, from where the last read ended (kept per pane). Only the markers
+// core.DecodeTranscriptLine finds leave the read; the pane folds them into
+// core.BackgroundTasks, which the view turns into background_tasks and
+// Background. A transcript that cannot be named or read, or a session
+// record that ends, drops what the transcript said, so the process check
+// alone decides, logged at debug level once per pane. A new process, a
+// program change, removal and the run's end drop it too.
 type Engine struct {
 	host, server string
 	client       Client
@@ -161,8 +179,9 @@ type Engine struct {
 	environ  EnvironFunc
 	// children and session are Options.Children and Options.Session;
 	// read-only after New.
-	children ChildrenFunc
-	session  SessionFunc
+	children   ChildrenFunc
+	session    SessionFunc
+	transcript TranscriptFunc
 	// store is Options.Store, nil when nothing is recorded.
 	store Recorder
 	// retentionDays is Options.RetentionDays; read-only after New.
@@ -389,6 +408,12 @@ type pane struct {
 	// lastAt is the observed_at of the Agent's latest Transition, recorded
 	// or read from the record; 0 when there is none.
 	lastAt int64
+	// tail is where the session's transcript was last read to, and tasks
+	// what it says (ADR-0009); both zero when it is not read. trLogged is
+	// set once a failed transcript read was logged.
+	tail     procenv.Tail
+	tasks    core.BackgroundTasks
+	trLogged bool
 }
 
 // cause is why a resync runs: the reason the Sink and the record show, and,
@@ -497,6 +522,12 @@ type (
 		status    string
 		updatedAt int64
 		err       error
+		// tail and tasks are the transcript's read position and what it
+		// says after this read, valid when the record was read and trErr
+		// is nil; trErr is why the transcript was not read.
+		tail  procenv.Tail
+		tasks core.BackgroundTasks
+		trErr error
 	}
 )
 
@@ -515,6 +546,7 @@ func New(o Options) *Engine {
 		environ:          o.Environ,
 		children:         o.Children,
 		session:          o.Session,
+		transcript:       o.Transcript,
 		store:            o.Store,
 		retentionDays:    o.RetentionDays,
 		home:             o.Home,
@@ -538,6 +570,9 @@ func New(o Options) *Engine {
 	}
 	if e.session == nil {
 		e.session = procenv.ClaudeSession
+	}
+	if e.transcript == nil {
+		e.transcript = procenv.TailTranscript
 	}
 	e.truth = core.ConnectionTruth{HerdrMinimum: core.HerdrMinimum}
 	e.pub.subs = map[*ViewSubscription]struct{}{}
@@ -1830,6 +1865,8 @@ func (e *Engine) onBackground(m backgroundMsg) {
 func (e *Engine) followSession(p *pane, keep bool) {
 	watch := p.known && p.pid > 0 && core.ReadsSession(p.program)
 	e.endSessionWatch(p)
+	// Another process's transcript, or none: read afresh.
+	dropTranscript(p)
 	if !keep || !watch {
 		e.dropSession(p, true)
 	}
@@ -1866,6 +1903,7 @@ func (e *Engine) stopSession(p *pane, settle bool) {
 // dropSession forgets the record's verdict on p, settling as stopSession
 // says.
 func (e *Engine) dropSession(p *pane, settle bool) {
+	dropTranscript(p)
 	if p.session == "" {
 		return
 	}
@@ -1873,6 +1911,12 @@ func (e *Engine) dropSession(p *pane, settle bool) {
 	if settle {
 		e.settleSession(p, 0)
 	}
+}
+
+// dropTranscript forgets what p's transcript said and where it was read to
+// (ADR-0009): the process check alone decides until it is read again.
+func dropTranscript(p *pane) {
+	p.tail, p.tasks = procenv.Tail{}, core.BackgroundTasks{}
 }
 
 // settleSession records a change of p's effective Status that its session
@@ -1954,6 +1998,7 @@ func (e *Engine) checkSession(p *pane, delay time.Duration) {
 		p.sessBusy = new(atomic.Bool)
 	}
 	id, gen, pid, dir, ctx, busy := p.id, p.sessGen, p.pid, p.sessDir, p.sessCtx, p.sessBusy
+	tail, tasks := p.tail, p.tasks.Clone()
 	e.wg.Add(1)
 	go func() {
 		defer e.wg.Done()
@@ -1966,7 +2011,7 @@ func (e *Engine) checkSession(p *pane, delay time.Duration) {
 				return
 			}
 		}
-		m := e.readSession(ctx, busy, pid, dir)
+		m := e.readSession(ctx, busy, pid, dir, tail, tasks)
 		m.paneID, m.gen = id, gen
 		e.send(m)
 	}()
@@ -1978,7 +2023,13 @@ func (e *Engine) checkSession(p *pane, delay time.Duration) {
 // cannot be cancelled, so they run apart and a read that outlives the timeout
 // is abandoned; done is buffered so it never blocks. busy is held while a read
 // runs, so a read that never returns is not joined by another.
-func (e *Engine) readSession(ctx context.Context, busy *atomic.Bool, pid int, dir string) sessionMsg {
+//
+// A record that names its session and working directory has its transcript
+// tailed from tail, and what it says folded into tasks, a copy the read owns
+// (ADR-0009). Only the markers core.DecodeTranscriptLine finds are kept;
+// every line is dropped once decoded.
+func (e *Engine) readSession(ctx context.Context, busy *atomic.Bool, pid int, dir string,
+	tail procenv.Tail, tasks core.BackgroundTasks) sessionMsg {
 	if !busy.CompareAndSwap(false, true) {
 		return sessionMsg{err: fmt.Errorf("engine: session of pid %d: the previous read has not returned", pid)}
 	}
@@ -2003,7 +2054,9 @@ func (e *Engine) readSession(ctx context.Context, busy *atomic.Bool, pid int, di
 			done <- sessionMsg{dir: dir, err: fmt.Errorf("engine: session of pid %d: %w", pid, err)}
 			return
 		}
-		done <- sessionMsg{dir: dir, status: s.Status, updatedAt: s.StatusUpdatedAt}
+		m := sessionMsg{dir: dir, status: s.Status, updatedAt: s.StatusUpdatedAt}
+		m.tail, m.tasks, m.trErr = e.readTranscript(dir, s, tail, tasks)
+		done <- m
 	}()
 	select {
 	case m := <-done:
@@ -2011,6 +2064,33 @@ func (e *Engine) readSession(ctx context.Context, busy *atomic.Bool, pid int, di
 	case <-ctx.Done():
 		return sessionMsg{err: fmt.Errorf("engine: session of pid %d not read within %s: %w", pid, sessionTimeout, ctx.Err())}
 	}
+}
+
+// readTranscript tails the transcript the session record s names under dir
+// from tail, folding its markers into tasks, and returns where it read to and
+// what it says. A read that restarted from the bound starts tasks afresh.
+func (e *Engine) readTranscript(dir string, s procenv.Session, tail procenv.Tail,
+	tasks core.BackgroundTasks) (procenv.Tail, core.BackgroundTasks, error) {
+	path, err := procenv.ClaudeTranscriptPath(dir, s.CWD, s.SessionID)
+	if err != nil {
+		return procenv.Tail{}, core.BackgroundTasks{}, err
+	}
+	var lines []core.TranscriptLine
+	next, restarted, err := e.transcript(tail, path, func(line []byte) {
+		if l, ok := core.DecodeTranscriptLine(line); ok {
+			lines = append(lines, l)
+		}
+	})
+	if err != nil {
+		return procenv.Tail{}, core.BackgroundTasks{}, err
+	}
+	if restarted {
+		tasks = core.BackgroundTasks{}
+	}
+	for _, l := range lines {
+		tasks.Apply(l)
+	}
+	return next, tasks, nil
 }
 
 // claudeConfigVar names Claude Code's configuration directory in its
@@ -2059,6 +2139,7 @@ func (e *Engine) onSession(m sessionMsg) {
 	} else {
 		p.sessFails = 0
 	}
+	e.onTranscript(p, m, next)
 	if p.awaitSession {
 		// The first sight waited for this read (deferSight): it now sees the
 		// effective Status, so a record still waiting finds the Agent
@@ -2084,6 +2165,33 @@ func (e *Engine) onSession(m sessionMsg) {
 		e.settleSession(p, m.updatedAt)
 	}
 	e.checkSession(p, sessionInterval)
+}
+
+// onTranscript keeps what one read said of p's transcript (ADR-0009). A read
+// of the record that failed keeps it while the record's verdict holds
+// (session, the verdict after this read, is not ""); a record that ended, or
+// a transcript that could not be named or read, drops it, the transcript
+// failure logged at debug level once per pane, by its kind only.
+func (e *Engine) onTranscript(p *pane, m sessionMsg, session string) {
+	switch {
+	case m.err != nil:
+		if session == "" {
+			dropTranscript(p)
+		}
+		return
+	case m.trErr != nil:
+		if !p.trLogged {
+			p.trLogged = true
+			e.log.Debug("claude transcript not read", "pane", p.id, "pid", p.pid, "error", m.trErr.Error())
+		}
+		dropTranscript(p)
+		return
+	}
+	before := p.tasks
+	p.tail, p.tasks = m.tail, m.tasks
+	if before.Count() != p.tasks.Count() || before.TurnEnded() != p.tasks.TurnEnded() {
+		e.log.Debug("claude background tasks", "pane", p.id, "open", p.tasks.Count(), "turn_ended", p.tasks.TurnEnded())
+	}
 }
 
 // transition records p's Status changing to next, as herdr observed it, now.

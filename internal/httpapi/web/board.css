@@ -162,6 +162,9 @@ body {
   text-transform: uppercase;
   white-space: nowrap;
 }
+/* The background task count after the class (ADR-0009): "WORKING · 2 bg", "BACKGROUND · 3".
+   The unit stays lower case. */
+.class .count { text-transform: none; letter-spacing: 0.02em; }
 .wait {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;

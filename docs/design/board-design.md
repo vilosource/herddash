@@ -66,13 +66,19 @@ change a Box's height. Empty fields keep their row. The rows, in reading order:
    (`codex`), in the quiet meta style; it is the part that gives way with an ellipsis in a narrow
    Box. On the right, in bold, the **class label** (uppercase text) and the **Waiting Time**,
    which is never truncated. Class Working with a Status other than `working` reads `IDLE`. An
-   Agent the Daemon marks `background` reads `BACKGROUND`, whatever its class. A
+   Agent the Daemon marks `background` reads `BACKGROUND`, whatever its class. *Added
+   2026-10-21, ADR-0009:* the label carries the AgentView's `background_tasks` count: a Working
+   Box with tasks open reads `WORKING · N bg`, a Background Box with more than one reads
+   `BACKGROUND · N` (`BACKGROUND` alone for one); the count, set in the label's colour, keeps its
+   lower-case unit (`bg`) while the class word stays uppercase. No other class shows a count.
+   Group counts are unchanged. A
    lower bound reads `≥ 12m`. An absent `waiting_since` shows a dash. It ticks from
    `waiting_since`. Its format has defined boundaries, with the second unit always two digits:
    `0s` to `59s`, `1m` to `59m`, `1h 00m` to `23h 59m`, then `1d 00h` onwards.
 
 The Box's hover `title` and its accessible name both carry everything, untruncated: workspace and
-tab, pane position, Context Line, directory, heading, class and Waiting Time. The rows carry no
+tab, pane position, Context Line, directory, heading, class, its background tasks in words
+("2 background tasks", added 2026-10-21 for ADR-0009) and Waiting Time. The rows carry no
 titles of their own, so hovering anywhere on the Box shows it all.
 
 *Changed 2026-10-21 at the operator's request, three times.* First, workspace › tab moved from
@@ -118,7 +124,8 @@ Needs you fill moved from red-orange to red so it cannot be mistaken for amber.
   `background: true`, decided by the Daemon and never derived by the Board) has a 6px **dashed**
   leading edge in `--working-edge` and a `BACKGROUND` label in `--working-accent`, flush with the
   page like Working, so it reads as not yet done; its Waiting Time is in full ink, as Finished's,
-  counting from when the turn ended. It takes precedence over Finished and Idle. The dash, the
+  counting from when the turn ended. It takes precedence over Finished and Idle, and (ADR-0009)
+  over Working for a `working` Agent whose main turn has ended while background tasks run. The dash, the
   label and its place right before Working carry it without colour.
 
 ## Zones and workspace groups

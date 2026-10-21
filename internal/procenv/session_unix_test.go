@@ -63,3 +63,37 @@ func TestClaudeSessionSymlink(t *testing.T) {
 		}
 	}
 }
+
+// TestTailTranscriptFIFOAndSymlink: a FIFO at the transcript's path is
+// refused without blocking, and a symbolic link is never followed.
+func TestTailTranscriptFIFOAndSymlink(t *testing.T) {
+	dir := t.TempDir()
+	fifo := filepath.Join(dir, "fifo.jsonl")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Skipf("no FIFO here: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := TailTranscript(Tail{}, fifo, func([]byte) {})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrTranscript) {
+			t.Errorf("FIFO: %v, want ErrTranscript", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("TailTranscript blocked on a FIFO")
+	}
+	real := filepath.Join(dir, "real.jsonl")
+	if err := os.WriteFile(real, []byte("a\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link.jsonl")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := TailTranscript(Tail{}, link, func([]byte) { t.Error("read through a link") }); !errors.Is(err, ErrTranscript) {
+		t.Errorf("symlink: %v, want ErrTranscript", err)
+	}
+}
