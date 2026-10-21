@@ -18,7 +18,8 @@ different question: **what is every agent doing right now, and which ones are wa
 - Every status change recorded, so "waiting 40 minutes" is a fact that survives a restart.
 - Read-only. No terminal, no prompts, no pane control: herdr already does those.
 
-Status: **early.** Nothing is built yet. Two browser interfaces for herdr already exist, so
+Status: **pre-release, being dogfooded.** The recorder, the read-only API and the Board work;
+the first release is being prepared. Two browser interfaces for herdr already exist, so
 herddash is deliberately narrow: a read-only notification board backed by a recorder, running
 beside them. See [ADR-0001](docs/adr/0001-what-herddash-is.md) and
 [ADR-0003](docs/adr/0003-the-board-is-the-product.md).
@@ -27,7 +28,11 @@ beside them. See [ADR-0001](docs/adr/0001-what-herddash-is.md) and
   language: what it does, what it stores, and what it will never do.
 - [docs/prd.md](docs/prd.md) is the product definition, and the
   [architecture spine](docs/planning/architecture/architecture-herddash-2026-10-14/ARCHITECTURE-SPINE.md)
-  the rules the build follows. Epics come next.
+  the rules the build follows. The build runs story by story from
+  [docs/planning/epics.md](docs/planning/epics.md).
+- [docs/install.md](docs/install.md) explains how to install it yourself to start with your
+  session, under launchd on macOS or a systemd user unit on Linux, without root, and covers logs
+  and backup. Nothing in this repository installs anything.
 - [docs/research/](docs/research/) holds frozen notes on herdr's socket API, its multi-host
   model, and hands-on evaluations of the two closest existing projects. Read them before
   writing client code.

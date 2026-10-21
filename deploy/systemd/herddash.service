@@ -1,0 +1,29 @@
+# herddash as a systemd user unit: runs `herddash serve` as the operator's own
+# user with their session. Install it under ~/.config/systemd/user/ and see
+# docs/install.md. Configuration comes from ~/.config/herddash/config.toml, as
+# when run by hand. No HERDR_SOCKET_PATH or HERDR_SESSION is set: the Daemon
+# finds the socket by herdr's own resolution order, and the config file can pin
+# it. UnsetEnvironment drops them even if the user manager has imported them.
+#
+# Restart only after a failure (a SIGTERM at logout exits 0), 30 seconds apart,
+# and give up after 5 failed starts in 10 minutes rather than loop. Standard
+# output repeats the log and is discarded; standard error goes to the journal.
+
+[Unit]
+Description=herddash, a read-only board for herdr's agents
+Documentation=https://github.com/vilosource/herddash/blob/main/docs/install.md
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/herddash serve
+Restart=on-failure
+RestartSec=30
+UMask=0077
+UnsetEnvironment=HERDR_SOCKET_PATH HERDR_SESSION
+StandardOutput=null
+StandardError=journal
+
+[Install]
+WantedBy=default.target
