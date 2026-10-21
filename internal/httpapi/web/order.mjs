@@ -108,8 +108,26 @@ export const CLASS_LABEL = Object.freeze({
   unknown: "Unknown",
 });
 
-// classLabel is the Attention Class as text.
+// IDLE_LABEL is what a Box says for an idle Agent (see isIdle).
+export const IDLE_LABEL = "Idle";
+
+// isIdle reports whether the view is an idle Agent: class working (the
+// Daemon's) while its Status is anything but working, such as an Agent idle
+// since before it was ever seen working. Its Box reads Idle, in grey, and
+// gets no Waiting Time emphasis. It is the one thing the Board derives from
+// the Status; the Daemon ranks the same Agents Idle in the sort key.
+export function isIdle(view) {
+  return view.attention_class === "working" && view.status !== "working";
+}
+
+// boxKind is the kind a Box is drawn as: its Attention Class, or "idle".
+export function boxKind(view) {
+  return isIdle(view) ? "idle" : view.attention_class;
+}
+
+// classLabel is the Attention Class as text, Idle for an idle Agent.
 export function classLabel(view) {
+  if (isIdle(view)) return IDLE_LABEL;
   return CLASS_LABEL[view.attention_class] || view.attention_class;
 }
 
@@ -118,39 +136,76 @@ export function whereLabel(view) {
   return [view.workspace, view.tab].filter(Boolean).join(" › ");
 }
 
+// tabLabel is a Box's first line: the tab, or the workspace when the tab is
+// empty.
+export function tabLabel(view) {
+  return view.tab || view.workspace || "";
+}
+
+// paneLabel is the pane position in words for a tooltip or accessible name,
+// "" when the tab has one pane.
+export function paneLabel(view) {
+  return view.pane_position ? view.pane_position + " pane" : "";
+}
+
+// inNeedsYou reports whether the view sits in the Needs you zone, by the
+// Daemon's sort key (zone 0).
+export function inNeedsYou(view) {
+  return view.sort_key[0] === 0;
+}
+
 // headerLabel is the workspace header's text for the group starting at view.
 export function headerLabel(view) {
   return view.workspace || "(no workspace)";
 }
 
-// neverWorking reports whether the view is an idle Agent never seen working:
-// it sits with Working (the Daemon's class), and its Box gets no Waiting Time
-// emphasis.
-export function neverWorking(view) {
-  return view.status === "idle" && view.attention_class === "working";
+// groupCounts is a workspace group's counts, "2 working · 1 finished ·
+// 3 idle", leaving out zeros and Unknown.
+export function groupCounts(views) {
+  const n = { working: 0, finished: 0, idle: 0 };
+  for (const v of views) {
+    const k = boxKind(v);
+    if (k in n) n[k]++;
+  }
+  return ["working", "finished", "idle"]
+    .filter((k) => n[k] > 0)
+    .map((k) => n[k] + " " + k)
+    .join(" · ");
 }
 
-// layout splits views into what the Board draws: the top zone (Needs you,
-// then Finished) and the lower zone's workspace groups, each in Board order
-// with its header label.
+// BOARD_TITLE is the browser tab's title when nothing needs you.
+export const BOARD_TITLE = "herddash";
+
+// documentTitle is the browser tab's title: "(N) herddash · Needs you" when N
+// Agents need you, else "herddash".
+export function documentTitle(views) {
+  const n = views.filter((v) => v.attention_class === "needs_you").length;
+  return n > 0 ? "(" + n + ") " + BOARD_TITLE + " · Needs you" : BOARD_TITLE;
+}
+
+// layout splits views into what the Board draws: the top zone (Needs you
+// alone) and the lower zone's workspace groups (Working, Finished, Idle,
+// Unknown), each in Board order with its header label and counts.
 export function layout(views) {
   const sorted = sortViews(views);
   const headers = workspaceHeaders(sorted);
   const top = sorted.slice(0, headers.length ? headers[0] : sorted.length);
   const groups = headers.map((start, h) => {
     const end = h + 1 < headers.length ? headers[h + 1] : sorted.length;
-    return { label: headerLabel(sorted[start]), views: sorted.slice(start, end) };
+    const views = sorted.slice(start, end);
+    return { label: headerLabel(sorted[start]), counts: groupCounts(views), views };
   });
   return { top, groups };
 }
 
 // boxLabel is a Box's accessible name at nowMs: everything it shows,
-// untruncated, so keyboard and screen-reader users can read it in full.
+// untruncated, so keyboard and screen-reader users can read it in full:
+// workspace and tab, pane, Context Line, directory, heading, class and time.
 export function boxLabel(view, nowMs) {
   const w = hasWaitingSince(view)
     ? "waiting " + waitingLabel(view, nowMs).replace("≥ ", "at least ")
     : "Waiting Time unknown";
-  return [whereLabel(view), view.context_line, view.directory, view.heading, classLabel(view), w]
+  return [whereLabel(view), paneLabel(view), view.context_line, view.directory, view.heading, classLabel(view), w]
     .filter(Boolean)
     .join(", ");
 }

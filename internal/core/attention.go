@@ -40,7 +40,8 @@ type FoldResult struct {
 	Status Status
 	Class  AttentionClass
 	// Since is the ObservedAt (UTC Unix ms) of the Transition at which Class
-	// began; a later Transition in the same Class does not move it.
+	// began; a later Transition in the same Class does not move it, except the
+	// first working one (see Add).
 	Since int64
 	// SinceProvenance is that Transition's Provenance.
 	SinceProvenance Provenance
@@ -60,10 +61,15 @@ func Fold(ts []Transition) FoldResult {
 
 // Add extends f by one Transition, later than every one folded so far. Adding
 // Transitions one by one gives the same result as folding them all at once.
+//
+// The first working Transition restarts Since even though the Class stays
+// working: before it the Agent was Idle on the Board, a separate state, and
+// its Waiting Time as Working starts there (Board layout v4, 2026-10-21).
 func (f FoldResult) Add(t Transition) FoldResult {
+	firstWork := !f.EverWorking && t.New() == StatusWorking
 	f.EverWorking = f.EverWorking || t.New() == StatusWorking
 	class := ClassOf(t.New(), f.EverWorking)
-	if !f.Known || class != f.Class {
+	if !f.Known || class != f.Class || firstWork {
 		f.Since = t.ObservedAt()
 		f.SinceProvenance = t.Provenance()
 	}

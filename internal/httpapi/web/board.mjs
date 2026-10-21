@@ -11,19 +11,21 @@
 import {
   EVENT_NAMES,
   boardStatus,
+  boxKind,
   boxLabel,
   classLabel,
+  documentTitle,
   hasWaitingSince,
+  inNeedsYou,
   keyId,
   layout,
   modelViews,
-  neverWorking,
   streamDecision,
   streamLost,
   streamState,
   stripsKey,
   waitingLabel,
-  whereLabel,
+  tabLabel,
 } from "./order.mjs";
 
 const board = document.getElementById("board");
@@ -48,46 +50,47 @@ function el(tag, cls, text) {
 }
 
 // fillBox draws view into box, an article kept across updates so that it
-// keeps focus. It returns the Waiting Time element when it ticks.
+// keeps focus. It returns the Waiting Time element when it ticks. Four fixed
+// rows (the design approved on 2026-10-21): the tab and pane badge; the
+// workspace in the Needs you zone, else the directory (the group heading
+// already names the workspace); the Context Line; the heading, class and
+// Waiting Time.
 function fillBox(box, view, now) {
-  box.className = "box box--" + view.attention_class;
-  if (neverWorking(view)) box.classList.add("box--never-working");
+  box.className = "box box--" + boxKind(view);
 
-  // First, and the most prominent text: how the operator finds the pane.
-  // The workspace gives way before the tab: the tab is what a long workspace
-  // name would otherwise push out of sight.
-  const where = whereLabel(view);
+  // First, and the most prominent text: the tab, with the pane's position
+  // in it when the tab has more than one.
   const wh = el("p", "where");
-  if (view.workspace) wh.appendChild(el("span", "ws", view.workspace));
-  if (view.workspace && view.tab) wh.appendChild(el("span", "sep", "›"));
-  if (view.tab) wh.appendChild(el("span", "tab", view.tab));
-  if (where) wh.title = where;
+  wh.appendChild(el("span", "tab", tabLabel(view)));
+  if (view.pane_position) wh.appendChild(el("span", "pane", view.pane_position));
+
+  // Second: in the Needs you zone the workspace; in a workspace group the
+  // directory, truncated from the start in CSS, so the project segment stays
+  // visible.
+  let second;
+  if (inNeedsYou(view)) {
+    second = el("p", "workspace line", view.workspace);
+  } else {
+    second = el("p", "dir line");
+    if (view.directory) second.appendChild(el("bdi", null, view.directory));
+  }
 
   // Always present, so an empty Context Line keeps its row.
   const ctx = el("p", "context line", view.context_line);
-  if (view.context_line) ctx.title = view.context_line;
-  else ctx.setAttribute("aria-hidden", "true");
+  if (!view.context_line) ctx.setAttribute("aria-hidden", "true");
 
-  // Truncated from the start in CSS, so the project segment stays visible.
-  const dir = el("p", "dir line");
-  if (view.directory) {
-    dir.appendChild(el("bdi", null, view.directory));
-    dir.title = view.directory;
-  }
-
-  // Last row: profile · program on the left, the Attention Class and Waiting
-  // Time on the right, bold.
+  // Last row: the heading on the left, the class and Waiting Time on the
+  // right, bold and never truncated.
   const row = el("p", "status-row");
   row.appendChild(el("span", "heading", view.heading));
   const state = el("span", "state");
   state.appendChild(el("span", "class", classLabel(view)));
   const known = hasWaitingSince(view);
   const wait = el("span", known ? "wait" : "wait wait--none", waitingLabel(view, now));
-  if (!known) wait.title = "Waiting Time unknown";
   state.appendChild(wait);
   row.appendChild(state);
 
-  box.replaceChildren(wh, ctx, dir, row);
+  box.replaceChildren(wh, second, ctx, row);
   return known ? wait : null;
 }
 
@@ -113,12 +116,15 @@ function boxFor(view, now) {
   return b.box;
 }
 
-// setLabel sets a Box's aria-label at now, only when its text changes.
+// setLabel sets a Box's accessible name and hover title at now, only when
+// their text changes. The rows carry no titles of their own, so hovering
+// anywhere on the Box shows everything it holds, untruncated.
 function setLabel(b, now) {
   const label = boxLabel(b.view, now);
   if (label === b.label) return;
   b.label = label;
   b.box.setAttribute("aria-label", label);
+  b.box.title = label;
 }
 
 // place makes parent's element children exactly want, in order, moving only
@@ -131,32 +137,40 @@ function place(parent, want) {
   while (parent.children.length > want.length) parent.lastElementChild.remove();
 }
 
-function zone(label, heading) {
+function zone(label) {
   const z = el("section", "zone");
   z.setAttribute("aria-label", label);
-  z.appendChild(el("h2", "sr-only", heading));
   return z;
 }
 
-const topZone = zone("Needs you and Finished", "Needs you and Finished");
+// The Needs you zone has a plain, visible heading; the lower zone's heading is
+// for screen readers only, since each group's heading names its workspace.
+const topZone = zone("Needs you");
+const topHead = el("div", "group-head");
+topHead.appendChild(el("h2", "group-label", "Needs you"));
 const topGrid = el("div", "grid");
-topZone.appendChild(topGrid);
-const lowerZone = zone("Working and Unknown, by workspace", "Working and Unknown");
+topZone.append(topHead, topGrid);
+const lowerZone = zone("By workspace");
+lowerZone.appendChild(el("h2", "sr-only", "By workspace"));
 
-function groupFor(id, label) {
+function groupFor(id, label, counts) {
   let g = groups.get(id);
   if (!g) {
-    const group = el("div", "group");
-    const header = el("h3", "ws-header");
+    const group = el("section", "group");
+    const head = el("div", "group-head");
+    const header = el("h3", "group-label");
+    const count = el("span", "count");
+    head.append(header, count);
     const grid = el("div", "grid");
-    group.append(header, grid);
-    g = { group, header, grid };
+    group.append(head, grid);
+    g = { group, header, count, grid };
     groups.set(id, g);
   }
   if (g.header.textContent !== label) {
     g.header.textContent = label;
     g.header.title = label;
   }
+  if (g.count.textContent !== counts) g.count.textContent = counts;
   return g;
 }
 
@@ -221,6 +235,8 @@ function render() {
   }
   const views = modelViews(st.model);
   const { top, groups: lower } = layout(views);
+  const title = documentTitle(status.hideBoxes ? [] : views);
+  if (document.title !== title) document.title = title;
 
   // Boxes whose Agent is gone are dropped first, so no grid shuffles them.
   const live = new Set(views.map((v) => keyId(v.key)));
@@ -237,7 +253,7 @@ function render() {
   for (const g of lower) {
     const id = g.views[0].sort_key[1];
     groupIds.add(id);
-    const ge = groupFor(id, g.label);
+    const ge = groupFor(id, g.label, g.counts);
     place(ge.grid, g.views.map((v) => boxFor(v, now)));
     groupEls.push(ge.group);
   }

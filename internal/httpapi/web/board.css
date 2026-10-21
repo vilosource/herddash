@@ -1,5 +1,6 @@
-/* The Board (Story 3.7), in the design the operator approved on 2026-10-20:
-   docs/design/board-design.md and docs/design/board.html. System fonts only.
+/* The Board (Story 3.7), in the design the operator approved on 2026-10-20 and amended on
+   2026-10-21 (Needs you alone on top, every other Agent in its workspace's group, the tab and
+   pane position first): docs/design/board-design.md. System fonts only.
    The connection and version strips are Story 3.9's, in the same design. */
 
 /* ---- Tokens: light (default) ---- */
@@ -10,14 +11,15 @@
   --space-1: 0.25rem; --space-2: 0.5rem; --space-3: 0.75rem;
   --space-4: 1rem;    --space-5: 1.5rem; --space-6: 2rem;
 
-  --text-label: 0.8125rem;   /* class label, workspace header */
-  --text-meta: 0.875rem;     /* directory, workspace and tab */
-  --text-body: 1rem;         /* Context Line, quiet Waiting Time */
-  --text-where: 1.25rem;     /* workspace › tab, a Box's first and largest line */
+  --text-label: 0.8125rem;   /* class label, directory */
+  --text-meta: 0.875rem;     /* workspace, heading, group counts */
+  --text-body: 1rem;         /* Context Line, Waiting Time */
+  --text-where: 1.25rem;     /* the tab, a Box's first and largest line */
   --text-time-loud: 1.125rem; /* Needs you Waiting Time, in the last row */
+  --text-group: 1.375rem;    /* workspace group and Needs you headings */
 
   --box-min: 17rem;   /* narrowest column before the grid drops one */
-  --box-h: 9.5rem;    /* every Box, whatever its content: 4 rows + gaps + padding */
+  --box-h: 8.25rem;   /* every Box, whatever its content: 4 rows + gaps + padding */
   --radius: 0.5rem;
 
   --bg: #F3F4F6;
@@ -39,6 +41,12 @@
   --working-accent: #2D5A96;
   --working-edge: #3E6FB0;
 
+  --idle-accent: #5A616E;
+  --idle-edge: #7E8592;
+
+  --badge-bg: #E4E7EC;
+  --badge-ink: #2B313B;
+
   --focus: #1D4ED8;
 
   --strip-disc-bg: #3A4150;  --strip-disc-ink: #FFFFFF;
@@ -56,6 +64,8 @@
     --needs-bg: #FF7A59; --needs-ink: #1A0703; --needs-ink-2: #3D1307; --needs-ring: #FFB199;
     --finished-accent: #5BD69A; --finished-edge: #3FB37B;
     --working-accent: #8DB6EE; --working-edge: #5B8FD6;
+    --idle-accent: #A7AEBA; --idle-edge: #6B7380;
+    --badge-bg: #2A303A; --badge-ink: #DDE1E7;
     --focus: #7AA2FF;
     --strip-disc-bg: #323946; --strip-disc-ink: #E9EBEF;
     --strip-adv-bg: #3D2E05;  --strip-adv-ink: #FFE7A3;
@@ -92,40 +102,46 @@ body {
 .strip--refused      { background: var(--strip-ref-bg);  color: var(--strip-ref-ink); }
 .strip .time { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 
-/* ---- Board: two zones ---- */
+/* ---- Board: the Needs you zone, then one group per workspace ---- */
 .board { padding: var(--space-4); }
-.zone + .zone { margin-top: var(--space-6); }
+.zone + .zone { margin-top: var(--space-5); }
 .grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--box-min)), 1fr));
   gap: var(--space-3);
 }
-/* Lower zone: one thin workspace header per group. The first one also draws the zone line. */
+/* A heading per group: the workspace large and bold with its counts, or "Needs you".
+   Every heading after the first on the page draws a thin rule above it. */
 .group + .group { margin-top: var(--space-5); }
-.ws-header {
-  margin: 0 0 var(--space-2);
-  padding-top: var(--space-2);
+.group-head {
+  display: flex; align-items: baseline; gap: 0.6rem; min-width: 0;
+  margin: 0 0 0.6rem;
+  padding-top: var(--space-4);
   border-top: 1px solid var(--border);
-  color: var(--ink-muted);
-  font-size: var(--text-label);
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  line-height: 1.25rem;
+}
+.board > .zone:first-child > .group-head,
+.board > .zone:first-child > .group:first-of-type > .group-head { border-top: 0; padding-top: 0; }
+.group-label {
+  margin: 0; min-width: 0;
+  color: var(--ink);
+  font-size: var(--text-group);
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-/* Empty top zone: the first workspace header draws no separator rule. */
-.board > .zone:first-child > .group:first-of-type > .ws-header { border-top: 0; padding-top: 0; }
+.group-head .count { flex: 0 0 auto; color: var(--ink-muted); font-size: var(--text-meta); white-space: nowrap; }
 
-/* ---- Box: fixed height, five fixed rows ---- */
+/* ---- Box: fixed height, four fixed rows ---- */
 .box {
   container-type: inline-size;
   height: var(--box-h);
   overflow: hidden;
   display: grid;
-  grid-template-rows: 2rem 1.5rem 1.25rem 1.75rem; /* where, context, dir, status row */
-  row-gap: var(--space-1);
+  grid-template-rows: 2rem 1.25rem 1.5rem 1.5rem; /* tab, workspace or directory, context, status row */
+  row-gap: 0.15rem;
   align-content: start;
-  padding: var(--space-3) var(--space-4);
+  padding: 0.65rem var(--space-4);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--bg);
@@ -135,8 +151,8 @@ body {
 .line { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .status-row { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-3); align-self: end; min-width: 0; }
 .status-row .heading { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.status-row .state { flex: 0 1 auto; min-width: 0; display: flex; align-items: baseline; gap: var(--space-2); white-space: nowrap; }
-.status-row .class { flex: 0 0 auto; }
+/* The class and Waiting Time never give way: the heading does. */
+.status-row .state { flex: 0 0 auto; display: flex; align-items: baseline; gap: var(--space-2); white-space: nowrap; }
 .class {
   font-size: var(--text-label);
   font-weight: 700;
@@ -145,26 +161,30 @@ body {
   white-space: nowrap;
 }
 .wait {
-  min-width: 0; overflow: hidden; text-overflow: ellipsis;
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   font-size: var(--text-body);
   font-weight: 700;
   line-height: 1;
   white-space: nowrap;
+  color: var(--ink);
 }
+/* The tab, with the pane-position badge right-aligned when the tab has more than one pane. */
 .where {
-  display: flex; align-items: baseline; gap: 0.35em; min-width: 0; white-space: nowrap;
-  font-size: var(--text-where); font-weight: 700; line-height: 2rem; color: var(--ink); align-self: center;
+  display: flex; align-items: center; gap: 0.35em; min-width: 0; white-space: nowrap;
+  font-size: var(--text-where); font-weight: 700; line-height: 2rem; color: var(--ink);
 }
-/* The workspace shrinks first; the tab keeps its width unless it alone is too long. */
-.where .ws { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.where .sep { flex: 0 0 auto; }
-.where .tab { flex: 0 0 auto; min-width: 0; max-width: 75%; overflow: hidden; text-overflow: ellipsis; }
-.where .tab:only-child, .where .ws:only-child { max-width: none; }
+.where .tab { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.where .pane {
+  flex: 0 0 auto; margin-left: auto;
+  padding: 0.1rem 0.45rem; border-radius: 999px;
+  background: var(--badge-bg); color: var(--badge-ink);
+  font-size: 0.75rem; font-weight: 700; letter-spacing: 0.05em; line-height: 1.25; text-transform: uppercase;
+}
+.workspace { font-size: var(--text-meta); font-weight: 600; line-height: 1.25rem; color: var(--ink-muted); }
 .context { font-size: var(--text-body); line-height: 1.5rem; }
-.dir, .heading { font-size: var(--text-meta); line-height: 1.25rem; }
-.heading { font-weight: 400; }
+.dir { font-size: var(--text-label); line-height: 1.25rem; color: var(--ink-faint); }
+.heading { font-size: var(--text-meta); line-height: 1.25rem; font-weight: 400; }
 /* Directory truncates from the start, so the last segment (the project) stays visible. */
 .dir { font-family: var(--font-mono); direction: rtl; text-align: left; }
 .dir > bdi { direction: ltr; unicode-bidi: isolate; }
@@ -174,13 +194,15 @@ body {
   background: var(--needs-bg);
   color: var(--needs-ink-2);
   border: 3px solid var(--needs-ring);
-  padding: calc(var(--space-3) - 2px) calc(var(--space-4) - 2px);
+  padding: calc(0.65rem - 2px) calc(var(--space-4) - 2px);
 }
 .box--needs_you .class { color: var(--needs-ink); font-size: var(--text-meta); }
 .box--needs_you .wait { color: var(--needs-ink); font-size: var(--text-time-loud); font-weight: 800; }
 .box--needs_you .where,
 .box--needs_you .context { color: var(--needs-ink); }
 .box--needs_you .context { font-weight: 600; }
+.box--needs_you .workspace, .box--needs_you .heading { color: var(--needs-ink-2); }
+.box--needs_you .pane { background: var(--needs-ink); color: var(--needs-bg); }
 
 /* Finished: quieter. Raised surface, coloured leading edge, labelled. */
 .box--finished {
@@ -190,7 +212,6 @@ body {
   padding-left: calc(var(--space-4) - 5px);
 }
 .box--finished .class { color: var(--finished-accent); }
-.box--finished .wait { color: var(--ink); }
 .box--finished .context { color: var(--ink); }
 
 /* Working: a blue leading edge like Finished's green one, flush with the page, so it reads as
@@ -203,8 +224,16 @@ body {
 .box--unknown .class { color: var(--ink-muted); font-weight: 600; }
 .box--unknown .where { color: var(--ink-muted); font-weight: 600; }
 .box--unknown { border-style: dashed; border-color: var(--border-quiet); }
-/* An idle Agent never seen working: no Waiting Time emphasis at all. */
-.box--never-working .wait { color: var(--ink-faint); font-size: var(--text-meta); }
+/* Idle (class working, Status anything but working): a grey edge, labelled, and no Waiting
+   Time emphasis. */
+.box--idle {
+  border-left: 6px solid var(--idle-edge);
+  padding-left: calc(var(--space-4) - 5px);
+}
+.box--idle .class { color: var(--idle-accent); }
+.box--idle .wait { color: var(--ink-faint); font-weight: 600; }
+.box--unknown .wait { color: var(--ink-muted); }
+.box--idle .where, .box--idle .context { color: var(--ink-muted); }
 .wait--none { color: var(--ink-faint); }
 
 /* Disconnected, or the Daemon's stream lost: every Box dimmed, never hidden. */
