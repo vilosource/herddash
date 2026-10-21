@@ -1,7 +1,9 @@
-# ADR-0008: Background work from Claude Code's session files
+# ADR-0009: Background work from Claude Code's session transcripts
 
 **Status: Proposed.** Written 2026-10-21 at the operator's request, after a dogfooding
-investigation. Not accepted until the operator approves it; nothing in it is built yet.
+investigation, first as ADR-0008. The operator split it on 2026-10-21: reading the session record
+became [ADR-0008](0008-claude-code-session-record-as-status-authority.md) (accepted); reading the
+transcript, below, waits for a separate decision. Nothing in it is built yet.
 
 ## Context
 
@@ -51,10 +53,8 @@ an ADR.
 
 ## Decision
 
-- **Source.** For each `claude` Agent whose process is known (from Profile resolution), the Daemon
-  reads `<config dir>/sessions/<pid>.json`, taking the config dir from the same
-  `CLAUDE_CONFIG_DIR` it already reads (default `~/.claude`), for `sessionId` and `cwd` only. It
-  never opens a `.key` file or any other file in that directory.
+- **Source.** The session record that ADR-0008 already reads gives the Agent's `sessionId` and
+  `cwd`, and so its transcript's path.
 - **Transcript, markers only.** It tails that session's transcript from the end it last read
   (offset kept in memory; from the start on first sight, bounded to the last N MB), decoding each
   line only far enough to find the three markers above, by fixed field names. It extracts task

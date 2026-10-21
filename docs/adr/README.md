@@ -25,4 +25,5 @@ a new ADR that supersedes it and say so in both.
 | [0005](0005-append-only-transition-record.md) | The stored record is append-only, keyed by Host, Server, server epoch and pane | Accepted |
 | [0006](0006-how-herddash-speaks-to-herdr.md) | How herddash speaks to herdr | Accepted |
 | [0007](0007-read-only-loopback-http-surface.md) | A read-only HTTP surface on loopback | Accepted |
-| [0008](0008-background-work-from-claude-code-session-files.md) | Background work from Claude Code's session files | Proposed |
+| [0008](0008-claude-code-session-record-as-status-authority.md) | Claude Code's session record as a second authority for Needs you | Accepted |
+| [0009](0009-background-work-from-claude-code-transcripts.md) | Background work from Claude Code's session transcripts | Proposed |
