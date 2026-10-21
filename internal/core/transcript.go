@@ -49,6 +49,10 @@ type transcriptRecord struct {
 //     string starts that background command;
 //   - a toolUseResult with isAsync true, status "async_launched" and an
 //     agentId starts that subagent;
+//   - a user record whose toolUseResult has a string task_type and a task_id
+//     (TaskStop's result) ends that task as killed: a task stopped this way
+//     gets no notification (seen 2026-10-21 for every background command
+//     left open in four transcripts);
 //   - a queue-operation record, operation "enqueue", whose content is a
 //     string starting "<task-notification>" ends the task in its
 //     <task-id>, when its <status> closes it;
@@ -68,6 +72,9 @@ func DecodeTranscriptLine(line []byte) (TranscriptLine, bool) {
 	case "user":
 		l.TurnStarted = !rec.IsSidechain
 		l.StartID, l.StartCommand = taskStart(rec.ToolUseResult)
+		if id := taskStopped(rec.ToolUseResult); id != "" {
+			l.EndID, l.EndStatus = id, "killed"
+		}
 	case "assistant":
 		if !rec.IsSidechain && stopReason(rec.Message) == "end_turn" {
 			l.TurnEnded = true
@@ -115,6 +122,25 @@ func taskStart(raw json.RawMessage) (id string, command bool) {
 		return id, false
 	}
 	return "", false
+}
+
+// taskStopped reads a toolUseResult for TaskStop's result, which names the
+// task it stopped in task_id beside a task_type; "" when it is not one.
+func taskStopped(raw json.RawMessage) string {
+	if !isObject(raw) {
+		return ""
+	}
+	var r struct {
+		TaskID   json.RawMessage `json:"task_id"`
+		TaskType json.RawMessage `json:"task_type"`
+	}
+	if json.Unmarshal(raw, &r) != nil || jsonString(r.TaskType) == "" {
+		return ""
+	}
+	if id := jsonString(r.TaskID); taskID(id) {
+		return id
+	}
+	return ""
 }
 
 // stopReason is message.stop_reason, "" when absent or not a string.

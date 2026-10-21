@@ -141,6 +141,13 @@ func TestTranscriptPrivacy(t *testing.T) {
 	}
 }
 
+// taskStop is TaskStop's tool result for id, shaped as observed on
+// 2026-10-21 (all text invented).
+func taskStop(id string) string {
+	return `{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"stopped"}]},` +
+		`"toolUseResult":{"command":"sleep 99","message":"Successfully stopped task","task_id":"` + id + `","task_type":"local_bash"}}`
+}
+
 // TestTranscriptMatrix covers the matrix's decoder rows.
 func TestTranscriptMatrix(t *testing.T) {
 	for name, tc := range map[string]struct {
@@ -154,6 +161,8 @@ func TestTranscriptMatrix(t *testing.T) {
 		"main turn over, subagent running": {[]string{prompt, agentStart, endTurn}, 1, true},
 		"working with bg":                  {[]string{prompt, bgStart, toolUse}, 1, false},
 		"notification without status":      {[]string{bgStart, notify("bx1", "")}, 1, false},
+		"stopped by TaskStop":              {[]string{prompt, bgStart, taskStop("bx1"), endTurn}, 0, true},
+		"TaskStop of another id":           {[]string{prompt, bgStart, taskStop("zz9"), endTurn}, 1, true},
 		"unknown status stays open":        {[]string{bgStart, notify("bx1", "running")}, 1, false},
 		"other id's notification":          {[]string{bgStart, notify("zz9", "completed")}, 1, false},
 		"sidechain end_turn":               {[]string{prompt, sideEnd}, 0, false},
