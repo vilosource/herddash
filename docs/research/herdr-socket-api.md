@@ -479,6 +479,13 @@ string, so `events_lost` has no generated type. A client recognises it by matchi
 - **A pane can change id.** `pane_moved` carries `previous_pane_id`, and pane ids are scoped to their
   workspace (`w1:p1`). Untested here; a move across workspaces would look like one pane closing and
   another appearing unless the engine follows `pane.moved`.
+- **A zoomed tab keeps its layout.** *Added 2026-10-21, against an isolated herdr 0.9.5 (a
+  one-off probe under `env -i` with its own `HOME`, the same isolation as
+  `herdr-0.9.5-probe.sh`).* With one pane left and two stacked right (120×40), `pane.zoom` on the
+  left pane set the snapshot layout's `zoomed` to true but left every pane's `rect` as it was;
+  turning zoom off changed nothing either. Zoom on and zoom off each emitted one `layout_updated`.
+  So pane positions computed from `rect` (`core.PanePositions`) do not change while a pane is
+  zoomed, and herddash can ignore `zoomed`.
 
 ## Open items
 

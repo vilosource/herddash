@@ -1,5 +1,6 @@
-// Hand-run headless-Chrome check of the Board's connection and version strips
-// (Story 3.9). Not embedded, not run in CI.
+// Hand-run headless-Chrome check of the Board's Boxes and workspace groups
+// (layout v4) and of its connection and version strips (Story 3.9). Not
+// embedded, not run in CI.
 //
 //   go build -o /tmp/herddash ./cmd/herddash
 //   node internal/httpapi/web/check/board-browser.mjs /tmp/herddash
@@ -53,10 +54,26 @@ const SNAPSHOT = {
     version: "0.9.5",
     protocol: 22,
     workspaces: [{ workspace_id: "w1", number: 1, label: "probe", focused: true, pane_count: 1, tab_count: 1, active_tab_id: "w1:t1", agent_status: "working" }],
-    tabs: [{ tab_id: "w1:t1", workspace_id: "w1", number: 1, label: "1", focused: true, pane_count: 1, agent_status: "working" }],
-    panes: [{ pane_id: "w1:p1", terminal_id: "t1", workspace_id: "w1", tab_id: "w1:t1", focused: true, agent: "claude", agent_status: "working", revision: 0 }],
-    layouts: [],
-    agents: [{ terminal_id: "t1", agent: "claude", agent_status: "working", workspace_id: "w1", tab_id: "w1:t1", pane_id: "w1:p1", focused: true, state_change_seq: 3, revision: 0 }],
+    tabs: [{ tab_id: "w1:t1", workspace_id: "w1", number: 1, label: "1: build", focused: true, pane_count: 2, agent_status: "blocked" }],
+    panes: [
+      { pane_id: "w1:p1", terminal_id: "t1", workspace_id: "w1", tab_id: "w1:t1", focused: true, cwd: "/srv/proj", agent: "claude", agent_status: "working", revision: 0 },
+      { pane_id: "w1:p2", terminal_id: "t2", workspace_id: "w1", tab_id: "w1:t1", focused: false, cwd: "/srv/proj", agent: "claude", agent_status: "blocked", revision: 0 },
+    ],
+    layouts: [
+      {
+        workspace_id: "w1", tab_id: "w1:t1", zoomed: false, focused_pane_id: "w1:p1",
+        area: { x: 0, y: 0, width: 120, height: 40 },
+        panes: [
+          { pane_id: "w1:p1", focused: true, rect: { x: 0, y: 0, width: 60, height: 40 } },
+          { pane_id: "w1:p2", focused: false, rect: { x: 60, y: 0, width: 60, height: 40 } },
+        ],
+        splits: [],
+      },
+    ],
+    agents: [
+      { terminal_id: "t1", agent: "claude", agent_status: "working", workspace_id: "w1", tab_id: "w1:t1", pane_id: "w1:p1", focused: true, state_change_seq: 3, revision: 0 },
+      { terminal_id: "t2", agent: "claude", agent_status: "blocked", workspace_id: "w1", tab_id: "w1:t1", pane_id: "w1:p2", focused: false, state_change_seq: 2, revision: 0 },
+    ],
   },
 };
 
@@ -85,7 +102,7 @@ function fakeHerdr(path, version) {
           reply(SNAPSHOT);
           break;
         case "pane.process_info":
-          reply({ type: "pane_process_info", process_info: { pane_id: "w1:p1", shell_pid: 1, foreground_processes: [] } });
+          reply({ type: "pane_process_info", process_info: { pane_id: req.params.pane_id, shell_pid: 1, foreground_processes: [] } });
           break;
         case "events.subscribe":
           reply({ type: "subscription_started" }); // held open until the client closes it
@@ -185,6 +202,23 @@ const SNAP = `JSON.stringify({
   boxes: document.querySelectorAll("#board .box").length,
 })`;
 
+// Each Box in document order: where it sits and what its four rows say.
+const BOXES = `JSON.stringify({
+  title: document.title,
+  headings: [...document.querySelectorAll("#board .group-head")].map((h) => h.textContent),
+  boxes: [...document.querySelectorAll("#board .box")].map((b) => ({
+    kind: b.className,
+    inGroup: !!b.closest(".group"),
+    tab: b.querySelector(".tab")?.textContent,
+    pane: b.querySelector(".pane")?.textContent ?? null,
+    second: b.children[1]?.className,
+    secondText: b.children[1]?.textContent,
+    rows: b.children.length,
+    height: b.getBoundingClientRect().height,
+    titleIsLabel: b.title !== "" && b.title === b.getAttribute("aria-label"),
+  })),
+})`;
+
 async function main() {
   const browser = await chrome();
   const snap = async () => JSON.parse(await browser.eval(SNAP));
@@ -199,6 +233,26 @@ async function main() {
     await browser.open("http://" + addr + "/");
     let s = await until("a Box", async () => ((await snap()).boxes > 0 ? snap() : null));
     check("connected: no strip, Boxes not dimmed", s.strips.length === 0 && !s.stale, s);
+
+    const b = await until("both Boxes", async () => {
+      const x = JSON.parse(await browser.eval(BOXES));
+      return x.boxes.length === 2 ? x : null;
+    });
+    const [needs, work] = b.boxes;
+    check("title carries the Needs you count", b.title === "(1) herddash · Needs you", b);
+    check("headings: Needs you, then the workspace with its counts", b.headings.join("|") === "Needs you|probe1 working", b);
+    check(
+      "Needs you Box: top zone, tab, right badge, workspace second",
+      needs.kind === "box box--needs_you" && !needs.inGroup && needs.tab === "1: build" && needs.pane === "right" &&
+        needs.second === "workspace line" && needs.secondText === "probe",
+      needs,
+    );
+    check(
+      "Working Box: in its group, left badge, directory second",
+      work.kind === "box box--working" && work.inGroup && work.pane === "left" && work.second === "dir line" && work.secondText === "/srv/proj",
+      work,
+    );
+    check("four rows, one height, title equals the accessible name", b.boxes.every((x) => x.rows === 4 && x.titleIsLabel && x.height === needs.height), b);
 
     await herdr.stop();
     s = await until("the disconnected strip", async () => ((await snap()).strips.length ? snap() : null));

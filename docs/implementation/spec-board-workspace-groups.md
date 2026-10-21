@@ -143,11 +143,11 @@ Three reviewers (blind, edge-case, verification-gap) on 2026-10-21.
   0.3.0 Agent for Agent.
 - **Kept — `isIdle` reads the Status.** The spec allows exactly this derivation, and it is the
   same rule as core's rank.
-- **Deferred — zoomed tabs** (UNVERIFIED what herdr reports for `zoomed: true`); **workspaces with
+- **Deferred — zoomed tabs** (resolved 2026-10-21 on `fix/board-followups`: an isolated herdr 0.9.5 keeps every `rect` while zoomed, recorded in the socket API record, so no change); **workspaces with
   an unknown position share one group** (pre-existing); **counts leave out Unknown** (as the spec
   says); **the title keeps its count while disconnected** (the strip says the data is stale);
   **an empty tab repeats the workspace in Needs you** (as the spec says); **no DOM test of
-  `fillBox`** (checked by screenshot, as Stories 3.7–3.9 were).
+  `fillBox`** (added 2026-10-21 to the hand-run `check/board-browser.mjs`).
 
 ## Verification
 
