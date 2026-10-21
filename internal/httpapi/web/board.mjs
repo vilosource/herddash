@@ -60,7 +60,10 @@ function fillBox(box, view, now) {
   if (!known) wait.title = "Waiting Time unknown";
   row.appendChild(wait);
 
-  const heading = el("p", "heading line", view.heading);
+  // Second, and the most prominent text: how the operator finds the pane.
+  const where = whereLabel(view);
+  const wh = el("p", "where line", where);
+  if (where) wh.title = where;
 
   // Always present, so an empty Context Line keeps its row.
   const ctx = el("p", "context line", view.context_line);
@@ -74,11 +77,10 @@ function fillBox(box, view, now) {
     dir.title = view.directory;
   }
 
-  const where = whereLabel(view);
-  const wh = el("p", "where line", where);
-  if (where) wh.title = where;
+  // Last and quiet: profile · program.
+  const heading = el("p", "heading line", view.heading);
 
-  box.replaceChildren(row, heading, ctx, dir, wh);
+  box.replaceChildren(row, wh, ctx, dir, heading);
   return known ? wait : null;
 }
 

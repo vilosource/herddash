@@ -49,15 +49,21 @@ their row, with no stray separator and no tooltip. The rows, in reading order:
    two digits: `0s` to `59s`, `1m` to `59m`, `1h 00m` to `23h 59m`, then `1d 00h` onwards. In a
    narrow Needs you Box the time steps down to 1.5rem, so `≥ 23h 59m` fits. An ellipsis is the
    last resort.
-2. **Heading**, `profile · program` exactly as the API sends it, so `unresolved · claude` and `codex`.
+2. **Workspace › tab**, which is how the operator finds the pane in herdr, in the Box's most
+   prominent text (heading size and weight). An empty label is left out together with its `›`.
 3. **Context Line**: one line, ellipsis, full text in `title`. The row is always present, so an
    empty Context Line keeps its space.
 4. **Directory** (monospace), with full text in `title`. When it is too long it is truncated from
    the start (`…sted/path/to/the-project-name`), so the last segment, the project, stays
    visible. `~` for the home directory is substituted by the Daemon (`core.ShortenDir`, AD-1),
    not by the Board. Story 3.7 checks that it arrives that way.
-5. **Workspace › tab**, which is how the operator finds the pane in herdr. An empty label is
-   left out together with its `›`.
+5. **Heading**, `profile · program` exactly as the API sends it, so `unresolved · claude` and
+   `codex`, in the quiet meta style.
+
+*Changed 2026-10-21 at the operator's request:* workspace › tab moved from the last row to the
+second, taking the heading's prominence, and the heading moved to the last row. Glancing at a Box
+must say at once where the pane is. The rows' heights and the Box's height are unchanged.
+`docs/design/board.html` predates the change.
 
 **Order.** Boxes arrive sorted by `sort_key`. A Board that re-sorts must tie-break exactly as the
 Daemon does (`internal/core/view.go`, `SortKey.compare`): zone, group, class rank, start, then
@@ -128,7 +134,7 @@ zone by workspace. Each zone has a visually hidden heading, and workspace labels
 Each Box is focusable and shows a 3px `--focus` outline offset outside it, and the review
 toolbar's controls show the same outline. Boxes are focusable so that keyboard and screen-reader
 users can read a Box in full. Each Box's accessible name carries its Attention Class, Waiting Time
-("at least" for a lower bound), heading, full Context Line, directory, and workspace and tab, and
+("at least" for a lower bound), workspace and tab, full Context Line, directory, and heading, and
 it is kept current as the time ticks. Focusing a Box does nothing else. Needs you is conveyed in
 text, not only colour.
 
