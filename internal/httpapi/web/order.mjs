@@ -313,7 +313,7 @@ export function applyEvent(model, name, data) {
         if (agents.has(id)) return bad("has two AgentViews for one AgentKey");
         agents.set(id, v);
       }
-      return { model: { agents, connection: d.connection } };
+      return { model: { agents, connection: d.connection, runId: d.run_id } };
     }
     case "agent": {
       if (!validView(d)) return bad("is not an AgentView");
@@ -410,6 +410,9 @@ export function streamDecision(st, input) {
       const r = applyEvent(st.model, input.name, input.data);
       if (r.warning) return { st, warning: r.warning };
       if (input.name === "state") {
+        // Another Daemon run, such as one restarted onto a new build: the page
+        // reloads, so it never draws new data with old code.
+        if (st.model.runId && r.model.runId && r.model.runId !== st.model.runId) return { st, reload: true };
         return { st: { ...st, model: r.model, awaitingState: false, delay: RECONNECT_START_MS, lostSince: null } };
       }
       return r.model === st.model ? { st } : { st: { ...st, model: r.model } };

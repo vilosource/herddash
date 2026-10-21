@@ -162,6 +162,11 @@ connection comes first, then version.
 - **Refused** (`gate: refused`): a red strip naming `herdr_version` and `herdr_minimum` and saying
   nothing is being recorded. No Boxes are shown.
 
+**A restarted Daemon reloads the page.** *Added 2026-10-21.* When the stream's `state` event
+comes from another Daemon run (`run_id`), such as a Daemon restarted onto a new build, the Board
+reloads itself, so an open tab never draws new data with old code. A reconnect to the same run
+does not reload.
+
 ## Responsive behaviour
 
 The layout runs from a side window of about 320px, with one column and a 16px gutter, to a wide

@@ -294,6 +294,10 @@ function tick() {
 function step(input) {
   const before = st.model;
   const d = streamDecision(st, input);
+  if (d.reload) {
+    location.reload();
+    return;
+  }
   st = d.st;
   if (d.warning) console.warn("herddash: " + d.warning);
   if (d.reopenAfter !== undefined) {

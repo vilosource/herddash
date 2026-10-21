@@ -946,3 +946,20 @@ test("formatAge keeps seconds below an hour, then follows formatDuration", () =>
   assert.equal(formatAge(86400000), "1d 00h");
   assert.equal(clockUTC(Date.UTC(2026, 0, 2, 3, 4, 5)), "03:04:05 UTC");
 });
+
+test("stream: a state from another Daemon run reloads the page; the same run does not", () => {
+  const source = {};
+  const state = (run) =>
+    JSON.stringify({ run_id: run, agents: fixture.input.map((i) => i.view), connection: fixtureConnection, headers: fixture.headers });
+  let { st } = streamDecision(streamState(), { kind: "open", source });
+  let d = streamDecision(st, { kind: "event", source, name: "state", data: state("run-a") });
+  assert.equal(d.reload, undefined, "the first state");
+  st = d.st;
+  ({ st } = streamDecision(st, { kind: "open", source }));
+  d = streamDecision(st, { kind: "event", source, name: "state", data: state("run-a") });
+  assert.equal(d.reload, undefined, "a reconnect to the same run");
+  st = d.st;
+  ({ st } = streamDecision(st, { kind: "open", source }));
+  d = streamDecision(st, { kind: "event", source, name: "state", data: state("run-b") });
+  assert.equal(d.reload, true, "a restarted Daemon");
+});
