@@ -98,6 +98,8 @@ same way locally. Merging the held release-please PR #2 stays the operator's dec
 
 ## Implementation Notes
 
+- **Acceptance criterion 2 checked, 2026-10-21.** The operator approved and PR #2 was merged (`f043f63`). release-please created tag and release `v0.1.0`, and `release.yml` (run on `workflow_run`, success) attached `herddash_0.1.0_{darwin_arm64,darwin_amd64,linux_amd64,linux_arm64}` and `SHA256SUMS`. A `curl` download of the darwin/arm64 asset passed `grep … SHA256SUMS | shasum -a 256 -c -` and printed `herddash 0.1.0 (f043f6386991)`, the tag's commit. Before that, an ordinary push (`3dbe1ba`) ran the workflow's no-op path: "no v* tag with a release … nothing to do", success.
+
 - Acceptance criterion 2 (assets attached to the first real release) can only be checked after the operator merges release-please PR #2; the story stays `review` in sprint-status until then. `actionlint` v1.7.7 passes on all three workflows.
 
 ## Spec Change Log
