@@ -41,8 +41,9 @@ panel. The Board showed it Finished; the operator noticed only by looking at the
   ends. Its provenance is `live`. A new nullable column `observed_by` says who observed it:
   `claude_session` for these, NULL for herdr as before. Migration 0003 adds the column with
   `ALTER TABLE … ADD COLUMN` and a CHECK, so no table is rebuilt and existing rows are untouched.
-  Its `observed_at` is the record's `statusUpdatedAt` when that is not in the future and not
-  before the Agent's previous Transition, else the time it was read.
+  Its `observed_at` is the record's `statusUpdatedAt` when that is not in the future, raised to
+  the Agent's previous Transition when it is earlier (Claude Code stamps a few milliseconds
+  before herdr reports the same moment), else the time it was read.
 - **Polling.** Every 2 s per `claude` Agent with a known pid; a read is a small local file read,
   off the actor, bounded by a timeout, skipped while the previous one runs.
 - **Failure is quiet and safe.** A missing or unreadable record, a `pid` mismatch, or a shape that

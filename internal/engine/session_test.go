@@ -410,7 +410,16 @@ func TestSessionObservedAtBad(t *testing.T) {
 			if len(want) > 0 {
 				prev = core.StatusIdle
 			}
-			want = append(want, sessionRow{prev, core.StatusBlocked, core.ObservedByClaudeSession, 2_000, core.ProvenanceLive})
+			// A stamp earlier than the Agent's previous Transition is clamped to
+			// it; one in the future, or none, gives the read time.
+			at := int64(2_000)
+			switch name {
+			case "before the first sight":
+				at = 0
+			case "before the last transition":
+				at = 1_000
+			}
+			want = append(want, sessionRow{prev, core.StatusBlocked, core.ObservedByClaudeSession, at, core.ProvenanceLive})
 			r.expectSessionRows(t, want...)
 		})
 	}

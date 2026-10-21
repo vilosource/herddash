@@ -50,7 +50,7 @@ func TestSessionObservedAt(t *testing.T) {
 		{"same as previous", 400, 400, 600, 400},
 		{"same as read", 600, 400, 600, 600},
 		{"in the future", 700, 400, 600, 600},
-		{"before the previous Transition", 300, 400, 600, 600},
+		{"before the previous Transition: clamped to it", 300, 400, 600, 400},
 		{"unknown", 0, 400, 600, 600},
 		{"negative", -5, 0, 600, 600},
 		{"no previous", 500, 0, 600, 500},

@@ -50,12 +50,15 @@ func EffectiveStatus(program AgentProgram, herdr Status, session string) Status 
 }
 
 // SessionObservedAt is the observed_at of a Transition the session record
-// caused: the record's statusUpdatedAt when it is known, not after readAt and
-// not before previous, the Agent's previous Transition; readAt otherwise. All
-// three are UTC Unix milliseconds.
+// caused: the record's statusUpdatedAt when it is known and not after readAt,
+// raised to previous, the Agent's previous Transition, when it is earlier;
+// readAt otherwise. All three are UTC Unix milliseconds. Claude Code stamps
+// its status a few milliseconds before herdr reports the same moment (seen
+// 2026-10-21: waiting at 15:42:24.741, herdr's done after it), so an earlier
+// stamp is clamped, not discarded.
 func SessionObservedAt(statusUpdatedAt, previous, readAt int64) int64 {
-	if statusUpdatedAt > 0 && statusUpdatedAt <= readAt && statusUpdatedAt >= previous {
-		return statusUpdatedAt
+	if statusUpdatedAt > 0 && statusUpdatedAt <= readAt {
+		return max(statusUpdatedAt, previous)
 	}
 	return readAt
 }
