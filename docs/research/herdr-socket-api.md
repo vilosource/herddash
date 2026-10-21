@@ -492,6 +492,14 @@ string, so `events_lost` has no generated type. A client recognises it by matchi
   group (pgid = its pid), so `pane.process_info` does not show those shells, and herdr reports a
   Claude Code agent waiting on a background shell as `done`. herddash reads the agent process's
   children itself (`procenv.Children`) to tell that apart from Finished.
+- **A Claude Code question dialog went undetected.** *Added 2026-10-21, from the live server's
+  record on this machine, as ADR-0008 records it; not reproduced in isolation.* The Claude Code
+  agent in tab `6: DNS` (pane `wB:pE`) was reported `blocked` at 14:52:01, 14:59:28 and 15:00:59
+  for Claude Code's ordinary prompts, but `done` at 15:13:15 and `idle` at 15:17:15 while it
+  showed the question dialog in its side-by-side form with a preview panel. Claude Code's own
+  `<config dir>/sessions/<pid>.json` said `status: "waiting"` from 15:13:15 and still at 15:32.
+  herdr's screen detection evidently does not recognise that dialog's layout: a herdr detection
+  gap, to be reported upstream. herddash reads that record for `waiting` (ADR-0008).
 
 ## Open items
 

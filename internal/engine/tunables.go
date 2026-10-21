@@ -55,6 +55,13 @@ const (
 	// children; a read that outlives it is abandoned and counts as no
 	// background work.
 	defaultBackgroundTimeout = 2 * time.Second
+	// defaultSessionInterval is how often the engine reads a Claude Code
+	// Agent's session record for whether it waits on the operator (ADR-0008).
+	defaultSessionInterval = 2 * time.Second
+	// defaultSessionTimeout bounds one read of that record, with the
+	// environment read that finds its configuration directory; a read that
+	// outlives it is abandoned and counts as no record.
+	defaultSessionTimeout = time.Second
 	// defaultRetentionSweepInterval is how often the engine sweeps the record
 	// for rows older than Retention, from the first connection of a run
 	// becoming ready on (FR-9, AD-4).
@@ -88,6 +95,8 @@ var (
 	backgroundCheckDelay   = defaultBackgroundCheckDelay
 	backgroundInterval     = defaultBackgroundInterval
 	backgroundTimeout      = defaultBackgroundTimeout
+	sessionInterval        = defaultSessionInterval
+	sessionTimeout         = defaultSessionTimeout
 )
 
 // reconnectDelay is the wait after the nth consecutive failed attempt to start

@@ -43,6 +43,10 @@ type Options struct {
 	// Children reads the direct children of a process, as procenv.Children
 	// does, which is the default. Tests inject a fake.
 	Children ChildrenFunc
+	// Session reads Claude Code's session record for one process under a
+	// configuration directory, as procenv.ClaudeSession does, which is the
+	// default. Tests inject a fake.
+	Session SessionFunc
 	// Store is where every Transition, every resync marker (Daemon start,
 	// connect and reconnect, resync, disagreeing reconcile) and the engine's
 	// epoch state are written (FR-6, FR-7, AD-3). Nil records nothing.
@@ -61,6 +65,9 @@ type EnvironFunc = func(pid int, name string) (value string, set bool, err error
 
 // ChildrenFunc is the type of Options.Children.
 type ChildrenFunc = func(pid int) ([]procenv.Process, error)
+
+// SessionFunc is the type of Options.Session.
+type SessionFunc = func(configDir string, pid int) (procenv.Session, error)
 
 // Engine is the single-writer actor (AD-2). Only its Run goroutine holds the
 // pane set, each Agent's Status and its tracked context. Subscription readers
@@ -124,6 +131,21 @@ type ChildrenFunc = func(pid int) ([]procenv.Process, error)
 // verdict arrives as a message. Only a changed verdict changes the view. A
 // failed read is not Background, and is logged at debug level once per pane.
 // Nothing is recorded: the record, the class and Waiting Time are unchanged.
+//
+// Claude Code's session record (ADR-0008): for an Agent whose program reads
+// one (core.ReadsSession) and whose process is known, the record
+// <config dir>/sessions/<pid>.json is read through Session at once and every
+// sessionInterval after, whatever the Status, each read in a goroutine
+// bounded by sessionTimeout and skipped while the previous one runs. The
+// config dir is the process's CLAUDE_CONFIG_DIR, read once per process
+// through Environ, or the Daemon's ~/.claude. The pane keeps herdr's latest
+// Status apart from its Status, which is core.EffectiveStatus of the two:
+// blocked while the record says waiting. A change of the Status the record
+// causes, either way, is a live Transition observed by claude_session, at the
+// record's statusUpdatedAt when core.SessionObservedAt allows it. A herdr
+// change while waiting holds changes herdr's Status only. A failed read is no
+// record, logged at debug level once per pane. The watch stops when the
+// Agent is removed, its program or process changes, or the run ends.
 type Engine struct {
 	host, server string
 	client       Client
@@ -136,8 +158,10 @@ type Engine struct {
 	// read-only after New.
 	profiles map[core.AgentProgram]core.ProfileRule
 	environ  EnvironFunc
-	// children is Options.Children; read-only after New.
+	// children and session are Options.Children and Options.Session;
+	// read-only after New.
 	children ChildrenFunc
+	session  SessionFunc
 	// store is Options.Store, nil when nothing is recorded.
 	store Recorder
 	// retentionDays is Options.RetentionDays; read-only after New.
@@ -329,6 +353,25 @@ type pane struct {
 	bgCtx    context.Context
 	bgCancel context.CancelFunc
 	bgLogged bool
+	// herdr is the latest valid Status herdr reported; status is the
+	// effective one, core.EffectiveStatus of herdr and session (ADR-0008).
+	herdr core.Status
+	// session is the session record's latest status, "" when it is not
+	// read, not readable, or not watched. sessGen tags the session watch
+	// running for the pane, 0 when none, and sessCtx and sessCancel are its
+	// context; sessBusy is set while a read runs, off the actor; sessDir is
+	// the process's Claude Code configuration directory once read;
+	// sessLogged is set once a failed read was logged.
+	session    string
+	sessGen    uint64
+	sessBusy   *atomic.Bool
+	sessCtx    context.Context
+	sessCancel context.CancelFunc
+	sessDir    string
+	sessLogged bool
+	// lastAt is the observed_at of the Agent's latest Transition, recorded
+	// or read from the record; 0 when there is none.
+	lastAt int64
 }
 
 // cause is why a resync runs: the reason the Sink and the record show, and,
@@ -427,6 +470,17 @@ type (
 		background bool
 		err        error
 	}
+	// sessionMsg is the outcome of one read of a pane's Agent's session
+	// record: its status and when that was set, the configuration directory
+	// it was read under when that is known, or why the read failed.
+	sessionMsg struct {
+		paneID    string
+		gen       uint64
+		dir       string
+		status    string
+		updatedAt int64
+		err       error
+	}
 )
 
 // New returns an Engine. Run starts it.
@@ -443,6 +497,7 @@ func New(o Options) *Engine {
 		profiles:         maps.Clone(o.Profiles),
 		environ:          o.Environ,
 		children:         o.Children,
+		session:          o.Session,
 		store:            o.Store,
 		retentionDays:    o.RetentionDays,
 		home:             o.Home,
@@ -463,6 +518,9 @@ func New(o Options) *Engine {
 	}
 	if e.children == nil {
 		e.children = procenv.Children
+	}
+	if e.session == nil {
+		e.session = procenv.ClaudeSession
 	}
 	e.truth = core.ConnectionTruth{HerdrMinimum: core.HerdrMinimum}
 	e.pub.subs = map[*ViewSubscription]struct{}{}
@@ -800,6 +858,8 @@ func (e *Engine) handle(m any) {
 		e.onProfile(m)
 	case backgroundMsg:
 		e.onBackground(m)
+	case sessionMsg:
+		e.onSession(m)
 	}
 }
 
@@ -818,8 +878,10 @@ func (e *Engine) onLifecycle(d herdr.Delivery[core.LifecycleEvent]) {
 	switch ev.Kind {
 	case core.LifecycleAgentReleased:
 		// The release carries the Agent's last Status: record it first.
-		if p, ok := e.panes[ev.PaneID]; ok && p.known && ev.FinalStatus.Valid() && ev.FinalStatus != p.status {
-			e.transition(p, ev.FinalStatus, core.ProvenanceLive, nil)
+		if p, ok := e.panes[ev.PaneID]; ok && p.known && ev.FinalStatus.Valid() {
+			if next := e.herdrSays(p, ev.FinalStatus); next != p.status {
+				e.transition(p, next, core.ProvenanceLive, nil)
+			}
 		}
 		e.remove(ev.PaneID, string(ev.Kind))
 		e.resyncSettle()
@@ -877,10 +939,24 @@ func (e *Engine) onStatus(m statusMsg) {
 		return
 	}
 	e.setProgram(p, ev.AgentProgram)
-	if ev.Status == p.status {
+	// While the session record says waiting, a herdr change moves herdr's
+	// Status alone.
+	next := e.herdrSays(p, ev.Status)
+	if next == p.status {
 		return
 	}
-	e.transition(p, ev.Status, core.ProvenanceLive, nil)
+	e.transition(p, next, core.ProvenanceLive, nil)
+}
+
+// herdrSays records status as herdr's latest for p and returns the effective
+// Status it gives. A Status core does not know is returned as it is, for
+// NewTransition to reject, and leaves herdr's Status unchanged.
+func (e *Engine) herdrSays(p *pane, status core.Status) core.Status {
+	if !status.Valid() {
+		return status
+	}
+	p.herdr = status
+	return core.EffectiveStatus(p.program, status, p.session)
 }
 
 func (e *Engine) onSubscribed(m subscribedMsg) {
@@ -1153,9 +1229,11 @@ func (e *Engine) apply(seq uint64, s core.Snapshot, resubscribe bool) (unsubscri
 		case p.liveDuring == seq:
 			// A live event arrived while this read ran, and the read may
 			// predate it. The read that follows settles the Status.
-		case a.Status != p.status:
-			e.transition(p, a.Status, core.ProvenanceSnapshot, a.StateChangeSeq)
-			changed = true
+		default:
+			if next := e.herdrSays(p, a.Status); next != p.status {
+				e.transition(p, next, core.ProvenanceSnapshot, a.StateChangeSeq)
+				changed = true
+			}
 		}
 		e.noteView(p) // a context or program change
 		changed = changed || firstSeen
@@ -1425,6 +1503,7 @@ func (e *Engine) remove(id, reason string) {
 	delete(e.panes, id)
 	delete(e.resyncPending, id) // the caller settles the resync
 	e.stopBackground(p)
+	e.stopSession(p, false)
 	if p.sub != nil {
 		p.sub.Close()
 	}
@@ -1455,6 +1534,7 @@ func (e *Engine) report(p *pane) {
 		p.firstSkipped = e.firstSight(p, now)
 		p.seenBy, p.seenOrder, p.seenAt = "", nil, 0
 		e.followBackground(p)
+		e.followSession(p)
 		e.sink.Agent(e.agent(p), now)
 		e.noteView(p)
 	case p.resolving == 0:
@@ -1473,6 +1553,7 @@ func (e *Engine) setProgram(p *pane, program core.AgentProgram) bool {
 	// Another program is another process: the next resolution reads it.
 	p.pid, p.background = 0, false
 	e.followBackground(p)
+	e.followSession(p)
 	if p.known || p.resolving != 0 {
 		e.resolve(p)
 	}
@@ -1571,6 +1652,7 @@ func (e *Engine) settleProfile(p *pane, m profileMsg) {
 		// the process already known, so one slow lookup does not end the watch.
 		p.pid, p.background = m.pid, false
 		e.followBackground(p)
+		e.followSession(p)
 	}
 	switch {
 	case !p.known:
@@ -1692,7 +1774,161 @@ func (e *Engine) onBackground(m backgroundMsg) {
 	e.checkBackground(p, backgroundInterval)
 }
 
+// followSession restarts p's session watch for its current process and
+// program (ADR-0008): a first read at once, then one every sessionInterval.
+// Whatever the record said about an earlier process is dropped first, and a
+// Status it caused returns to herdr's. When the program reads no session
+// record, or the Agent is not reported or its process is not known, the watch
+// stays stopped.
+func (e *Engine) followSession(p *pane) {
+	e.stopSession(p, true)
+	if !p.known || p.pid <= 0 || !core.ReadsSession(p.program) {
+		return
+	}
+	e.nextGen++
+	p.sessGen = e.nextGen
+	p.sessCtx, p.sessCancel = context.WithCancel(e.runCtx)
+	e.checkSession(p, 0)
+}
+
+// stopSession ends p's session watch, if any, and forgets what the record
+// said. With settle, a Status the record caused returns to herdr's, recorded
+// as observed by the record's watch ending; without it (the Agent is going)
+// nothing is recorded.
+func (e *Engine) stopSession(p *pane, settle bool) {
+	if p.sessCancel != nil {
+		p.sessCancel()
+	}
+	p.sessGen, p.sessCtx, p.sessCancel, p.sessDir = 0, nil, nil, ""
+	if p.session == "" {
+		return
+	}
+	p.session = ""
+	if settle {
+		e.settleSession(p, 0)
+	}
+}
+
+// settleSession records a change of p's effective Status that its session
+// record caused, as a live Transition observed by claude_session, at
+// updatedAt when core.SessionObservedAt allows it.
+func (e *Engine) settleSession(p *pane, updatedAt int64) {
+	next := core.EffectiveStatus(p.program, p.herdr, p.session)
+	if !p.known || !next.Valid() || next == p.status {
+		return
+	}
+	at := core.SessionObservedAt(updatedAt, p.lastAt, e.now())
+	e.transitionAt(p, next, core.ProvenanceLive, nil, core.ObservedByClaudeSession, at)
+}
+
+// checkSession reads p's session record after delay, off the actor, and sends
+// what it says as a sessionMsg tagged with the watch's generation. Ending the
+// watch's context abandons the wait.
+func (e *Engine) checkSession(p *pane, delay time.Duration) {
+	if p.sessBusy == nil {
+		p.sessBusy = new(atomic.Bool)
+	}
+	id, gen, pid, dir, ctx, busy := p.id, p.sessGen, p.pid, p.sessDir, p.sessCtx, p.sessBusy
+	e.wg.Add(1)
+	go func() {
+		defer e.wg.Done()
+		if delay > 0 {
+			t := time.NewTimer(delay)
+			defer t.Stop()
+			select {
+			case <-t.C:
+			case <-ctx.Done():
+				return
+			}
+		}
+		m := e.readSession(ctx, busy, pid, dir)
+		m.paneID, m.gen = id, gen
+		e.send(m)
+	}()
+}
+
+// readSession reads the session record of pid under dir, within
+// sessionTimeout. An empty dir is first found from the process's
+// CLAUDE_CONFIG_DIR, or the Daemon's ~/.claude when that is unset. The reads
+// cannot be cancelled, so they run apart and a read that outlives the timeout
+// is abandoned; done is buffered so it never blocks. busy is held while a read
+// runs, so a read that never returns is not joined by another.
+func (e *Engine) readSession(ctx context.Context, busy *atomic.Bool, pid int, dir string) sessionMsg {
+	if !busy.CompareAndSwap(false, true) {
+		return sessionMsg{err: fmt.Errorf("engine: session of pid %d: the previous read has not returned", pid)}
+	}
+	ctx, cancel := context.WithTimeout(ctx, sessionTimeout)
+	defer cancel()
+	done := make(chan sessionMsg, 1)
+	go func() {
+		defer busy.Store(false)
+		if dir == "" {
+			value, set, err := e.environ(pid, claudeConfigVar)
+			if err != nil {
+				done <- sessionMsg{err: fmt.Errorf("engine: session of pid %d: environment: %w", pid, err)}
+				return
+			}
+			if dir = core.ClaudeConfigDir(value, set, e.home); dir == "" {
+				done <- sessionMsg{err: fmt.Errorf("engine: session of pid %d: configuration directory not known", pid)}
+				return
+			}
+		}
+		s, err := e.session(dir, pid)
+		if err != nil {
+			done <- sessionMsg{dir: dir, err: fmt.Errorf("engine: session of pid %d: %w", pid, err)}
+			return
+		}
+		done <- sessionMsg{dir: dir, status: s.Status, updatedAt: s.StatusUpdatedAt}
+	}()
+	select {
+	case m := <-done:
+		return m
+	case <-ctx.Done():
+		return sessionMsg{err: fmt.Errorf("engine: session of pid %d not read within %s: %w", pid, sessionTimeout, ctx.Err())}
+	}
+}
+
+// claudeConfigVar names Claude Code's configuration directory in its
+// process's environment.
+const claudeConfigVar = "CLAUDE_CONFIG_DIR"
+
+// onSession records what one read of the session record said, for the watch
+// it belongs to, and schedules the next read. A failed read is no record: the
+// Status returns to herdr's, and the first failure for a pane is logged at
+// debug level, never as a warning, since an exited process or a Claude Code
+// release without the record is ordinary. Only the record's status is ever
+// logged.
+func (e *Engine) onSession(m sessionMsg) {
+	p, ok := e.panes[m.paneID]
+	if !ok || m.gen == 0 || p.sessGen != m.gen {
+		return // for a pane gone since, or a watch superseded
+	}
+	if m.dir != "" {
+		p.sessDir = m.dir
+	}
+	next := m.status
+	if m.err != nil {
+		next = ""
+		if !p.sessLogged {
+			p.sessLogged = true
+			e.log.Debug("claude session not read", "pane", p.id, "pid", p.pid, "error", m.err.Error())
+		}
+	}
+	if next != p.session {
+		e.log.Debug("claude session", "pane", p.id, "status", next)
+		p.session = next
+		e.settleSession(p, m.updatedAt)
+	}
+	e.checkSession(p, sessionInterval)
+}
+
+// transition records p's Status changing to next, as herdr observed it, now.
 func (e *Engine) transition(p *pane, next core.Status, prov core.Provenance, order *uint64) {
+	e.transitionAt(p, next, prov, order, core.ObservedByHerdr, e.now())
+}
+
+// transitionAt records p's Status changing to next, observed by by at at.
+func (e *Engine) transitionAt(p *pane, next core.Status, prov core.Provenance, order *uint64, by core.Observer, at int64) {
 	in := core.TransitionInput{
 		Key:          e.key(p.id),
 		AgentProgram: p.program,
@@ -1700,8 +1936,9 @@ func (e *Engine) transition(p *pane, next core.Status, prov core.Provenance, ord
 		New:          next,
 		HerdrOrder:   order,
 		HerdrVersion: e.herdrVersion,
-		ObservedAt:   e.now(),
+		ObservedAt:   at,
 		Provenance:   prov,
+		ObservedBy:   by,
 	}
 	if p.status.Valid() {
 		prev := p.status
@@ -1714,6 +1951,7 @@ func (e *Engine) transition(p *pane, next core.Status, prov core.Provenance, ord
 	}
 	p.status = next
 	p.fold = p.fold.Add(t)
+	p.lastAt = t.ObservedAt()
 	e.followBackground(p)
 	e.record(t)
 	e.sink.Transition(t, e.agent(p))
@@ -1731,6 +1969,9 @@ func (e *Engine) seen(p *pane, status core.Status, prov core.Provenance, order *
 		p.seenAt = e.now()
 	}
 	p.status, p.seenBy, p.seenOrder = status, prov, order
+	if status.Valid() {
+		p.herdr = status
+	}
 }
 
 // firstSight seeds an Agent's fold at its first report. For a pane whose
@@ -1757,6 +1998,9 @@ func (e *Engine) firstSight(p *pane, reportedAt int64) (skipped bool) {
 	}
 	ts, ok := e.history(p)
 	hist := core.Fold(ts)
+	if len(ts) > 0 {
+		p.lastAt = ts[len(ts)-1].ObservedAt()
+	}
 	if hist.Known && hist.Status == p.status && ts[len(ts)-1].AgentProgram() == p.program {
 		e.log.Info("agent unchanged since the record", "pane", p.id, "status", p.status, "class", hist.Class, "since", hist.Since)
 		p.fold = hist
@@ -1785,6 +2029,7 @@ func (e *Engine) firstSight(p *pane, reportedAt int64) (skipped bool) {
 		return false
 	}
 	p.fold = hist.Add(t)
+	p.lastAt = t.ObservedAt()
 	if !ok {
 		return true
 	}

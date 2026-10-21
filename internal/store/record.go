@@ -65,12 +65,13 @@ type ServerState struct {
 // insertTransition is the one INSERT of a Transition, every column bound.
 const insertTransition = `INSERT INTO transitions
 	(host, server, epoch, pane_id, agent_program, profile, previous_status, new_status,
-	 state_change_seq, herdr_version, provenance, possibly_spurious, observed_at, import_key)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	 state_change_seq, herdr_version, provenance, possibly_spurious, observed_at, import_key, observed_by)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 // columns returns t's values in insertTransition's order. An unknown value
 // (no previous Status, no herdr order, an empty Agent Program, Profile, herdr
-// version or import key) is NULL, never a placeholder.
+// version, import key or observer, which is herdr) is NULL, never a
+// placeholder.
 func columns(t core.Transition) ([]any, error) {
 	k := t.Key()
 	epoch, err := toInt64("epoch", k.Epoch)
@@ -91,7 +92,8 @@ func columns(t core.Transition) ([]any, error) {
 		spurious = 1
 	}
 	return []any{k.Host, k.Server, epoch, k.PaneID, nullable(string(t.AgentProgram())), nullable(t.Profile()), previous, string(t.New()),
-		order, nullable(t.HerdrVersion()), string(t.Provenance()), spurious, t.ObservedAt(), nullable(t.ImportKey())}, nil
+		order, nullable(t.HerdrVersion()), string(t.Provenance()), spurious, t.ObservedAt(), nullable(t.ImportKey()),
+		nullable(string(t.ObservedBy()))}, nil
 }
 
 // Append inserts one Transition into the record. Every accessor maps to its
@@ -119,7 +121,7 @@ func (s *Store) AppendBackfill(ctx context.Context, ts []core.Transition) (added
 		_, hasPrev := t.Previous()
 		_, hasOrder := t.HerdrOrder()
 		if t.Provenance() != core.ProvenanceBackfill || t.Key().Epoch != core.BackfillEpoch || t.ImportKey() == "" ||
-			hasPrev || hasOrder || t.HerdrVersion() != "" {
+			hasPrev || hasOrder || t.HerdrVersion() != "" || t.ObservedBy() != core.ObservedByHerdr {
 			return 0, 0, fmt.Errorf("store: append backfill: %s at %d is not a backfill row (provenance %s)",
 				t.Key().PaneID, t.ObservedAt(), t.Provenance())
 		}
@@ -183,7 +185,7 @@ func (s *Store) History(ctx context.Context, key core.AgentKey) ([]core.Transiti
 		return nil, err
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT id, agent_program, profile, previous_status, new_status,
-		state_change_seq, herdr_version, provenance, possibly_spurious, observed_at, import_key
+		state_change_seq, herdr_version, provenance, possibly_spurious, observed_at, import_key, observed_by
 		FROM transitions WHERE host = ? AND server = ? AND epoch = ? AND pane_id = ?
 		ORDER BY observed_at, id`, key.Host, key.Server, epoch, key.PaneID)
 	if err != nil {
@@ -193,14 +195,14 @@ func (s *Store) History(ctx context.Context, key core.AgentKey) ([]core.Transiti
 	var out []core.Transition
 	for rows.Next() {
 		var (
-			id                                        int64
-			program, profile, previous, version, ikey sql.NullString
-			next, prov                                string
-			order                                     sql.NullInt64
-			observedAt                                int64
-			spurious                                  bool
+			id                                            int64
+			program, profile, previous, version, ikey, by sql.NullString
+			next, prov                                    string
+			order                                         sql.NullInt64
+			observedAt                                    int64
+			spurious                                      bool
 		)
-		if err := rows.Scan(&id, &program, &profile, &previous, &next, &order, &version, &prov, &spurious, &observedAt, &ikey); err != nil {
+		if err := rows.Scan(&id, &program, &profile, &previous, &next, &order, &version, &prov, &spurious, &observedAt, &ikey, &by); err != nil {
 			return nil, fmt.Errorf("store: history of %s: %w", key.PaneID, err)
 		}
 		in := core.TransitionInput{
@@ -212,6 +214,7 @@ func (s *Store) History(ctx context.Context, key core.AgentKey) ([]core.Transiti
 			ObservedAt:   observedAt,
 			Provenance:   core.Provenance(prov),
 			ImportKey:    ikey.String,
+			ObservedBy:   core.Observer(by.String),
 
 			PossiblySpurious: spurious,
 		}

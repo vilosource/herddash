@@ -315,6 +315,25 @@ observation time.
 - The record distinguishes a Transition observed live from one inferred by comparing snapshots,
   and both from one backfilled (FR-9a).
 
+*Amended 2026-10-21, [ADR-0008](adr/0008-claude-code-session-record-as-status-authority.md)
+(accepted by the operator):* on 2026-10-21 a Claude Code Agent waited on Claude Code's question
+dialog while herdr reported it `done`, and the Board showed it Finished. Claude Code's own record
+for that process, `<config dir>/sessions/<pid>.json`, said `waiting` from the same second. For a
+Claude Code Agent whose process is known, the Daemon reads only that file's `pid`, `status` and
+`statusUpdatedAt` every 2 s. While it says `waiting`, the Agent's Status is `blocked` (Needs you,
+FR-2, FR-3), whatever herdr reports; otherwise herdr's Status stands. A Status change the record
+causes, when `waiting` begins and when it ends, is a live Transition recorded with who observed
+it, `claude_session`; every other Transition is observed by herdr.
+
+**Consequences (testable):**
+- A Claude Code Agent whose session record says `waiting` while herdr says `done` is Needs you
+  within about 2 s, its Waiting Time from the record's `statusUpdatedAt` when that is neither in
+  the future nor before the Agent's previous Transition.
+- The record shows that Transition, and the return to herdr's Status when `waiting` ends, as
+  observed by `claude_session`; the history API says so in `observed_by`.
+- A missing, unreadable or mismatched session record changes nothing: herdr's Status alone.
+- Other Agent Programs, and the record's other values (`busy`, `idle`, `shell`), change nothing.
+
 #### FR-7: Never lose a Transition silently
 
 When the Daemon cannot guarantee it saw every event, it resynchronises from an authoritative

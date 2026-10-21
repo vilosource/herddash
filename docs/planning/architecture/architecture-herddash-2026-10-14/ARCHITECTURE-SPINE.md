@@ -35,7 +35,7 @@ One **engine** goroutine is the only owner of current state and the only caller 
 | Core | `internal/core` | AgentKey, Agent, Transition and its constructor, Status, Attention Class, Waiting Time and exactness, sort key, history fold, Profile and Context Line rules, AgentView, ConnectionTruth |
 | Engine | `internal/engine` | the actor: pane set, current state, reconcile and Retention timers, resync decisions, publishing views |
 | Adapter | `internal/herdr` | socket mechanics: dial, ping, snapshot, subscribe, stream-health signals, generated wire types |
-| Adapter | `internal/procenv` | reading one process's environment, and its direct children with their arguments (linux: `/proc`; darwin: `kern.procargs2`, `kern.proc.all`; children added 2026-10-21 for Background) |
+| Adapter | `internal/procenv` | reading one process's environment, and its direct children with their arguments (linux: `/proc`; darwin: `kern.procargs2`, `kern.proc.all`; children added 2026-10-21 for Background); and Claude Code's session record for one process, exactly `<config dir>/sessions/<pid>.json`, decoding only `pid`, `status` and `statusUpdatedAt` (added 2026-10-21, ADR-0008: a second source of `blocked`, recorded as `observed_by = claude_session`) |
 | Adapter | `internal/store` | open with lock, migrations, append, history reads and fold input, Retention sweep |
 | Adapter | `internal/httpapi` | GET routes, SSE, embedded Board assets |
 | Adapter | `internal/importer` | parsing the plugin log into core Transitions |

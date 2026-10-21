@@ -78,6 +78,7 @@ var (
 	ErrInvalidObservedAt = errors.New("observed time must be positive")
 	ErrInvalidImportKey  = errors.New("import key does not match provenance")
 	ErrInvalidSpurious   = errors.New("only a backfill transition can be possibly spurious")
+	ErrInvalidObserver   = errors.New("observer is unknown or does not match provenance")
 )
 
 // TransitionError is the typed error NewTransition returns. Field names the
@@ -123,6 +124,9 @@ type TransitionInput struct {
 	// ran herdr 0.9.2, whose completions may be spurious. Only a backfill
 	// Transition can carry it.
 	PossiblySpurious bool
+	// ObservedBy says who observed the change: herdr (empty) or, for a live
+	// Transition only, Claude Code's session record (ADR-0008).
+	ObservedBy Observer
 }
 
 // Transition is one recorded change of an Agent's Status. It is built only by
@@ -141,6 +145,7 @@ type Transition struct {
 	provenance   Provenance
 	importKey    string
 	spurious     bool
+	observedBy   Observer
 }
 
 // NewTransition validates in and returns the Transition it describes.
@@ -156,6 +161,8 @@ type Transition struct {
 //     Transition with one
 //   - an ObservedAt that is not positive
 //   - PossiblySpurious on a live or snapshot Transition
+//   - an unknown Observer, and an Observer other than herdr on a Transition
+//     that is not live
 //
 // Errors are *TransitionError.
 func NewTransition(in TransitionInput) (Transition, error) {
@@ -198,6 +205,10 @@ func NewTransition(in TransitionInput) (Transition, error) {
 		return Transition{}, &TransitionError{Field: "possibly spurious", Value: "true with provenance " + string(in.Provenance), Err: ErrInvalidSpurious}
 	}
 
+	if !in.ObservedBy.Valid() || (in.ObservedBy != ObservedByHerdr && in.Provenance != ProvenanceLive) {
+		return Transition{}, &TransitionError{Field: "observed by", Value: string(in.ObservedBy) + " with provenance " + string(in.Provenance), Err: ErrInvalidObserver}
+	}
+
 	t := Transition{
 		key:          in.Key,
 		agentProgram: in.AgentProgram,
@@ -208,6 +219,7 @@ func NewTransition(in TransitionInput) (Transition, error) {
 		provenance:   in.Provenance,
 		importKey:    in.ImportKey,
 		spurious:     in.PossiblySpurious,
+		observedBy:   in.ObservedBy,
 	}
 	// Copy pointed-to values so the caller cannot mutate the Transition later.
 	if in.Previous != nil {
@@ -266,3 +278,7 @@ func (t Transition) ImportKey() string { return t.importKey }
 // PossiblySpurious reports whether the Transition is a backfilled entry
 // flagged possibly spurious.
 func (t Transition) PossiblySpurious() bool { return t.spurious }
+
+// ObservedBy returns who observed the change: ObservedByHerdr (empty) or
+// ObservedByClaudeSession.
+func (t Transition) ObservedBy() Observer { return t.observedBy }
