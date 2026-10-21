@@ -293,17 +293,18 @@ func (f *fakeClient) setVersions(vs ...string) {
 func (f *fakeClient) Snapshot(ctx context.Context) (core.Snapshot, error) {
 	f.record("snapshot")
 	f.snapshots.Add(1)
+	// Read the gate before signalling the call: a test that sees the call and
+	// then changes the gate (setGated(false) and a release) must find this
+	// read already waiting on release, not passing straight through.
 	f.mu.Lock()
 	f.snapTimes = append(f.snapTimes, time.Now())
+	gated, hold := f.gated, f.hold
+	f.hold = nil
 	f.mu.Unlock()
 	select {
 	case f.snapCalls <- struct{}{}:
 	default:
 	}
-	f.mu.Lock()
-	gated, hold := f.gated, f.hold
-	f.hold = nil
-	f.mu.Unlock()
 	if hold != nil {
 		<-hold
 	} else if gated {
