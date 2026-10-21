@@ -1,9 +1,9 @@
 # ADR-0009: Background work from Claude Code's session transcripts
 
-**Status: Proposed.** Written 2026-10-21 at the operator's request, after a dogfooding
-investigation, first as ADR-0008. The operator split it on 2026-10-21: reading the session record
-became [ADR-0008](0008-claude-code-session-record-as-status-authority.md) (accepted); reading the
-transcript, below, waits for a separate decision. Nothing in it is built yet.
+**Status: Accepted** by the operator on 2026-10-21 ("Approve, build locally"). Written the same
+day, first as part of ADR-0008; the operator split it out so the session record
+([ADR-0008](0008-claude-code-session-record-as-status-authority.md)) could be accepted first.
+Workflows are to be confirmed by one authorised run before the Board claims them.
 
 ## Context
 
@@ -74,7 +74,8 @@ an ADR.
   has ended its turn and is only waiting (observed 2026-10-21 on this session: the operator asked
   "why is the dashboard showing that 3:herddash is WORKING yet you are just waiting for an Agent
   to finish its work?"). The transcript tells the two apart: the main thread's last assistant
-  record ended its turn and a subagent id is still open. That Agent reads **BACKGROUND**, not
+  record (`type: assistant`, not a sidechain) has `stop_reason: "end_turn"` with no later
+  main-thread prompt or tool result, and a subagent id is still open. That Agent reads **BACKGROUND**, not
   Working.
 - **Board.** Working with open tasks reads `WORKING · 2 bg` (green); `done`/`idle` with open tasks
   reads **BACKGROUND** (green, dashed edge, ranked just before Working), as built; Finished only when
