@@ -191,6 +191,10 @@ One combined reviewer (correctness, edge cases, verification gaps), 2026-10-21. 
 - **Patched — the spine's procenv row** names the children reader.
 - **Accepted — a gone process reads as no children**, not an error: the outcome (not Background)
   is the same.
+- **Dogfooding — 1 s Finished blink.** The operator saw the Box flash between Background and
+  Finished: for the first check's 1 s the Box read Finished and sorted after the Finished Boxes,
+  then jumped back. `defaultBackgroundCheckDelay` is now 250 ms; a browser check showed the Box
+  then holding Background steadily.
 - **Watch in dogfooding — false positives.** A `!` bash-mode command run by the operator while
   the Agent is idle may read Background for its duration (UNVERIFIED).
 

@@ -47,7 +47,7 @@ const (
 	// Agent's Status changes to done or idle, or its process becomes known,
 	// the engine first reads that process's children for background work: a
 	// turn's last tool shell is given a moment to exit.
-	defaultBackgroundCheckDelay = time.Second
+	defaultBackgroundCheckDelay = 250 * time.Millisecond
 	// defaultBackgroundInterval is how often the engine reads those children
 	// again while the Status stays done or idle.
 	defaultBackgroundInterval = 5 * time.Second
