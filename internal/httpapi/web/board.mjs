@@ -53,16 +53,14 @@ function fillBox(box, view, now) {
   box.className = "box box--" + view.attention_class;
   if (neverWorking(view)) box.classList.add("box--never-working");
 
-  const row = el("p", "status-row");
-  row.appendChild(el("span", "class", classLabel(view)));
-  const known = hasWaitingSince(view);
-  const wait = el("span", known ? "wait" : "wait wait--none", waitingLabel(view, now));
-  if (!known) wait.title = "Waiting Time unknown";
-  row.appendChild(wait);
-
-  // Second, and the most prominent text: how the operator finds the pane.
+  // First, and the most prominent text: how the operator finds the pane.
+  // The workspace gives way before the tab: the tab is what a long workspace
+  // name would otherwise push out of sight.
   const where = whereLabel(view);
-  const wh = el("p", "where line", where);
+  const wh = el("p", "where");
+  if (view.workspace) wh.appendChild(el("span", "ws", view.workspace));
+  if (view.workspace && view.tab) wh.appendChild(el("span", "sep", "›"));
+  if (view.tab) wh.appendChild(el("span", "tab", view.tab));
   if (where) wh.title = where;
 
   // Always present, so an empty Context Line keeps its row.
@@ -77,10 +75,19 @@ function fillBox(box, view, now) {
     dir.title = view.directory;
   }
 
-  // Last and quiet: profile · program.
-  const heading = el("p", "heading line", view.heading);
+  // Last row: profile · program on the left, the Attention Class and Waiting
+  // Time on the right, bold.
+  const row = el("p", "status-row");
+  row.appendChild(el("span", "heading", view.heading));
+  const state = el("span", "state");
+  state.appendChild(el("span", "class", classLabel(view)));
+  const known = hasWaitingSince(view);
+  const wait = el("span", known ? "wait" : "wait wait--none", waitingLabel(view, now));
+  if (!known) wait.title = "Waiting Time unknown";
+  state.appendChild(wait);
+  row.appendChild(state);
 
-  box.replaceChildren(row, wh, ctx, dir, heading);
+  box.replaceChildren(wh, ctx, dir, row);
   return known ? wait : null;
 }
 
