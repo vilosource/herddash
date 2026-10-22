@@ -115,16 +115,17 @@ function fold(t, r) {
   const tur = r.toolUseResult && typeof r.toolUseResult === "object" ? r.toolUseResult : null;
   const main = !r.isSidechain;
   if (r.type === "user") {
-    if (main) (t.turnEnded = false), (t.recap = "");
+    if (main) (t.turnEnded = false), (t.recap = ""), (t.boundaryAt = Date.now());
     if (tur && typeof tur.backgroundTaskId === "string" && tur.backgroundTaskId) t.open.set(tur.backgroundTaskId, true);
     if (tur && tur.isAsync === true && tur.status === "async_launched" && tur.agentId) t.open.set(tur.agentId, false);
     if (tur && typeof tur.task_type === "string" && tur.task_id) t.open.delete(String(tur.task_id));
   } else if (r.type === "assistant" && main) {
     const s = r.message && r.message.stop_reason;
-    if (s === "end_turn" || s === "stop_sequence") t.turnEnded = true;
+    if (s === "end_turn" || s === "stop_sequence") (t.turnEnded = true), (t.boundaryAt = Date.now());
   } else if (r.type === "attachment" && main && r.attachment && r.attachment.type === "queued_command") {
     t.turnEnded = false;
     t.recap = "";
+    t.boundaryAt = Date.now();
   } else if (r.type === "queue-operation" && r.operation === "enqueue" && typeof r.content === "string" && r.content.startsWith("<task-notification>")) {
     const id = (r.content.match(/<task-id>\s*([^<]*?)\s*<\/task-id>/) || [])[1];
     const st = (r.content.match(/<status>\s*([^<]*?)\s*<\/status>/) || [])[1];
@@ -146,7 +147,7 @@ function readTranscript(path) {
     const st = fstatSync(fd);
     let t = tails.get(path);
     if (!t || t.ino !== st.ino || st.size < t.off) {
-      t = { ino: st.ino, off: Math.max(0, st.size - BOUND), rest: "", open: new Map(), turnEnded: false, recap: "", first: true };
+      t = { ino: st.ino, off: Math.max(0, st.size - BOUND), rest: "", open: new Map(), turnEnded: false, recap: "", first: true, boundaryAt: 0 };
       tails.set(path, t);
     }
     while (t.off < st.size) {
@@ -323,9 +324,11 @@ async function tick() {
     const h = (history.get(id) || []).filter((x) => now - x.at < FLICKER_MS);
     if (!h.length || h[h.length - 1].kind !== kind) h.push({ kind, at: now });
     history.set(id, h);
-    if (h.length >= 3 && h[h.length - 1].kind === h[h.length - 3].kind) {
+    // A flip back and forth is flicker unless the Agent's transcript shows a
+    // turn starting or ending in the window: a short real turn is not one.
+    const flickered = h.length >= 3 && h[h.length - 1].kind === h[h.length - 3].kind;
+    const flicker = () =>
       flag(id + "/flicker", name(v) + ": flicker " + h.map((x) => x.kind).join("→") + " within " + FLICKER_MS / 1000 + " s", now, true);
-    }
 
     // The stream's model must agree with the state once both have settled.
     const sv = stream.agents.get(id);
@@ -333,13 +336,20 @@ async function tick() {
       flag(id + "/stream", name(v) + ": /events model disagrees with /api/state (" + (sv ? sv.attention_class + "/" + sv.status : "missing") + " vs " + v.attention_class + "/" + v.status + ")", now);
     }
 
-    if (v.agent_program !== "claude") continue;
+    if (v.agent_program !== "claude") {
+      if (flickered) flicker();
+      continue;
+    }
     counts.claude++;
     const pid = await pidOf(v.key.pane_id);
     const s = pid ? sessionOf(pid) : null;
-    if (!s || !s.sessionId || !s.cwd) continue;
+    if (!s || !s.sessionId || !s.cwd) {
+      if (flickered) flicker();
+      continue;
+    }
     counts.matched++;
     const t = readTranscript(transcriptPath(s.dir, s.cwd, s.sessionId));
+    if (flickered && !(t && t.boundaryAt && now - t.boundaryAt < FLICKER_MS)) flicker();
     const e = expected(v, { pid, status: s.status }, t, shells);
     if (e.recap) counts.recaps++;
     if (DUMP)
