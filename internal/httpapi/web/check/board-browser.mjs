@@ -1,6 +1,7 @@
 // Hand-run headless-Chrome check of the Board's Boxes and workspace groups
-// (layout v4), the State label's background task count (ADR-0009) and its
-// connection and version strips (Story 3.9). Not embedded, not run in CI.
+// (layout v4), the State label's background task count (ADR-0009), Claude
+// Code's recap in the Context Line's row (ADR-0010) and its connection and
+// version strips (Story 3.9). Not embedded, not run in CI.
 //
 //   go build -o /tmp/herddash ./cmd/herddash
 //   node internal/httpapi/web/check/board-browser.mjs /tmp/herddash
@@ -306,8 +307,82 @@ async function main() {
       check("Needs you Box shows no count (" + v.tasks + " sent)", !!needsYou && needsYou.count === null, labels);
       await browser.send("Page.removeScriptToEvaluateOnNewDocument", { identifier: added.identifier });
     }
+
+    // Claude Code's recap (ADR-0010), through the same stand-in: the Working
+    // Box gets a recap far longer than two lines, the Needs you Box none.
+    const RECAP =
+      "I refactored the store's retention sweep and every test passes. Next I'll open the pull request, " +
+      "wait for CI, and then write the follow-up for the importer, which still reads the whole log at once.";
+    {
+      const sent = structuredClone(state);
+      for (const a of sent.agents) a.recap = a.status === "working" ? RECAP : "";
+      const { result: added } = await browser.send("Page.addScriptToEvaluateOnNewDocument", {
+        source: `window.EventSource = class extends EventTarget {
+          static CLOSED = 2;
+          readyState = 1;
+          constructor() {
+            super();
+            window.standIn = (window.standIn || 0) + 1;
+            setTimeout(() => this.dispatchEvent(new MessageEvent("state", { data: ${JSON.stringify(JSON.stringify(sent))}, lastEventId: "1" })), 0);
+          }
+          close() {}
+        };`,
+      });
+      await browser.open("http://" + addr + "/");
+      const x = await until("the stand-in state with a recap", async () => {
+        if (!(await browser.eval("window.standIn"))) return null;
+        const y = JSON.parse(
+          await browser.eval(`JSON.stringify({
+            recaps: document.getElementById("board").classList.contains("board--recaps"),
+            boxes: [...document.querySelectorAll("#board .box")].map((b) => {
+              const c = b.children[2];
+              const cs = getComputedStyle(c);
+              return {
+                kind: b.className, height: b.getBoundingClientRect().height, label: b.getAttribute("aria-label"),
+                titleIsLabel: b.title === b.getAttribute("aria-label"),
+                ctxClass: c.className, ctxText: c.textContent, ctxHeight: c.getBoundingClientRect().height,
+                ctxScroll: c.scrollHeight, ctxClient: c.clientHeight, lineHeight: parseFloat(cs.lineHeight),
+                clamp: cs.webkitLineClamp || cs.getPropertyValue("-webkit-line-clamp"), ellipsis: cs.textOverflow,
+              };
+            }),
+          })`),
+        );
+        return y.boxes.length === 2 && y.recaps ? y : null;
+      }, 5000);
+      const withRecap = x.boxes.find((b) => b.kind === "box box--working");
+      const other = x.boxes.find((b) => b.kind === "box box--needs_you");
+      const line = withRecap.lineHeight;
+      check(
+        "recap Box: the recap in the context row, class recap, clamped to two lines",
+        withRecap.ctxClass === "context recap" && withRecap.ctxText === RECAP && String(withRecap.clamp) === "2" &&
+          Math.abs(withRecap.ctxHeight - 2 * line) < 1 && withRecap.ctxScroll > withRecap.ctxClient,
+        withRecap,
+      );
+      check(
+        "recap Box: accessible name and tooltip carry the full recap, not the Context Line",
+        withRecap.label.includes(RECAP) && withRecap.titleIsLabel,
+        withRecap,
+      );
+      check("Box without a recap keeps its Context Line row", other.ctxClass === "context line", other);
+      check(
+        "while a Box has a recap, every Box is one line taller",
+        x.boxes.every((b) => Math.abs(b.height - (needs.height + line)) < 1),
+        { base: needs.height, line, boxes: x.boxes.map((b) => b.height) },
+      );
+      await browser.send("Page.removeScriptToEvaluateOnNewDocument", { identifier: added.identifier });
+    }
+
     await browser.open("http://" + addr + "/");
     await until("the real stream back", async () => ((await snap()).boxes === 2 ? true : null));
+    {
+      const y = JSON.parse(await browser.eval(BOXES));
+      const recaps = await browser.eval(`document.getElementById("board").classList.contains("board--recaps")`);
+      check(
+        "no recap: no board--recaps, every Box its usual height",
+        !recaps && y.boxes.every((b) => b.height === needs.height && b.rows === 4),
+        { recaps, y },
+      );
+    }
 
     await herdr.stop();
     s = await until("the disconnected strip", async () => ((await snap()).strips.length ? snap() : null));

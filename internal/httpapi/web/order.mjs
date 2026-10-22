@@ -245,15 +245,35 @@ export function layout(views) {
   return { top, groups };
 }
 
+// recapOf is a view's session recap (ADR-0010): Claude Code's own
+// two-sentence summary, sent only when the operator turned recaps on; ""
+// when there is none.
+export function recapOf(view) {
+  return typeof view.recap === "string" ? view.recap : "";
+}
+
+// contextText is what a Box shows in its Context Line's row: the recap when
+// there is one, else the Context Line (ADR-0010).
+export function contextText(view) {
+  return recapOf(view) || view.context_line || "";
+}
+
+// anyRecap reports whether any of views has a recap. While one does, every
+// Box is one line taller and its context row two lines high, so every Box
+// keeps one height; with none, the Board is as before ADR-0010.
+export function anyRecap(views) {
+  return views.some((v) => recapOf(v) !== "");
+}
+
 // boxLabel is a Box's accessible name at nowMs: everything it shows,
 // untruncated, so keyboard and screen-reader users can read it in full:
-// workspace and tab, pane, Context Line, directory, heading, class, its
-// background tasks, and time.
+// workspace and tab, pane, the recap in full or else the Context Line,
+// directory, heading, class, its background tasks, and time.
 export function boxLabel(view, nowMs) {
   const w = hasWaitingSince(view)
     ? "waiting " + waitingLabel(view, nowMs).replace("≥ ", "at least ")
     : "Waiting Time unknown";
-  return [whereLabel(view), paneLabel(view), view.context_line, view.directory, view.heading, classLabel(view), tasksLabel(view), w]
+  return [whereLabel(view), paneLabel(view), contextText(view), view.directory, view.heading, classLabel(view), tasksLabel(view), w]
     .filter(Boolean)
     .join(", ");
 }

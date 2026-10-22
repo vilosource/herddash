@@ -52,6 +52,10 @@ type Options struct {
 	// procenv.TailTranscript does, which is the default. Tests may inject a
 	// fake.
 	Transcript TranscriptFunc
+	// ClaudeRecaps is the operator's consent to Claude Code's session recap
+	// being read from the transcript and shown (ADR-0010). False, the
+	// recap record is not decoded and every view's recap is "".
+	ClaudeRecaps bool
 	// Store is where every Transition, every resync marker (Daemon start,
 	// connect and reconnect, resync, disagreeing reconcile) and the engine's
 	// epoch state are written (FR-6, FR-7, AD-3). Nil records nothing.
@@ -182,6 +186,8 @@ type Engine struct {
 	children   ChildrenFunc
 	session    SessionFunc
 	transcript TranscriptFunc
+	// recaps is Options.ClaudeRecaps; read-only after New.
+	recaps bool
 	// store is Options.Store, nil when nothing is recorded.
 	store Recorder
 	// retentionDays is Options.RetentionDays; read-only after New.
@@ -547,6 +553,7 @@ func New(o Options) *Engine {
 		children:         o.Children,
 		session:          o.Session,
 		transcript:       o.Transcript,
+		recaps:           o.ClaudeRecaps,
 		store:            o.Store,
 		retentionDays:    o.RetentionDays,
 		home:             o.Home,
@@ -1867,7 +1874,7 @@ func (e *Engine) followSession(p *pane, keep bool) {
 	e.endSessionWatch(p)
 	// Another process's transcript, or none: read afresh, a failure to read
 	// it logged again.
-	dropTranscript(p)
+	e.dropTranscript(p)
 	p.trLogged = false
 	if !keep || !watch {
 		e.dropSession(p, true)
@@ -1905,7 +1912,7 @@ func (e *Engine) stopSession(p *pane, settle bool) {
 // dropSession forgets the record's verdict on p, settling as stopSession
 // says.
 func (e *Engine) dropSession(p *pane, settle bool) {
-	dropTranscript(p)
+	e.dropTranscript(p)
 	if p.session == "" {
 		return
 	}
@@ -1916,8 +1923,12 @@ func (e *Engine) dropSession(p *pane, settle bool) {
 }
 
 // dropTranscript forgets what p's transcript said and where it was read to
-// (ADR-0009): the process check alone decides until it is read again.
-func dropTranscript(p *pane) {
+// (ADR-0009): the process check alone decides until it is read again. A
+// recap it held is gone too, logged by pane only (ADR-0010).
+func (e *Engine) dropTranscript(p *pane) {
+	if p.tasks.Recap() != "" {
+		e.log.Debug("claude recap", "pane", p.id, "recap", false)
+	}
 	p.tail, p.tasks = procenv.Tail{}, core.BackgroundTasks{}
 }
 
@@ -2079,7 +2090,7 @@ func (e *Engine) readTranscript(dir string, s procenv.Session, tail procenv.Tail
 	}
 	var lines []core.TranscriptLine
 	next, restarted, err := e.transcript(tail, path, func(line []byte) {
-		if l, ok := core.DecodeTranscriptLine(line); ok {
+		if l, ok := core.DecodeTranscriptLine(line, e.recaps); ok {
 			lines = append(lines, l)
 		}
 	})
@@ -2178,7 +2189,7 @@ func (e *Engine) onTranscript(p *pane, m sessionMsg, session string) {
 	switch {
 	case m.err != nil:
 		if session == "" {
-			dropTranscript(p)
+			e.dropTranscript(p)
 		}
 		return
 	case m.trErr != nil:
@@ -2186,13 +2197,18 @@ func (e *Engine) onTranscript(p *pane, m sessionMsg, session string) {
 			p.trLogged = true
 			e.log.Debug("claude transcript not read", "pane", p.id, "pid", p.pid, "error", m.trErr.Error())
 		}
-		dropTranscript(p)
+		e.dropTranscript(p)
 		return
 	}
 	before := p.tasks
 	p.tail, p.tasks = m.tail, m.tasks
 	if before.Count() != p.tasks.Count() || before.TurnEnded() != p.tasks.TurnEnded() {
 		e.log.Debug("claude background tasks", "pane", p.id, "open", p.tasks.Count(), "turn_ended", p.tasks.TurnEnded())
+	}
+	// A recap's text is never logged (ADR-0010): only that one appeared or
+	// cleared.
+	if had, has := before.Recap() != "", p.tasks.Recap() != ""; had != has {
+		e.log.Debug("claude recap", "pane", p.id, "recap", has)
 	}
 }
 

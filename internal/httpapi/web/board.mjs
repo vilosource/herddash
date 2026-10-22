@@ -10,17 +10,20 @@
 
 import {
   EVENT_NAMES,
+  anyRecap,
   boardStatus,
   boxKind,
   boxLabel,
   classLabel,
   stateCount,
+  contextText,
   documentTitle,
   hasWaitingSince,
   inNeedsYou,
   keyId,
   layout,
   modelViews,
+  recapOf,
   streamDecision,
   streamLost,
   streamState,
@@ -54,8 +57,9 @@ function el(tag, cls, text) {
 // keeps focus. It returns the Waiting Time element when it ticks. Four fixed
 // rows (the design approved on 2026-10-21): the tab and pane badge; the
 // workspace in the Needs you zone, else the directory (the group heading
-// already names the workspace); the Context Line; the heading, class and
-// Waiting Time.
+// already names the workspace); the Context Line, or Claude Code's recap in
+// its place, clamped to two lines (ADR-0010); the heading, class and Waiting
+// Time.
 function fillBox(box, view, now) {
   box.className = "box box--" + boxKind(view);
 
@@ -76,9 +80,11 @@ function fillBox(box, view, now) {
     if (view.directory) second.appendChild(el("bdi", null, view.directory));
   }
 
-  // Always present, so an empty Context Line keeps its row.
-  const ctx = el("p", "context line", view.context_line);
-  if (!view.context_line) ctx.setAttribute("aria-hidden", "true");
+  // Always present, so an empty Context Line keeps its row. A recap takes
+  // the row in its place, up to two lines, the rest in the label.
+  const text = contextText(view);
+  const ctx = el("p", recapOf(view) ? "context recap" : "context line", text);
+  if (!text) ctx.setAttribute("aria-hidden", "true");
 
   // Last row: the heading on the left, the class and Waiting Time on the
   // right, bold and never truncated.
@@ -241,6 +247,8 @@ function render() {
   const { top, groups: lower } = layout(views);
   const title = documentTitle(status.hideBoxes ? [] : views);
   if (document.title !== title) document.title = title;
+  // While any Box has a recap, every Box is one line taller (ADR-0010).
+  board.classList.toggle("board--recaps", anyRecap(views));
 
   // Boxes whose Agent is gone are dropped first, so no grid shuffles them.
   const live = new Set(views.map((v) => keyId(v.key)));

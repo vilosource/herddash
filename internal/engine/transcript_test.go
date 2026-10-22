@@ -285,3 +285,92 @@ func TestTranscriptReadResumes(t *testing.T) {
 		}
 	}
 }
+
+// trRecap is a session recap record (ADR-0010), its text marked RECAP-TEXT
+// so a test can tell it never reached the log.
+const trRecap = `{"type":"system","subtype":"away_summary","isSidechain":false,"isMeta":false,"level":"info",` +
+	`"content":"I did RECAP-TEXT the thing. Next I'll ship it. (disable recaps in /config)","timestamp":"2026-10-22T09:04:03.000Z"}`
+
+// trRecapWant is trRecap's recap as shown.
+const trRecapWant = "I did RECAP-TEXT the thing. Next I'll ship it."
+
+func recapsOn(o *Options) { o.ClaudeRecaps = true }
+
+// awaitRecap waits until the Agent's view shows recap, and returns it.
+func (r *transcriptRig) awaitRecap(recap string) core.AgentView {
+	r.w.t.Helper()
+	ps := r.w.await(fmt.Sprintf("recap %q", recap), func(ps []Publication) bool {
+		return len(ps) > 0 && len(ps[len(ps)-1].View.Agents) == 1 && lastAgent(ps).Recap == recap
+	})
+	return lastAgent(ps)
+}
+
+// recapNoLeak fails the test if the log carries the recap's text.
+func (r *transcriptRig) recapNoLeak(t *testing.T) {
+	t.Helper()
+	r.noLeak(t)
+	r.logs.mu.Lock()
+	logged := r.logs.b.String()
+	r.logs.mu.Unlock()
+	for _, s := range []string{"RECAP-TEXT", "ship it"} {
+		if strings.Contains(logged, s) {
+			t.Errorf("the log carries %q: %s", s, logged)
+		}
+	}
+}
+
+// TestTranscriptRecap covers the spec's "Recap after turn", "New turn" and
+// "Privacy" rows at the engine (ADR-0010): with recaps on, a Finished
+// Agent's view carries the recap, a new prompt clears it, a newer one
+// replaces it; class, rank and Waiting Time are untouched; the log says only
+// that a recap appeared or cleared, by pane.
+func TestTranscriptRecap(t *testing.T) {
+	r := startTranscript(t, core.StatusDone, []string{trPrompt, trEndTurn, trRecap}, recapsOn)
+	v := r.awaitRecap(trRecapWant)
+	if v.Class != core.ClassFinished || v.SortKey.ClassRank != 1 || v.Background || v.ContextLine == trRecapWant {
+		t.Errorf("view %+v", v)
+	}
+	writeTranscript(t, r.path, trPrompt)
+	r.awaitRecap("")
+	writeTranscript(t, r.path, trEndTurn, strings.Replace(trRecap, "the thing", "another thing", 1))
+	r.awaitRecap("I did RECAP-TEXT another thing. Next I'll ship it.")
+	e := r.logs.entries(t, "DEBUG", "claude recap")
+	if len(e) != 3 {
+		t.Fatalf("recap entries %v, want three", e)
+	}
+	for i, want := range []bool{true, false, true} {
+		if e[i]["recap"] != want || e[i]["pane"] == nil || len(e[i]) != 5 {
+			t.Errorf("entry %d: %v, want recap %v and only the pane", i, e[i], want)
+		}
+	}
+	r.expectSessionRows(t)
+	r.recapNoLeak(t)
+}
+
+// TestTranscriptRecapOff covers the spec's "Key off" row at the engine: the
+// same transcript with recaps off shows no recap and logs none.
+func TestTranscriptRecapOff(t *testing.T) {
+	r := startTranscript(t, core.StatusDone, []string{trPrompt, trSubStart, trEndTurn, trRecap}, nil)
+	r.awaitTasks(1, true)
+	r.sess.moreReads(t, r.h)
+	if v := r.view(); v.Recap != "" {
+		t.Errorf("recap %q with recaps off", v.Recap)
+	}
+	if e := r.logs.entries(t, "DEBUG", "claude recap"); len(e) != 0 {
+		t.Errorf("recap entries %v with recaps off", e)
+	}
+	r.recapNoLeak(t)
+}
+
+// TestTranscriptRecapDropped: a session record that goes for good drops the
+// recap with the rest of the transcript's state, and says so by pane only.
+func TestTranscriptRecapDropped(t *testing.T) {
+	r := startTranscript(t, core.StatusDone, []string{trPrompt, trEndTurn, trRecap}, recapsOn)
+	r.awaitRecap(trRecapWant)
+	r.sess.fail(p1PID, fmt.Errorf("%w: %w", procenv.ErrSession, fs.ErrNotExist))
+	r.awaitRecap("")
+	if e := r.logs.entries(t, "DEBUG", "claude recap"); len(e) != 2 || e[1]["recap"] != false {
+		t.Errorf("recap entries %v", e)
+	}
+	r.recapNoLeak(t)
+}

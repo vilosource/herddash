@@ -188,6 +188,18 @@ body {
 }
 .workspace { font-size: var(--text-meta); font-weight: 600; line-height: 1.25rem; color: var(--ink-muted); }
 .context { font-size: var(--text-body); line-height: 1.5rem; }
+/* Claude Code's recap in the Context Line's row (ADR-0010): up to two lines, then an ellipsis;
+   the Box's tooltip and accessible name carry it in full. */
+.recap {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2;
+  overflow: hidden; overflow-wrap: anywhere;
+}
+/* While any Box on the Board has a recap, every Box is one line taller and the context row two
+   lines high, so every Box keeps one height; with none, the Board is exactly as before. */
+.board--recaps .box {
+  height: calc(var(--box-h) + 1.5rem);
+  grid-template-rows: 2rem 1.25rem 3rem 1.5rem;
+}
 .dir { font-size: var(--text-label); line-height: 1.25rem; color: var(--ink-faint); }
 .heading { font-size: var(--text-meta); line-height: 1.25rem; font-weight: 400; }
 /* Directory truncates from the start, so the last segment (the project) stays visible. */

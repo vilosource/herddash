@@ -17,6 +17,9 @@ import {
   applyEvent,
   boardStatus,
   boxLabel,
+  anyRecap,
+  contextText,
+  recapOf,
   clockUTC,
   compareViews,
   emptyModel,
@@ -1036,4 +1039,57 @@ test("golden fixture: background_tasks as the Daemon sent it", () => {
     assert.ok(Number.isInteger(v.background_tasks), keyString(v));
     if (v.attention_class === "needs_you" || v.attention_class === "unknown") assert.equal(v.background_tasks, 0);
   }
+});
+
+test("recap: the Box's context text and accessible name use it in full (ADR-0010)", () => {
+  const now = 1_000_000;
+  const recap = "I wrote the store tests and they pass. Next I'll open the pull request, then wait for review of every change.";
+  const v = {
+    key: { host: "h", server: "default", epoch: 1, pane_id: "w1:p1" },
+    attention_class: "finished",
+    status: "done",
+    background: false,
+    background_tasks: 0,
+    heading: "cldw",
+    context_line: "write-tests",
+    recap,
+    directory: "~/src/p",
+    workspace: "ops",
+    tab: "1",
+    pane_position: "",
+    waiting_since: now - 75_000,
+    waiting_exact: true,
+  };
+  assert.equal(recapOf(v), recap);
+  assert.equal(contextText(v), recap);
+  assert.equal(boxLabel(v, now), "ops › 1, " + recap + ", ~/src/p, cldw, Finished, waiting 1m");
+  assert.ok(!boxLabel(v, now).includes("write-tests"));
+  // No recap, an empty one, or one of another type: the Context Line, as before.
+  for (const r of [undefined, "", null, 5]) {
+    const w = { ...v, recap: r };
+    assert.equal(recapOf(w), "");
+    assert.equal(contextText(w), "write-tests");
+    assert.equal(boxLabel(w, now), "ops › 1, write-tests, ~/src/p, cldw, Finished, waiting 1m");
+  }
+  assert.equal(contextText({ ...v, recap: "", context_line: "" }), "");
+  // Class, kind and group counts are unchanged by a recap.
+  assert.equal(boxKind(v), boxKind({ ...v, recap: "" }));
+  assert.equal(groupCounts([v]), groupCounts([{ ...v, recap: "" }]));
+});
+
+test("anyRecap: true while any view has a recap", () => {
+  assert.equal(anyRecap([]), false);
+  assert.equal(anyRecap([{ recap: "" }, { context_line: "x" }]), false);
+  assert.equal(anyRecap([{ recap: "" }, { recap: "A. Next B." }]), true);
+});
+
+test("golden fixture: recap as the Daemon sent it", () => {
+  const withRecap = fixture.input.filter((i) => i.view.recap !== "");
+  assert.ok(withRecap.length > 0, "no view with a recap in the fixture");
+  for (const { view: v } of fixture.input) assert.equal(typeof v.recap, "string", keyString(v));
+  for (const i of withRecap) {
+    assert.equal(i.view.recap, i.recap, keyString(i.view));
+    assert.equal(contextText(i.view), i.recap);
+  }
+  assert.equal(anyRecap(fixture.input.map((i) => i.view)), true);
 });

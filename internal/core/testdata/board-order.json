@@ -1,5 +1,5 @@
 {
-  "description": "Golden Board order (Story 3.1; regenerated 2026-10-21 for Needs you alone on top and every other class grouped by workspace, ranked Working 1, Finished 2, Idle 3, Unknown 4; regenerated again 2026-10-21 for Background, ranked 2 between Working and Finished, which moves Finished to 3, Idle to 4 and Unknown to 5; regenerated a third time 2026-10-21 for the operator's order inside a workspace group, ranked Finished 1, Idle 2, Background 3, Working 4, Unknown 5, each class most recent first, so a zone-1 start is the negated since; Needs you stays longest-waiting first). input holds shuffled Agent inputs, each with view: the expected AgentView exactly as NewAgentView serialises it (key, class, heading, shortened directory, context line, waiting_since, waiting_exact, background, sort_key). order is the expected AgentKey strings after sorting; headers are the indexes, in sorted order, where a zone-1 workspace group starts. Shared fixture: the Go test in internal/core/view_test.go checks every view, the order and the headers; the Board's ordering tests (Story 3.7) sort the expected views by their sort_key arrays, compared element by element, and must not re-derive class, zone, group, rank or sentinels. An unknown group or start is 9007199254740991 (Number.MAX_SAFE_INTEGER). background is AgentViewInput.Background, the process read's verdict, which the view shows only for a done or idle Agent of a program with a rule. tasks are background subagent ids the Agent's transcript shows open and turn_ended whether its main turn ended (ADR-0009, added 2026-10-21): with tasks open a working Agent is Background, ranked 3, when its turn ended, and Working with background_tasks otherwise; background_tasks counts the open tasks plus one for the process read's verdict when no open task is a background command (every tasks id here is a subagent's, so an open command is not expressed). since is FoldResult.Since (absent: fold not known); exact says the class began live.",
+  "description": "Golden Board order (Story 3.1; regenerated 2026-10-21 for Needs you alone on top and every other class grouped by workspace, ranked Working 1, Finished 2, Idle 3, Unknown 4; regenerated again 2026-10-21 for Background, ranked 2 between Working and Finished, which moves Finished to 3, Idle to 4 and Unknown to 5; regenerated a third time 2026-10-21 for the operator's order inside a workspace group, ranked Finished 1, Idle 2, Background 3, Working 4, Unknown 5, each class most recent first, so a zone-1 start is the negated since; Needs you stays longest-waiting first). input holds shuffled Agent inputs, each with view: the expected AgentView exactly as NewAgentView serialises it (key, class, heading, shortened directory, context line, recap, waiting_since, waiting_exact, background, sort_key). order is the expected AgentKey strings after sorting; headers are the indexes, in sorted order, where a zone-1 workspace group starts. Shared fixture: the Go test in internal/core/view_test.go checks every view, the order and the headers; the Board's ordering tests (Story 3.7) sort the expected views by their sort_key arrays, compared element by element, and must not re-derive class, zone, group, rank or sentinels. An unknown group or start is 9007199254740991 (Number.MAX_SAFE_INTEGER). background is AgentViewInput.Background, the process read's verdict, which the view shows only for a done or idle Agent of a program with a rule. tasks are background subagent ids the Agent's transcript shows open and turn_ended whether its main turn ended (ADR-0009, added 2026-10-21): with tasks open a working Agent is Background, ranked 3, when its turn ended, and Working with background_tasks otherwise; background_tasks counts the open tasks plus one for the process read's verdict when no open task is a background command (every tasks id here is a subagent's, so an open command is not expressed). recap is the latest session recap the Agent's transcript shows (ADR-0010, added 2026-10-22): the view carries it unchanged as recap, \"\" when none, and it changes no other value; w1:p2 has one. since is FoldResult.Since (absent: fold not known); exact says the class began live.",
   "home": "/Users/op",
   "input": [
     {
@@ -40,6 +40,7 @@
         "waiting_exact": true,
         "pane_title": "stray",
         "context_line": "stray",
+        "recap": "",
         "background": false,
         "background_tasks": 0,
         "sort_key": [
@@ -90,6 +91,7 @@
         "waiting_exact": true,
         "pane_title": "",
         "context_line": "",
+        "recap": "",
         "background": false,
         "background_tasks": 0,
         "sort_key": [
@@ -139,6 +141,7 @@
         "waiting_exact": true,
         "pane_title": "",
         "context_line": "",
+        "recap": "",
         "background": false,
         "background_tasks": 0,
         "sort_key": [
@@ -188,6 +191,7 @@
         "waiting_exact": true,
         "pane_title": "fix-auth-bug",
         "context_line": "fix-auth-bug",
+        "recap": "",
         "background": false,
         "background_tasks": 0,
         "sort_key": [
@@ -237,6 +241,7 @@
         "waiting_exact": false,
         "pane_title": "Claude Code",
         "context_line": "",
+        "recap": "",
         "background": false,
         "background_tasks": 0,
         "sort_key": [
@@ -287,6 +292,7 @@
         "waiting_exact": true,
         "pane_title": "await-ci",
         "context_line": "await-ci",
+        "recap": "",
         "background": true,
         "background_tasks": 1,
         "sort_key": [
@@ -336,6 +342,7 @@
         "waiting_exact": true,
         "pane_title": "busy",
         "context_line": "",
+        "recap": "",
         "background": false,
         "background_tasks": 0,
         "sort_key": [
@@ -390,6 +397,7 @@
         "waiting_exact": true,
         "pane_title": "wait-for-agents",
         "context_line": "wait-for-agents",
+        "recap": "",
         "background": true,
         "background_tasks": 2,
         "sort_key": [
@@ -436,6 +444,7 @@
         "waiting_exact": false,
         "pane_title": "anything",
         "context_line": "",
+        "recap": "",
         "background": false,
         "background_tasks": 0,
         "sort_key": [
@@ -485,6 +494,7 @@
         "waiting_exact": true,
         "pane_title": "new-session",
         "context_line": "new-session",
+        "recap": "",
         "background": false,
         "background_tasks": 0,
         "sort_key": [
@@ -515,6 +525,7 @@
       "tab": "build",
       "pane_position": "bottom-right",
       "pane_title": "write-tests",
+      "recap": "I wrote the store tests and they pass. Next I'll open the pull request.",
       "view": {
         "key": {
           "host": "mac",
@@ -535,6 +546,7 @@
         "waiting_exact": true,
         "pane_title": "write-tests",
         "context_line": "write-tests",
+        "recap": "I wrote the store tests and they pass. Next I'll open the pull request.",
         "background": false,
         "background_tasks": 0,
         "sort_key": [
@@ -586,6 +598,7 @@
         "waiting_exact": true,
         "pane_title": "watch-logs",
         "context_line": "watch-logs",
+        "recap": "",
         "background": true,
         "background_tasks": 1,
         "sort_key": [
@@ -632,6 +645,7 @@
         "waiting_exact": false,
         "pane_title": "",
         "context_line": "",
+        "recap": "",
         "background": false,
         "background_tasks": 0,
         "sort_key": [
@@ -682,6 +696,7 @@
         "waiting_exact": false,
         "pane_title": "Claude Code",
         "context_line": "",
+        "recap": "",
         "background": false,
         "background_tasks": 0,
         "sort_key": [
@@ -734,6 +749,7 @@
         "waiting_exact": true,
         "pane_title": "summarise",
         "context_line": "summarise",
+        "recap": "",
         "background": false,
         "background_tasks": 1,
         "sort_key": [
@@ -783,6 +799,7 @@
         "waiting_exact": false,
         "pane_title": "  ",
         "context_line": "",
+        "recap": "",
         "background": false,
         "background_tasks": 0,
         "sort_key": [
@@ -833,6 +850,7 @@
         "waiting_exact": true,
         "pane_title": "refactor-store",
         "context_line": "refactor-store",
+        "recap": "",
         "background": false,
         "background_tasks": 0,
         "sort_key": [

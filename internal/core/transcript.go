@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"encoding/json"
 	"strings"
+	"unicode/utf8"
 )
 
 // TranscriptLine is everything herddash takes from one line of a Claude Code
 // session transcript (ADR-0009): task ids, a task's closing status and
-// whether the main thread's turn started or ended. Nothing else of the line
-// is kept: no text, input, output, prompt or result.
+// whether the main thread's turn started or ended, and, only when recaps are
+// on, Claude Code's session recap (ADR-0010). Nothing else of the line is
+// kept: no other text, input, output, prompt or result.
 type TranscriptLine struct {
 	// StartID is a background task started by the line, "" when none;
 	// StartCommand says it is a shell command rather than a subagent.
@@ -24,7 +26,17 @@ type TranscriptLine struct {
 	// a tool result or a queued command) or ended (end_turn or stop_sequence).
 	TurnStarted bool
 	TurnEnded   bool
+	// Recap is Claude Code's session recap the line carries (ADR-0010),
+	// trimmed, without its trailing "(disable recaps in /config)" and at most
+	// MaxRecapRunes long; "" when none, and always "" when recaps are off.
+	Recap string
 }
+
+// MaxRecapRunes caps a recap's length: Claude Code's documented cap.
+const MaxRecapRunes = 400
+
+// recapSuffix is the note Claude Code ends every recap with.
+const recapSuffix = "(disable recaps in /config)"
 
 // closingStatuses are the notification statuses that close a task.
 var closingStatuses = map[string]bool{"completed": true, "failed": true, "killed": true}
@@ -40,6 +52,7 @@ type transcriptRecord struct {
 	Operation     string          `json:"operation"`
 	Content       json.RawMessage `json:"content"`
 	Attachment    json.RawMessage `json:"attachment"`
+	Subtype       string          `json:"subtype"`
 }
 
 // DecodeTranscriptLine decodes one transcript line for the markers ADR-0009
@@ -60,11 +73,15 @@ type transcriptRecord struct {
 //     "end_turn" or "stop_sequence" ends the main turn (both are followed by
 //     the turn's duration record; 33 of 4,902 main-thread turn ends in the
 //     transcripts read on 2026-10-22 were stop_sequence); a user record that is not a sidechain,
-//     or an attachment of type queued_command, starts it again.
+//     or an attachment of type queued_command, starts it again;
+//   - only when recaps is true (the operator's consent, ADR-0010): a system
+//     record that is not a sidechain, with subtype "away_summary" and a
+//     string content, carries the session recap (see recapOf). With recaps
+//     false it is no marker, and its content is never looked at.
 //
 // Ids must be 1 to 128 letters, digits, "-" or "_"; a line with any other is
 // not a marker for that id.
-func DecodeTranscriptLine(line []byte) (TranscriptLine, bool) {
+func DecodeTranscriptLine(line []byte, recaps bool) (TranscriptLine, bool) {
 	var l TranscriptLine
 	var rec transcriptRecord
 	if len(bytes.TrimSpace(line)) == 0 || json.Unmarshal(line, &rec) != nil {
@@ -93,8 +110,25 @@ func DecodeTranscriptLine(line []byte) (TranscriptLine, bool) {
 		if rec.Operation == "enqueue" {
 			l.EndID, l.EndStatus = taskNotification(rec.Content)
 		}
+	case "system":
+		if recaps && !rec.IsSidechain && rec.Subtype == "away_summary" {
+			l.Recap = recapOf(rec.Content)
+		}
 	}
 	return l, l != TranscriptLine{}
+}
+
+// recapOf is a recap record's content as shown: trimmed, without Claude
+// Code's trailing recapSuffix, trimmed again, and cut to at most
+// MaxRecapRunes whole runes; "" when the content is not a string or nothing
+// is left.
+func recapOf(raw json.RawMessage) string {
+	s := strings.TrimSpace(jsonString(raw))
+	s = strings.TrimSpace(strings.TrimSuffix(s, recapSuffix))
+	if utf8.RuneCountInString(s) > MaxRecapRunes {
+		s = strings.TrimSpace(string([]rune(s)[:MaxRecapRunes]))
+	}
+	return s
 }
 
 // isObject reports whether raw is a JSON object.
@@ -221,13 +255,15 @@ func taskID(id string) bool {
 // it, the oldest is forgotten.
 const MaxOpenTasks = 256
 
-// BackgroundTasks is one Claude Code Agent's background work as its
-// transcript shows it (ADR-0009): the tasks started and not yet closed, and
-// whether the main thread's turn has ended. Its zero value has none, turn
-// not ended.
+// BackgroundTasks is what one Claude Code Agent's transcript shows: its
+// background work (ADR-0009), the tasks started and not yet closed and
+// whether the main thread's turn has ended, and its latest session recap
+// (ADR-0010). Its zero value has none, turn not ended, no recap. It is held
+// in memory only.
 type BackgroundTasks struct {
 	open      []openTask
 	turnEnded bool
+	recap     string
 }
 
 type openTask struct {
@@ -236,9 +272,16 @@ type openTask struct {
 }
 
 // Apply folds one transcript line into b.
+//
+// A started turn clears the recap, so a stale one never shows beside a new
+// turn; a recap line replaces it, the newest winning (ADR-0010).
 func (b *BackgroundTasks) Apply(l TranscriptLine) {
 	if l.TurnStarted {
 		b.turnEnded = false
+		b.recap = ""
+	}
+	if l.Recap != "" {
+		b.recap = l.Recap
 	}
 	if l.TurnEnded {
 		b.turnEnded = true
@@ -283,7 +326,11 @@ func (b BackgroundTasks) OpenCommand() bool {
 	return false
 }
 
+// Recap is the Agent's latest session recap (ADR-0010), "" when there is
+// none or a turn started since.
+func (b BackgroundTasks) Recap() string { return b.recap }
+
 // Clone is a copy of b that shares nothing with it.
 func (b BackgroundTasks) Clone() BackgroundTasks {
-	return BackgroundTasks{open: append([]openTask(nil), b.open...), turnEnded: b.turnEnded}
+	return BackgroundTasks{open: append([]openTask(nil), b.open...), turnEnded: b.turnEnded, recap: b.recap}
 }

@@ -136,6 +136,7 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 		Logger: logger,
 
 		AllowUnsupportedHerdr: cfg.AllowUnsupportedHerdr(),
+		ClaudeRecaps:          cfg.ClaudeRecaps(),
 		Profiles:              cfg.ProfileRules(),
 		Store:                 st,
 		RetentionDays:         cfg.RetentionDays(),

@@ -67,3 +67,6 @@
 - source_spec: `docs/implementation/spec-transcript-background.md`
   summary: Whether `sessions/<pid>.json` updates `sessionId` when `/clear` starts a new session in the same process is not known; if it does not, the old transcript's open tasks stay on the Box.
   evidence: Unverified (would be medium). Settle it by running `/clear` in a session with a background task open and reading the record's sessionId before and after.
+- source_spec: `docs/implementation/spec-claude-recap.md`
+  summary: The recap row's layout (the board--recaps toggle, the taller grid, the two-line clamp) is verified only by the hand-run board-browser.mjs; run it in CI.
+  evidence: Removing the toggle or the .board--recaps rule leaves every CI check green; same root as the Story 3.9 deferral to run the browser check in CI.

@@ -300,7 +300,7 @@ func TestAgentViewJSON(t *testing.T) {
 		t.Errorf("sort_key = %#v, want an array of five", m["sort_key"])
 	}
 	for _, f := range []string{"key", "agent_program", "profile", "heading", "directory", "workspace", "tab",
-		"pane_position", "status", "attention_class", "waiting_exact", "pane_title", "context_line", "background", "background_tasks", "sort_key"} {
+		"pane_position", "status", "attention_class", "waiting_exact", "pane_title", "context_line", "recap", "background", "background_tasks", "sort_key"} {
 		if _, ok := m[f]; !ok {
 			t.Errorf("JSON lacks %q", f)
 		}
@@ -336,6 +336,9 @@ type boardFixture struct {
 		// TurnEnded says its main turn ended (ADR-0009).
 		Tasks     []string `json:"tasks"`
 		TurnEnded bool     `json:"turn_ended"`
+		// Recap is the latest session recap the transcript shows
+		// (ADR-0010), applied after Tasks and TurnEnded.
+		Recap string `json:"recap"`
 		// View is the expected AgentView, as NewAgentView serialises it.
 		View json.RawMessage `json:"view"`
 	} `json:"input"`
@@ -369,6 +372,7 @@ func loadBoard(t *testing.T) ([]AgentView, boardFixture) {
 			tr.Apply(TranscriptLine{StartID: id})
 		}
 		tr.Apply(TranscriptLine{TurnEnded: in.TurnEnded})
+		tr.Apply(TranscriptLine{Recap: in.Recap})
 		views = append(views, NewAgentView(AgentViewInput{
 			Key: in.Key, AgentProgram: in.AgentProgram, Profile: in.Profile, Status: in.Status, Fold: f,
 			Context: PaneContext{ProjectDir: in.Directory, WorkspaceLabel: in.Workspace, TabLabel: in.Tab,
@@ -521,5 +525,71 @@ func TestPanePositions(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestAgentViewRecap covers the matrix's "View" row: a recap on a Finished
+// Agent is in its AgentView's JSON as recap, and every other field is what
+// it is without one (ADR-0010).
+func TestAgentViewRecap(t *testing.T) {
+	in := AgentViewInput{
+		Key: AgentKey{Host: "mac", Server: "default", Epoch: 2, PaneID: "w1:p1"}, AgentProgram: "claude",
+		Profile: "cldp", Status: StatusDone,
+		Fold:    FoldResult{Known: true, Status: StatusDone, Class: ClassFinished, Since: 500, SinceProvenance: ProvenanceLive, EverWorking: true},
+		Context: PaneContext{PaneTitle: "write-tests", WorkspacePosition: 1},
+	}
+	plain := NewAgentView(in)
+	in.Transcript.Apply(TranscriptLine{TurnEnded: true})
+	in.Transcript.Apply(TranscriptLine{Recap: "I did X. Next I'll do Y."})
+	withRecap := NewAgentView(in)
+	if withRecap.Recap != "I did X. Next I'll do Y." || plain.Recap != "" {
+		t.Errorf("recap %q / %q", withRecap.Recap, plain.Recap)
+	}
+	b, _ := json.Marshal(withRecap)
+	if !strings.Contains(string(b), `"recap":"I did X. Next I'll do Y."`) {
+		t.Errorf("JSON %s lacks the recap", b)
+	}
+	if b, _ := json.Marshal(plain); !strings.Contains(string(b), `"recap":""`) {
+		t.Errorf("JSON %s lacks an empty recap", b)
+	}
+	withRecap.Recap = ""
+	if !reflect.DeepEqual(withRecap, plain) {
+		t.Errorf("a recap changed another field:\n%+v\n%+v", withRecap, plain)
+	}
+}
+
+// TestAgentViewRecapHidden covers the matrix's "View, hidden" row: a recap
+// is shown only on a Finished, Idle or Background Box; Working (not
+// Background), Needs you and Unknown get "".
+func TestAgentViewRecapHidden(t *testing.T) {
+	const recap = "I did X. Next I'll do Y."
+	for name, tc := range map[string]struct {
+		status Status
+		class  AttentionClass
+		task   bool
+		want   string
+	}{
+		"finished":                {StatusDone, ClassFinished, false, recap},
+		"idle":                    {StatusIdle, ClassWorking, false, recap},
+		"background (done)":       {StatusDone, ClassFinished, true, recap},
+		"background (working)":    {StatusWorking, ClassWorking, true, recap},
+		"working, not background": {StatusWorking, ClassWorking, false, ""},
+		"needs you":               {StatusBlocked, ClassNeedsYou, false, ""},
+		"unknown":                 {StatusUnknown, ClassUnknown, false, ""},
+	} {
+		in := AgentViewInput{
+			Key: AgentKey{Host: "mac", Server: "default", Epoch: 2, PaneID: "w1:p1"}, AgentProgram: "claude",
+			Status: tc.status,
+			Fold:   FoldResult{Known: true, Status: tc.status, Class: tc.class, Since: 500, EverWorking: true},
+		}
+		if tc.task {
+			in.Transcript.Apply(TranscriptLine{StartID: "ag1"})
+		}
+		in.Transcript.Apply(TranscriptLine{TurnEnded: true})
+		in.Transcript.Apply(TranscriptLine{Recap: recap})
+		v := NewAgentView(in)
+		if v.Recap != tc.want || v.Background != tc.task {
+			t.Errorf("%s: recap %q, background %v; want %q, %v", name, v.Recap, v.Background, tc.want, tc.task)
+		}
 	}
 }

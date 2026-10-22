@@ -244,7 +244,42 @@ not claimed until one has been observed.
   Working (or whatever herdr then says).
 - A `working` Agent with one background command open and its turn not ended reads `WORKING · 1 bg`.
 - A task notification without a status leaves its task open.
-- No transcript text appears in any log, API response or the record.
+- No transcript text appears in any log, API response or the record, except Claude Code's session
+  recap in the API (`recap`), and only when `claude_recaps` is on (ADR-0010 below); never in a log
+  or the record.
+
+*Amended 2026-10-22, [ADR-0010](adr/0010-claude-code-recap-on-the-board.md) (accepted by the
+operator: "privacy is not an issue, this is used only for me at this time, and future users will
+have to consent, two lines, recaps should be up to date as often as possible"):* "the idea is to
+have a recap in the boxes". Claude Code writes a two-sentence session recap into the same
+transcript about three minutes after a turn ends. Only when the operator sets the config key
+`claude_recaps = true` (default `false`, file only: the consent), the Daemon also decodes one more
+record from the transcript it already tails: a non-sidechain `system` record with `subtype`
+`away_summary` and a string `content`. It keeps per Agent, in memory only, the newest recap's text,
+trimmed, without Claude Code's trailing "(disable recaps in /config)", and cut to at most 400
+characters; nothing else of the record. A newer recap replaces it; the main thread's next turn
+starting (a prompt, a tool result or a queued command) clears it, so a Working Agent never shows a
+stale one. The AgentView gains `recap`, set only on a Finished, Idle or Background Box and ""
+on a Working, Needs you or Unknown one, or when there is none (operator decision 2026-10-22, at
+review: herdr reports a new turn before the next transcript read). A Box with a recap shows it in the Context
+Line's row, clamped to two lines with an ellipsis, the full text in its tooltip and accessible
+name; while any Box shows one, every Box is one line taller so all keep one height. This amends
+ADR-0009's rule that no transcript text is ever sent or shown, for the recap alone. The record,
+the Attention Class, the Fold, Waiting Time and the order are unchanged.
+
+**Consequences (testable):**
+- With `claude_recaps` unset or `false`, no recap record is decoded, every AgentView's `recap` is
+  `""` and the Board is exactly as before.
+- With it `true`, a Finished Claude Code Agent whose transcript ends with a recap shows that recap,
+  without the "(disable recaps in /config)" suffix, in place of its Context Line.
+- A prompt, tool result or queued command after the recap clears it; a newer recap replaces it.
+- A recap longer than 400 characters is cut at a character boundary.
+- A sidechain recap, another `system` subtype or a non-string `content` gives no recap.
+- Only a Finished, Idle or Background Box shows a recap; a Working (not Background), Needs you or
+  Unknown Box has `recap` `""` even while the transcript holds one.
+- The recap text never appears in a log or in the record; the log says only, by pane, that a recap
+  appeared or cleared.
+- While any Box has a recap, every Box is one line taller; with none, Box heights are unchanged.
 
 #### FR-2a: Context Line derivation
 

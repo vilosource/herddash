@@ -102,8 +102,9 @@ type AgentViewInput struct {
 	// it only while ChecksBackground holds for the Status and the class is
 	// finished or working.
 	Background bool
-	// Transcript is the Agent's background work as its Claude Code
-	// transcript shows it (ADR-0009); the zero value when it is not read.
+	// Transcript is the Agent's background work and latest session recap as
+	// its Claude Code transcript shows them (ADR-0009, ADR-0010); the zero
+	// value when it is not read.
 	Transcript BackgroundTasks
 }
 
@@ -132,6 +133,14 @@ type AgentView struct {
 	PaneTitle    string `json:"pane_title"`
 	// ContextLine is never omitted: an empty one is sent as "".
 	ContextLine string `json:"context_line"`
+	// Recap is Claude Code's latest session recap (ADR-0010), read only when
+	// the operator turned recaps on, and cleared when the Agent's next turn
+	// starts. It is set only on a Finished, Idle or Background Box; a
+	// Working, Needs you or Unknown one gets "", since herdr reports a new
+	// turn before the next transcript read (operator decision 2026-10-22).
+	// The Board shows it in place of the Context Line. Never omitted: ""
+	// when there is none. It changes no other value.
+	Recap string `json:"recap"`
 	// Background is set when the Agent is waiting on background work: its
 	// Status is done or idle, or working with its main turn over (ADR-0009),
 	// and it has background tasks open. The class, the Waiting Time and the
@@ -176,6 +185,7 @@ func NewAgentView(in AgentViewInput) AgentView {
 		WaitingExact: exact,
 		PaneTitle:    in.Context.PaneTitle,
 		ContextLine:  ContextLine(in.AgentProgram, in.Context.PaneTitle),
+		Recap:        shownRecap(in, class, background),
 		Background:   background,
 
 		BackgroundTasks: tasks,
@@ -213,6 +223,15 @@ func backgroundOf(in AgentViewInput, class AttentionClass) (int, bool) {
 		return n, in.Transcript.TurnEnded()
 	}
 	return n, true
+}
+
+// shownRecap is the Agent's recap when its Box is Finished, Idle or Background
+// (ADR-0010), "" otherwise.
+func shownRecap(in AgentViewInput, class AttentionClass, background bool) string {
+	if background || class == ClassFinished || (class == ClassWorking && in.Status != StatusWorking) {
+		return in.Transcript.Recap()
+	}
+	return ""
 }
 
 // SortKey is where an Agent sorts on the Board (FR-3):

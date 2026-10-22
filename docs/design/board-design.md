@@ -60,7 +60,10 @@ change a Box's height. Empty fields keep their row. The rows, in reading order:
    segment, the project, stays visible. `~` for the home directory is substituted by the Daemon
    (`core.ShortenDir`, AD-1), not by the Board.
 3. **Context Line**: one line, ellipsis. The row is always present, so an empty Context Line
-   keeps its space.
+   keeps its space. *Added 2026-10-22, ADR-0010:* when the AgentView's `recap` is not empty
+   (Claude Code's own session recap, sent only when the operator set `claude_recaps`), the recap
+   takes this row in place of the Context Line (class `recap`), wrapping to at most **two lines**
+   with an ellipsis (`line-clamp: 2`). A Box with no recap keeps its Context Line.
 4. **Heading and state.** On the left the heading exactly as the API sends it: the Profile alone
    for Claude Code (`cldw`, `unresolved`), otherwise `profile · program` or the program alone
    (`codex`), in the quiet meta style; it is the part that gives way with an ellipsis in a narrow
@@ -77,8 +80,15 @@ change a Box's height. Empty fields keep their row. The rows, in reading order:
    `waiting_since`. Its format has defined boundaries, with the second unit always two digits:
    `0s` to `59s`, `1m` to `59m`, `1h 00m` to `23h 59m`, then `1d 00h` onwards.
 
+**Height with recaps** (*added 2026-10-22, ADR-0010*). Every Box keeps one height. While any Box
+on the Board has a recap, the Board carries `board--recaps` and every Box is one line taller,
+`calc(8.25rem + 1.5rem)`, its context row `3rem` (two lines of `1.5rem`) instead of `1.5rem`; a
+Box without a recap shows its one-line Context Line in that taller row. With no recap anywhere,
+the layout and heights are exactly as above.
+
 The Box's hover `title` and its accessible name both carry everything, untruncated: workspace and
-tab, pane position, Context Line, directory, heading, class, its background tasks in words
+tab, pane position, Context Line (or, *added 2026-10-22 for ADR-0010*, the full recap in its
+place), directory, heading, class, its background tasks in words
 ("2 background tasks", added 2026-10-21 for ADR-0009) and Waiting Time. The rows carry no
 titles of their own, so hovering anywhere on the Box shows it all.
 
@@ -195,7 +205,7 @@ and workspace labels are headings.
 Each Box is focusable and shows a 3px `--focus` outline offset outside it, and the review
 toolbar's controls show the same outline. Boxes are focusable so that keyboard and screen-reader
 users can read a Box in full. Each Box's accessible name carries its workspace and tab, pane position, full
-Context Line, directory, heading, class label and Waiting Time ("at least" for a lower bound),
+Context Line (or the full recap in its place, ADR-0010), directory, heading, class label and Waiting Time ("at least" for a lower bound),
 and it is kept current as the time ticks. Focusing a Box does nothing else. Needs you is conveyed in
 text, not only colour.
 
