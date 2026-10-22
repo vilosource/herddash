@@ -1,8 +1,10 @@
 # ADR-0010: Claude Code's session recap on the Board
 
-**Status: Proposed** on 2026-10-22, for the operator's approval with a Board mock built from the
-live state. It amends one rule of [ADR-0009](0009-background-work-from-claude-code-transcripts.md):
-that no transcript text is ever kept, sent or shown.
+**Status: Accepted** by the operator on 2026-10-22, after a mock built from the live Board:
+"privacy is not an issue, this is used only for me at this time, and future users will have to
+consent, two lines, recaps should be up to date as often as possible". It amends one rule of
+[ADR-0009](0009-background-work-from-claude-code-transcripts.md): that no transcript text is ever
+kept, sent or shown.
 
 ## Context
 
@@ -41,6 +43,10 @@ privacy decision, which is why this is an ADR.
 
 ## Decision
 
+- **Consent.** Recaps are read and shown only when the operator turns them on: the config key
+  `claude_recaps` (bool, default `false`), in herddash's own config file. Off, the decoder ignores
+  the record and `recap` is always empty, exactly as before this ADR. This operator's config turns
+  it on; a future user must do the same.
 - **Source.** The transcript ADR-0009 already tails; no new file is opened, no new watch. The
   decoder recognises one more record by fixed field names: a non-sidechain `system` record whose
   `subtype` is `away_summary` and whose `content` is a string.
@@ -49,15 +55,18 @@ privacy decision, which is why this is an ADR.
   at 400 characters, Claude Code's documented cap (cut at a character boundary). Nothing else from the record is kept. It is never written
   to the record, never logged (logs say only that a recap was seen, by pane), and is lost on a
   Daemon restart until the transcript is read again.
-- **Fresh only.** A recap applies from its record until the main thread's next turn starts (the
-  ADR-0009 turn-start markers: a prompt, a tool result or a queued command). After that the Agent
-  has none until Claude Code writes another. A Working Agent therefore never shows one, and a
+- **Fresh only, and the newest.** A recap applies from its record until the main thread's next
+  turn starts (the ADR-0009 turn-start markers: a prompt, a tool result or a queued command), and
+  a newer recap replaces it as soon as the 2 s transcript read sees it. After a turn starts the
+  Agent has none until Claude Code writes another (the operator: "recaps should be up to date as
+  often as possible"; herddash cannot make Claude Code write them more often). A Working Agent therefore never shows one, and a
   stale recap is never shown beside a new turn.
 - **View.** `AgentView` gains `recap` (string, empty when there is none). Every other derived
   value is unchanged: the record, the Attention Class, the Fold, Waiting Time and the order.
 - **Board.** When `recap` is not empty it takes the Context Line's row, clamped to two lines, with
   the full text in the Box's tooltip and accessible name; otherwise the Context Line shows as
-  today. A Box grows by at most one line.
+  today. Every Box keeps one height (the approved design): while any Box shows a recap, all Boxes
+  are one line taller; while none does, the Board is as today.
 - **Surface.** It is served where AgentViews already are, the read-only loopback API and its event
   stream (ADR-0007); no new route, no new network surface.
 - **Failure is quiet.** A Claude Code release that stops writing the record, or recaps turned off,
@@ -67,7 +76,7 @@ privacy decision, which is why this is an ADR.
 
 - A Finished or Idle Claude Code Box says, in two sentences, what the Agent did and what it means
   to do next, without the operator switching to its pane.
-- herddash now sends conversational text to the browser for the first time. It is Claude Code's
+- herddash now sends conversational text to the browser for the first time, when turned on. It is Claude Code's
   own summary, not the conversation, and it stays on loopback in memory, but anything on the
   operator's machine that can read `127.0.0.1` sees it, as it already sees Pane Titles.
 - The recap is Claude Code's undocumented on-disk format, as ADR-0009's markers are; a fixture
