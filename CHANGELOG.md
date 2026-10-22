@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.5.0](https://github.com/vilosource/herddash/compare/v0.4.0...v0.5.0) (2026-10-22)
+
+
+### Features
+
+* **core:** order each workspace group Finished, Idle, Background, Working, newest first ([0a500d5](https://github.com/vilosource/herddash/commit/0a500d5cf2506635b5484d0ba4b74c70f1a2874c))
+* **engine:** background tasks and subagents from Claude Code transcripts (ADR-0009) ([0a500d5](https://github.com/vilosource/herddash/commit/0a500d5cf2506635b5484d0ba4b74c70f1a2874c))
+* **engine:** Claude Code's session recap on the Board (ADR-0010) ([0a500d5](https://github.com/vilosource/herddash/commit/0a500d5cf2506635b5484d0ba4b74c70f1a2874c))
+* **engine:** mark Agents waiting on background work as Background ([0a500d5](https://github.com/vilosource/herddash/commit/0a500d5cf2506635b5484d0ba4b74c70f1a2874c))
+* **engine:** Needs you from Claude Code's session record (ADR-0008) ([0a500d5](https://github.com/vilosource/herddash/commit/0a500d5cf2506635b5484d0ba4b74c70f1a2874c))
+* **httpapi:** traffic-light colours: red needs you, amber idle, green working ([0a500d5](https://github.com/vilosource/herddash/commit/0a500d5cf2506635b5484d0ba4b74c70f1a2874c))
+
+
+### Bug Fixes
+
+* **core:** a TaskStop result ends its background task ([0a500d5](https://github.com/vilosource/herddash/commit/0a500d5cf2506635b5484d0ba4b74c70f1a2874c))
+* **core:** end a turn on stop_sequence ([0a500d5](https://github.com/vilosource/herddash/commit/0a500d5cf2506635b5484d0ba4b74c70f1a2874c))
+* **engine:** clamp Claude's waiting stamp to the previous Transition, not the read time ([0a500d5](https://github.com/vilosource/herddash/commit/0a500d5cf2506635b5484d0ba4b74c70f1a2874c))
+* **engine:** harden the session watch after review ([0a500d5](https://github.com/vilosource/herddash/commit/0a500d5cf2506635b5484d0ba4b74c70f1a2874c))
+* **engine:** read an Agent's children 250 ms after its turn ends, not 1 s ([0a500d5](https://github.com/vilosource/herddash/commit/0a500d5cf2506635b5484d0ba4b74c70f1a2874c))
+* **httpapi:** reload the Board when the Daemon behind it restarts ([0a500d5](https://github.com/vilosource/herddash/commit/0a500d5cf2506635b5484d0ba4b74c70f1a2874c))
+
 ## [0.4.0](https://github.com/vilosource/herddash/compare/v0.3.0...v0.4.0) (2026-10-21)
 
 
