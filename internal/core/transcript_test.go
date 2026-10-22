@@ -166,6 +166,8 @@ func TestTranscriptMatrix(t *testing.T) {
 		"unknown status stays open":        {[]string{bgStart, notify("bx1", "running")}, 1, false},
 		"other id's notification":          {[]string{bgStart, notify("zz9", "completed")}, 1, false},
 		"sidechain end_turn":               {[]string{prompt, sideEnd}, 0, false},
+		"stop_sequence ends a turn":        {[]string{prompt, agentStart, `{"type":"assistant","message":{"stop_reason":"stop_sequence"}}`}, 1, true},
+		"max_tokens does not":              {[]string{prompt, `{"type":"assistant","message":{"stop_reason":"max_tokens"}}`}, 0, false},
 		"new prompt":                       {[]string{prompt, endTurn, prompt}, 0, false},
 		"tool result starts a turn":        {[]string{endTurn, bgStart}, 1, false},
 		"queued command starts a turn":     {[]string{endTurn, queuedCmd}, 0, false},

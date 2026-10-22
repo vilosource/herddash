@@ -220,10 +220,14 @@ rule yet and never read Background.
 (accepted by the operator):* "I want to know when you are Working and you have background tasks
 or you are finished and have background tasks", including subagents. For a Claude Code Agent
 whose session record (FR-6's ADR-0008 amendment) names its `sessionId` and `cwd`, the Daemon also
-tails that session's transcript, `<config dir>/projects/<cwd with "/" and "." as "-">/<sessionId>.jsonl`,
-on the same 2 s watch, and decodes only three structural markers: a background command's or
-subagent's start (its task id), a task notification's end (its task id and status), and whether
-the main thread's turn has ended. Text, inputs, outputs, prompts and results are never kept,
+tails that session's transcript, `<config dir>/projects/<project folder>/<sessionId>.jsonl`, the
+folder being the cwd with every character but a letter or digit as "-" (or with only "/" and "."
+as "-" when only that folder exists), on the same 2 s watch, and decodes only structural markers:
+a background command's or subagent's start (its task id); its end, by a task notification (its
+task id and status) or by a TaskStop result (its task id, read as killed; added 2026-10-21, since
+a stopped task gets no notification); and whether the main thread's turn has ended (a
+`stop_reason` of `end_turn` or `stop_sequence`) or started again (a prompt, a tool result or a
+queued command). Text, inputs, outputs, prompts and results are never kept,
 logged, stored, sent or shown. The AgentView gains `background_tasks`, the open tasks plus one
 for a tool shell the process check finds that no open command accounts for. A Working Agent with
 tasks open reads `WORKING · N bg`; one whose main turn has ended while tasks are open (herdr

@@ -1,6 +1,6 @@
 // Hand-run headless-Chrome check of the Board's Boxes and workspace groups
-// (layout v4) and of its connection and version strips (Story 3.9). Not
-// embedded, not run in CI.
+// (layout v4), the State label's background task count (ADR-0009) and its
+// connection and version strips (Story 3.9). Not embedded, not run in CI.
 //
 //   go build -o /tmp/herddash ./cmd/herddash
 //   node internal/httpapi/web/check/board-browser.mjs /tmp/herddash
@@ -184,8 +184,10 @@ async function chrome() {
   const { result: att } = await send("Target.attachToTarget", { targetId: result.targetId, flatten: true });
   const sid = att.sessionId;
   await send("Runtime.enable", {}, sid);
+  await send("Page.enable", {}, sid);
   return {
     warnings,
+    send: (method, params) => send(method, params, sid),
     open: (url) => send("Page.navigate", { url }, sid),
     eval: async (expr) => (await send("Runtime.evaluate", { expression: expr, returnByValue: true }, sid)).result.result.value,
     close: () => {
@@ -253,6 +255,59 @@ async function main() {
       work,
     );
     check("four rows, one height, title equals the accessible name", b.boxes.every((x) => x.rows === 4 && x.titleIsLabel && x.height === needs.height), b);
+
+    // The State label's task count (ADR-0009). The fake herdr has no Claude
+    // process, so the Daemon reports none: the page is given the Daemon's own
+    // state with counts set, through a stand-in EventSource that sends it
+    // once as the state event.
+    const state = JSON.parse(await (await fetch("http://" + addr + "/api/state")).text());
+    const variants = [
+      { name: "Working Box with 2 tasks shows · 2 bg after its class", tasks: 2, background: false, want: "working · 2 bg", kind: "box box--working" },
+      { name: "Background Box with 3 tasks shows · 3 after its class", tasks: 3, background: true, want: "background · 3", kind: "box box--background" },
+    ];
+    for (const v of variants) {
+      const sent = structuredClone(state);
+      for (const a of sent.agents) {
+        // Needs you never carries a count; it is set anyway to show so.
+        a.background_tasks = v.tasks;
+        if (a.status === "working") a.background = v.background;
+      }
+      const { result: added } = await browser.send("Page.addScriptToEvaluateOnNewDocument", {
+        source: `window.EventSource = class extends EventTarget {
+          static CLOSED = 2;
+          readyState = 1;
+          constructor() {
+            super();
+            window.standIn = (window.standIn || 0) + 1;
+            setTimeout(() => this.dispatchEvent(new MessageEvent("state", { data: ${JSON.stringify(JSON.stringify(sent))}, lastEventId: "1" })), 0);
+          }
+          close() {}
+        };`,
+      });
+      await browser.open("http://" + addr + "/");
+      const labels = await until("the stand-in state", async () => {
+        if (!(await browser.eval("window.standIn"))) return null;
+        const x = JSON.parse(
+          await browser.eval(`JSON.stringify([...document.querySelectorAll("#board .box")].map((b) => ({
+            kind: b.className, state: b.querySelector(".class")?.textContent,
+            count: b.querySelector(".class .count")?.textContent ?? null, label: b.getAttribute("aria-label") })))`),
+        );
+        return x.length === 2 && x.some((b) => b.kind === v.kind) ? x : null;
+      }, 5000).catch(async (err) => {
+        throw new Error(err.message + ": stand-in ran " + (await browser.eval("window.standIn")) + ", boxes " + (await browser.eval(BOXES)));
+      });
+      const box = labels.find((x) => x.kind === v.kind);
+      const needsYou = labels.find((x) => x.kind === "box box--needs_you");
+      check(
+        v.name + ", and its accessible name says so",
+        box.state.toLowerCase() === v.want && box.count !== null && new RegExp(v.tasks + " background tasks").test(box.label),
+        labels,
+      );
+      check("Needs you Box shows no count (" + v.tasks + " sent)", !!needsYou && needsYou.count === null, labels);
+      await browser.send("Page.removeScriptToEvaluateOnNewDocument", { identifier: added.identifier });
+    }
+    await browser.open("http://" + addr + "/");
+    await until("the real stream back", async () => ((await snap()).boxes === 2 ? true : null));
 
     await herdr.stop();
     s = await until("the disconnected strip", async () => ((await snap()).strips.length ? snap() : null));

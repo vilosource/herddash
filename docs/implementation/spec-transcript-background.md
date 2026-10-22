@@ -2,8 +2,9 @@
 title: 'Background tasks, subagents and workflows from Claude Code transcripts (ADR-0009)'
 type: 'feature'
 created: '2026-10-21'
-status: 'in-progress'
+status: 'done'
 route: 'dispatch'
+baseline_commit: 'eb09e2ae92c2c394d3816482c0d8d9e54d51b66a'
 review_loop_iteration: 0
 context:
   - '{project-root}/docs/adr/0009-background-work-from-claude-code-transcripts.md'
@@ -181,9 +182,45 @@ main thread's turn has ended, and show `WORKING · N bg`, BACKGROUND or FINISHED
 
 ## Review Triage Log
 
+Review of 2026-10-22 (three layers on the diff from `eb09e2a`; resumed after a harness crash).
+Real-transcript evidence: a structural scan of 181 transcripts from the last 14 days on this Mac
+(field names and counts only).
+
+| # | Layer | Finding | Verdict | Evidence | Route |
+|---|-------|---------|---------|----------|-------|
+| 1 | blind, edge | PRD, spine, test comment describe the "/"-and-"."-only slug; the code tries the broader rule first | medium | `ClaudeTranscriptPath` tries every non-alphanumeric as "-" first; PRD FR-2 amendment and spine row said otherwise | patch: PRD, spine, test comment |
+| 2 | blind | TaskStop end marker and turn-start markers missing from the privacy-scoped PRD text | medium | 44c2678 decodes `task_type`/`task_id`; PRD said "only three structural markers" | patch: PRD |
+| 3 | edge | A main turn ending in `stop_sequence` is not a turn end | low | 33 of 4,902 main-thread turn ends were `stop_sequence`, each followed by `turn_duration`; `max_tokens`/`refusal` never seen | patch: core + test rows |
+| 4 | verification-gap | No engine test that a read resumes from the last offset | low | Reviewer's mutation (pass `Tail{}`) left every test green | patch: `TestTranscriptReadResumes`, fails under that mutation |
+| 5 | verification-gap | Nothing checks the drawn count in the State label | low | Deleting the `.count` append left all node tests green | patch: browser check variants for `· 2 bg` and `· 3`; fail under that mutation |
+| 6 | edge, blind | `trLogged` never reset, so a new process's transcript failure is not logged | low | Set once per pane lifetime | patch: reset in `followSession` |
+| 7 | blind | Design doc: a working Agent shown as Background counts Waiting Time "from when the turn ended" | low | `waiting_since` stays the Working fold's Since | patch: design doc |
+| 8 | blind | Group-count rule for a working Background Box only in a test | low | `groupCounts` uses `boxKind` | patch: design doc |
+| 9 | blind | Golden fixture description omits the open-command rule | low | fixture tasks are all subagents | patch: fixture description |
+| 10 | blind | Tasks with no end keep an Agent Background until the window drops them | maybe-false | Depends on whether a resumed session copies starts into its new file; no file held two sessionIds | defer |
+| 11 | blind | `/clear` may keep the old transcript's tasks | maybe-false | Whether the record's sessionId changes is unobserved | defer |
+| 12 | blind | Every `followSession` (every status report) drops tasks and re-reads 8 MiB | false | `report` calls `followSession` only while no watch runs (`sessGen == 0`); otherwise only on a program or process change | reject |
+| 13 | blind, edge | 8 MiB first read inside the 1 s session timeout could end the ADR-0008 verdict | false | A first read of an 8.4 MB real transcript took 40-60 ms | reject |
+| 14 | blind | A subagent's own background commands counted as the main session's | false | 0 sidechain records with `backgroundTaskId` among 270 starts | reject |
+| 15 | blind, edge | First `<status>`/`<task-id>` taken anywhere, so summary text could spoof it | false | In all 1,336 notifications `<status>` precedes `<summary>` or is absent | reject |
+| 16 | edge | Notification content as an array or with leading whitespace never closes | false | All 1,369 enqueues carry a string content starting `<task-notification>` | reject |
+| 17 | blind | Lines over 1 MiB can hide a turn start | low | Rare (large image prompts); the next tool result restarts the turn; fix adds counting | reject |
+| 18 | edge | Passing transcript failure flickers Background to Finished | low | Transcripts are append-only, failures rare; fix adds a failure counter | reject |
+| 19 | edge | Non-sidechain meta user records reset `turnEnded` | low | Matters only while herdr says working; fix adds a field | reject |
+| 20 | edge | In-place truncate that regrows past the offset | low | Transcripts are append-only | reject |
+| 21 | edge | Up to 2 s of Background after a new prompt while tasks are open | low | Cosmetic, one read interval; fix adds a herdr-driven turn start | reject |
+| 22 | edge | Slug longer than 255 bytes | low | Falls back to the process check, as specified; no such path here | reject |
+| 23 | blind, edge | Spec in review with the live acceptance check and browser check unrun | false | Fix edits this spec; both have since run (see Verification) | reject |
+
 ## Verification
 
 **Commands:**
 - `go build ./... && go vet ./... && go test -race -count=1 ./...` -- all pass
 - `node --test --test-reporter=tap internal/httpapi/web/*.test.mjs` -- all pass
 - `test -z "$(gofmt -l .)"` -- exit 0
+- `node internal/httpapi/web/check/board-browser.mjs <binary>` -- all pass (2026-10-22, with the task-count variants)
+
+**Live acceptance (2026-10-22):** with 0.5.0-dev (44c2678) installed, this session's Box was
+sampled every 2 s while its turn had ended and three review subagents plus one background command
+ran: `status working, background true, background_tasks 4` from 09:01:47 to 09:02:53, back to
+Working when a notification started the next turn.

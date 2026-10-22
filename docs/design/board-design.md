@@ -71,7 +71,8 @@ change a Box's height. Empty fields keep their row. The rows, in reading order:
    Box with tasks open reads `WORKING · N bg`, a Background Box with more than one reads
    `BACKGROUND · N` (`BACKGROUND` alone for one); the count, set in the label's colour, keeps its
    lower-case unit (`bg`) while the class word stays uppercase. No other class shows a count.
-   Group counts are unchanged. A
+   Group counts are unchanged: each Box counts under the kind it is drawn as, so a `working`
+   Agent shown as Background counts as background, not working. A
    lower bound reads `≥ 12m`. An absent `waiting_since` shows a dash. It ticks from
    `waiting_since`. Its format has defined boundaries, with the second unit always two digits:
    `0s` to `59s`, `1m` to `59m`, `1h 00m` to `23h 59m`, then `1d 00h` onwards.
@@ -124,7 +125,9 @@ Needs you fill moved from red-orange to red so it cannot be mistaken for amber.
   `background: true`, decided by the Daemon and never derived by the Board) has a 6px **dashed**
   leading edge in `--working-edge` and a `BACKGROUND` label in `--working-accent`, flush with the
   page like Working, so it reads as not yet done; its Waiting Time is in full ink, as Finished's,
-  counting from when the turn ended. It takes precedence over Finished and Idle, and (ADR-0009)
+  counting from when the turn ended; a `working` Agent shown as Background (ADR-0009) keeps
+  Working's Waiting Time, counting from when it started working, since the Daemon's Waiting Time
+  is the Attention Class's and never changes for background work. It takes precedence over Finished and Idle, and (ADR-0009)
   over Working for a `working` Agent whose main turn has ended while background tasks run. The dash, the
   label and its place right before Working carry it without colour.
 

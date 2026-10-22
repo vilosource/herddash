@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -245,5 +246,42 @@ func TestTranscriptRotated(t *testing.T) {
 	time.Sleep(10 * sessionInterval)
 	if v := r.view(); v.BackgroundTasks != 1 {
 		t.Errorf("tasks %d after the rotation, want 1", v.BackgroundTasks)
+	}
+}
+
+// TestTranscriptReadResumes: each read after the first starts where the last
+// one stopped, so only new bytes are read (ADR-0009's read bound), and none
+// restarts from the bound while the file only grows.
+func TestTranscriptReadResumes(t *testing.T) {
+	type call struct {
+		offset    int64
+		restarted bool
+	}
+	var mu sync.Mutex
+	var calls []call
+	r := startTranscript(t, core.StatusDone, []string{trPrompt, trBgStart, trEndTurn}, func(o *Options) {
+		o.Transcript = func(tl procenv.Tail, path string, line func([]byte)) (procenv.Tail, bool, error) {
+			next, restarted, err := procenv.TailTranscript(tl, path, line)
+			mu.Lock()
+			calls = append(calls, call{tl.Offset(), restarted})
+			mu.Unlock()
+			return next, restarted, err
+		}
+	})
+	r.awaitTasks(1, true)
+	writeTranscript(t, r.path, trDone("bk7q2x9"))
+	r.awaitTasks(0, false)
+	mu.Lock()
+	defer mu.Unlock()
+	if len(calls) < 2 {
+		t.Fatalf("%d reads", len(calls))
+	}
+	if calls[0].offset != 0 {
+		t.Errorf("first read from %d, want 0", calls[0].offset)
+	}
+	for i, c := range calls[1:] {
+		if c.offset == 0 || c.restarted {
+			t.Errorf("read %d: from %d, restarted %v; want the previous read's end", i+2, c.offset, c.restarted)
+		}
 	}
 }

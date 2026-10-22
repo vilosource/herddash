@@ -21,7 +21,7 @@ type TranscriptLine struct {
 	EndID     string
 	EndStatus string
 	// TurnStarted and TurnEnded say the main thread's turn started (a prompt,
-	// a tool result or a queued command) or ended (end_turn).
+	// a tool result or a queued command) or ended (end_turn or stop_sequence).
 	TurnStarted bool
 	TurnEnded   bool
 }
@@ -57,7 +57,9 @@ type transcriptRecord struct {
 //     string starting "<task-notification>" ends the task in its
 //     <task-id>, when its <status> closes it;
 //   - an assistant record that is not a sidechain with message.stop_reason
-//     "end_turn" ends the main turn; a user record that is not a sidechain,
+//     "end_turn" or "stop_sequence" ends the main turn (both are followed by
+//     the turn's duration record; 33 of 4,902 main-thread turn ends in the
+//     transcripts read on 2026-10-22 were stop_sequence); a user record that is not a sidechain,
 //     or an attachment of type queued_command, starts it again.
 //
 // Ids must be 1 to 128 letters, digits, "-" or "_"; a line with any other is
@@ -76,8 +78,9 @@ func DecodeTranscriptLine(line []byte) (TranscriptLine, bool) {
 			l.EndID, l.EndStatus = id, "killed"
 		}
 	case "assistant":
-		if !rec.IsSidechain && stopReason(rec.Message) == "end_turn" {
-			l.TurnEnded = true
+		switch stopReason(rec.Message) {
+		case "end_turn", "stop_sequence":
+			l.TurnEnded = !rec.IsSidechain
 		}
 	case "attachment":
 		var a struct {

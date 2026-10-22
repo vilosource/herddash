@@ -1865,8 +1865,10 @@ func (e *Engine) onBackground(m backgroundMsg) {
 func (e *Engine) followSession(p *pane, keep bool) {
 	watch := p.known && p.pid > 0 && core.ReadsSession(p.program)
 	e.endSessionWatch(p)
-	// Another process's transcript, or none: read afresh.
+	// Another process's transcript, or none: read afresh, a failure to read
+	// it logged again.
 	dropTranscript(p)
+	p.trLogged = false
 	if !keep || !watch {
 		e.dropSession(p, true)
 	}

@@ -13,7 +13,9 @@ import (
 
 // TestClaudeTranscriptPath covers the matrix's "Slug" row: every "/" and "."
 // of the working directory becomes "-", checked against the directory
-// observed on 2026-10-21; a session id or directory that could leave the
+// observed on 2026-10-21 (on paths where the broader rule, every character
+// but a letter or digit, agrees; TestClaudeTranscriptPathRules covers where
+// they differ); a session id or directory that could leave the
 // projects directory is refused.
 func TestClaudeTranscriptPath(t *testing.T) {
 	for cwd, slug := range map[string]string{
