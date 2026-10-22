@@ -191,13 +191,14 @@ function expected(view, s, t, shells) {
   const open = t ? t.open.size : 0;
   const openCommand = t ? [...t.open.values()].some(Boolean) : false;
   const shell = (shells.get(s.pid) || 0) > 0;
-  let count = open;
-  if ((st === "done" || st === "idle") && shell && !openCommand) count += 1;
+  // As core's backgroundOf: only a Finished or Working class with Status
+  // done, idle or working carries a count; Needs you and Unknown carry 0.
+  const counted = (view.attention_class === "finished" || view.attention_class === "working") && ["done", "idle", "working"].includes(st);
+  let count = counted ? open : 0;
+  if (counted && (st === "done" || st === "idle") && shell && !openCommand) count += 1;
   let background = false;
-  if (view.attention_class !== "needs_you" && view.attention_class !== "unknown") {
-    if ((st === "done" || st === "idle") && count > 0) background = true;
-    if (st === "working" && t && t.turnEnded && open > 0) background = true;
-  }
+  if ((st === "done" || st === "idle") && count > 0) background = true;
+  if (st === "working" && t && t.turnEnded && count > 0) background = true;
   const shown = background || view.attention_class === "finished" || (view.attention_class === "working" && st !== "working");
   const recap = recapsOn && shown && t ? t.recap : "";
   return { count, background, recap, waiting: s.status === "waiting" };
