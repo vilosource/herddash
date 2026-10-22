@@ -61,3 +61,12 @@
 - source_spec: `docs/implementation/spec-4-2-start-with-my-session-on-macos-and-linux.md`
   summary: Run deploy_test.go's `plutil -lint` check in CI on a macOS runner; today it runs only on a developer's Mac.
   evidence: CI's test job is ubuntu-latest only, so TestLaunchdAgentLints always skips there; the strict Go decoder in TestLaunchdAgent catches most malformed plists on Linux.
+- source_spec: `docs/implementation/spec-transcript-background.md`
+  summary: A task whose start is in a transcript but whose end never arrives (Claude Code exiting or crashing with tasks running, then the session resumed) may keep an Agent BACKGROUND until the start falls out of an 8 MiB re-read window; nothing ages tasks out, and the process table only ever adds to the count, never proves an open command gone.
+  evidence: Unverified (would be medium). On 2026-10-22 no transcript held more than one sessionId, so whether a resumed session copies earlier task starts into its new file is unknown. Settle it by resuming a session that had a background command open at exit and reading the new transcript's markers; if starts are copied, drop an open command when the process check finds no tool shell for some time.
+- source_spec: `docs/implementation/spec-transcript-background.md`
+  summary: Whether `sessions/<pid>.json` updates `sessionId` when `/clear` starts a new session in the same process is not known; if it does not, the old transcript's open tasks stay on the Box.
+  evidence: Unverified (would be medium). Settle it by running `/clear` in a session with a background task open and reading the record's sessionId before and after.
+- source_spec: `docs/implementation/spec-claude-recap.md`
+  summary: The recap row's layout (the board--recaps toggle, the taller grid, the two-line clamp) is verified only by the hand-run board-browser.mjs; run it in CI.
+  evidence: Removing the toggle or the .board--recaps rule leaves every CI check green; same root as the Story 3.9 deferral to run the browser check in CI.

@@ -84,6 +84,9 @@ func TestLoadDefaultsWithNoFile(t *testing.T) {
 	if c.AllowUnsupportedHerdr() {
 		t.Error("allow_unsupported_herdr = true, want false")
 	}
+	if c.ClaudeRecaps() {
+		t.Error("claude_recaps = true, want false")
+	}
 	if len(c.AgentPrograms()) != 0 {
 		t.Errorf("profiles = %v, want none", c.AgentPrograms())
 	}
@@ -142,6 +145,7 @@ host = "filehost"
 data_dir = "~/data"
 retention_days = 30
 allow_unsupported_herdr = true
+claude_recaps = true
 `)
 	c, err := Load(Flags{Config: new(path), Bind: new("127.0.0.1:9001"), RetentionDays: new(5)}, env)
 	if err != nil {
@@ -164,6 +168,9 @@ allow_unsupported_herdr = true
 	}
 	if !c.AllowUnsupportedHerdr() {
 		t.Error("allow_unsupported_herdr = false, want file value")
+	}
+	if !c.ClaudeRecaps() {
+		t.Error("claude_recaps = false, want file value")
 	}
 	c, err = Load(Flags{Config: new(path), AllowUnsupportedHerdr: new(false), Host: new("flaghost")}, env)
 	if err != nil {
@@ -528,7 +535,7 @@ func TestMarshalJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{`"host":"box"`, `"server":"work"`, `"retention_days":90`,
-		`"session":"work"`, `"allow_unsupported_herdr":true`,
+		`"session":"work"`, `"allow_unsupported_herdr":true`, `"claude_recaps":false`,
 		`"data_dir":"` + filepath.Join(env.Home, ".local/share/herddash") + `"`,
 		`"database":"` + filepath.Join(env.Home, ".local/share/herddash/herddash.db") + `"`,
 		`"profiles":{"claude":{"rule":"env","variable":"CLAUDE_CONFIG_DIR","absent":"claude","values":{}}}`} {

@@ -123,7 +123,7 @@ func TestBoardOrder(t *testing.T) {
 			view("ws1", StatusBlocked, 20, 1),
 			view("ws2", StatusBlocked, 10, 2),
 		}, []string{"ws2", "ws1", "fin"}},
-		{"one workspace: needs you, then working, finished, idle", []AgentView{
+		{"one workspace: needs you, then finished, idle, working", []AgentView{
 			neverWorkingView("idle", 1, 1),
 			view("fin-idle", StatusIdle, 2, 1),
 			view("unknown", StatusUnknown, 3, 1),
@@ -131,7 +131,18 @@ func TestBoardOrder(t *testing.T) {
 			view("needs", StatusBlocked, 5, 1),
 			view("fin-done", StatusDone, 6, 1),
 			neverWorkingView("idle-unknown-start", 0, 1),
-		}, []string{"needs", "working", "fin-idle", "fin-done", "idle", "idle-unknown-start", "unknown"}},
+		}, []string{"needs", "fin-done", "fin-idle", "idle", "idle-unknown-start", "working", "unknown"}},
+		// Operator decision 2026-10-21: every class in a workspace group is
+		// newest first, while Needs you stays longest-waiting first.
+		{"workspace group newest first, needs you longest first", []AgentView{
+			view("fin-old", StatusDone, 1, 1),
+			view("needs-new", StatusBlocked, 9, 1),
+			view("fin-new", StatusDone, 5, 1),
+			view("working-old", StatusWorking, 2, 1),
+			view("needs-old", StatusBlocked, 3, 2),
+			view("fin-mid", StatusDone, 3, 1),
+			view("working-new", StatusWorking, 8, 1),
+		}, []string{"needs-old", "needs-new", "fin-new", "fin-mid", "fin-old", "working-new", "working-old"}},
 		{"finished grouped by workspace", []AgentView{
 			view("ws2-fin", StatusDone, 1, 2),
 			view("ws1-fin", StatusDone, 9, 1),
@@ -223,7 +234,7 @@ func TestNewAgentView(t *testing.T) {
 		Key: k, AgentProgram: "claude", Profile: "cldw", Heading: "cldw",
 		Directory: "~/proj", Workspace: "ws", Tab: "t", PanePosition: "top-left", Status: StatusIdle, Class: ClassFinished,
 		WaitingSince: 500, WaitingExact: false, PaneTitle: "fix-auth-bug", ContextLine: "fix-auth-bug",
-		SortKey: SortKey{Zone: 1, Group: 2, ClassRank: 2, Start: 500, Key: k},
+		SortKey: SortKey{Zone: 1, Group: 2, ClassRank: 1, Start: -500, Key: k},
 	}
 	if v != want {
 		t.Errorf("view =\n%+v\nwant\n%+v", v, want)
@@ -269,8 +280,9 @@ func TestAgentViewJSON(t *testing.T) {
 		`"key":{"host":"mac","server":"default","epoch":2,"pane_id":"w1:p1"}`,
 		`"attention_class":"working"`,
 		`"waiting_exact":false`,
-		`"sort_key":[1,9007199254740991,1,9007199254740991,"mac/default/2/w1:p1"]`,
+		`"sort_key":[1,9007199254740991,4,9007199254740991,"mac/default/2/w1:p1"]`,
 		`"pane_position":""`,
+		`"background":false`,
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("JSON %s lacks %s", s, want)
@@ -288,7 +300,7 @@ func TestAgentViewJSON(t *testing.T) {
 		t.Errorf("sort_key = %#v, want an array of five", m["sort_key"])
 	}
 	for _, f := range []string{"key", "agent_program", "profile", "heading", "directory", "workspace", "tab",
-		"pane_position", "status", "attention_class", "waiting_exact", "pane_title", "context_line", "sort_key"} {
+		"pane_position", "status", "attention_class", "waiting_exact", "pane_title", "context_line", "recap", "background", "background_tasks", "sort_key"} {
 		if _, ok := m[f]; !ok {
 			t.Errorf("JSON lacks %q", f)
 		}
@@ -319,6 +331,14 @@ type boardFixture struct {
 		Tab               string       `json:"tab"`
 		PanePosition      string       `json:"pane_position"`
 		PaneTitle         string       `json:"pane_title"`
+		Background        bool         `json:"background"`
+		// Tasks are background subagents the transcript shows open, and
+		// TurnEnded says its main turn ended (ADR-0009).
+		Tasks     []string `json:"tasks"`
+		TurnEnded bool     `json:"turn_ended"`
+		// Recap is the latest session recap the transcript shows
+		// (ADR-0010), applied after Tasks and TurnEnded.
+		Recap string `json:"recap"`
 		// View is the expected AgentView, as NewAgentView serialises it.
 		View json.RawMessage `json:"view"`
 	} `json:"input"`
@@ -347,11 +367,17 @@ func loadBoard(t *testing.T) ([]AgentView, boardFixture) {
 			f = FoldResult{Known: true, Status: in.Status, Class: ClassOf(in.Status, in.EverWorking),
 				Since: *in.Since, SinceProvenance: prov, EverWorking: in.EverWorking}
 		}
+		var tr BackgroundTasks
+		for _, id := range in.Tasks {
+			tr.Apply(TranscriptLine{StartID: id})
+		}
+		tr.Apply(TranscriptLine{TurnEnded: in.TurnEnded})
+		tr.Apply(TranscriptLine{Recap: in.Recap})
 		views = append(views, NewAgentView(AgentViewInput{
 			Key: in.Key, AgentProgram: in.AgentProgram, Profile: in.Profile, Status: in.Status, Fold: f,
 			Context: PaneContext{ProjectDir: in.Directory, WorkspaceLabel: in.Workspace, TabLabel: in.Tab,
 				WorkspacePosition: in.WorkspacePosition, PaneTitle: in.PaneTitle, PanePosition: in.PanePosition},
-			Home: fx.Home,
+			Home: fx.Home, Background: in.Background, Transcript: tr,
 		}))
 	}
 	return views, fx
@@ -365,6 +391,13 @@ func TestGoldenBoard(t *testing.T) {
 	}
 	if len(classes) != 4 {
 		t.Errorf("fixture covers classes %v, want all four", classes)
+	}
+	ranks := map[int]bool{}
+	for _, v := range views {
+		ranks[v.SortKey.ClassRank] = true
+	}
+	if len(ranks) != 6 {
+		t.Errorf("fixture covers class ranks %v, want all six", ranks)
 	}
 	for i, v := range views {
 		got, err := json.Marshal(v)
@@ -492,5 +525,71 @@ func TestPanePositions(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestAgentViewRecap covers the matrix's "View" row: a recap on a Finished
+// Agent is in its AgentView's JSON as recap, and every other field is what
+// it is without one (ADR-0010).
+func TestAgentViewRecap(t *testing.T) {
+	in := AgentViewInput{
+		Key: AgentKey{Host: "mac", Server: "default", Epoch: 2, PaneID: "w1:p1"}, AgentProgram: "claude",
+		Profile: "cldp", Status: StatusDone,
+		Fold:    FoldResult{Known: true, Status: StatusDone, Class: ClassFinished, Since: 500, SinceProvenance: ProvenanceLive, EverWorking: true},
+		Context: PaneContext{PaneTitle: "write-tests", WorkspacePosition: 1},
+	}
+	plain := NewAgentView(in)
+	in.Transcript.Apply(TranscriptLine{TurnEnded: true})
+	in.Transcript.Apply(TranscriptLine{Recap: "I did X. Next I'll do Y."})
+	withRecap := NewAgentView(in)
+	if withRecap.Recap != "I did X. Next I'll do Y." || plain.Recap != "" {
+		t.Errorf("recap %q / %q", withRecap.Recap, plain.Recap)
+	}
+	b, _ := json.Marshal(withRecap)
+	if !strings.Contains(string(b), `"recap":"I did X. Next I'll do Y."`) {
+		t.Errorf("JSON %s lacks the recap", b)
+	}
+	if b, _ := json.Marshal(plain); !strings.Contains(string(b), `"recap":""`) {
+		t.Errorf("JSON %s lacks an empty recap", b)
+	}
+	withRecap.Recap = ""
+	if !reflect.DeepEqual(withRecap, plain) {
+		t.Errorf("a recap changed another field:\n%+v\n%+v", withRecap, plain)
+	}
+}
+
+// TestAgentViewRecapHidden covers the matrix's "View, hidden" row: a recap
+// is shown only on a Finished, Idle or Background Box; Working (not
+// Background), Needs you and Unknown get "".
+func TestAgentViewRecapHidden(t *testing.T) {
+	const recap = "I did X. Next I'll do Y."
+	for name, tc := range map[string]struct {
+		status Status
+		class  AttentionClass
+		task   bool
+		want   string
+	}{
+		"finished":                {StatusDone, ClassFinished, false, recap},
+		"idle":                    {StatusIdle, ClassWorking, false, recap},
+		"background (done)":       {StatusDone, ClassFinished, true, recap},
+		"background (working)":    {StatusWorking, ClassWorking, true, recap},
+		"working, not background": {StatusWorking, ClassWorking, false, ""},
+		"needs you":               {StatusBlocked, ClassNeedsYou, false, ""},
+		"unknown":                 {StatusUnknown, ClassUnknown, false, ""},
+	} {
+		in := AgentViewInput{
+			Key: AgentKey{Host: "mac", Server: "default", Epoch: 2, PaneID: "w1:p1"}, AgentProgram: "claude",
+			Status: tc.status,
+			Fold:   FoldResult{Known: true, Status: tc.status, Class: tc.class, Since: 500, EverWorking: true},
+		}
+		if tc.task {
+			in.Transcript.Apply(TranscriptLine{StartID: "ag1"})
+		}
+		in.Transcript.Apply(TranscriptLine{TurnEnded: true})
+		in.Transcript.Apply(TranscriptLine{Recap: recap})
+		v := NewAgentView(in)
+		if v.Recap != tc.want || v.Background != tc.task {
+			t.Errorf("%s: recap %q, background %v; want %q, %v", name, v.Recap, v.Background, tc.want, tc.task)
+		}
 	}
 }

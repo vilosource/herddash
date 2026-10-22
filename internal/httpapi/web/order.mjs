@@ -113,22 +113,68 @@ export const IDLE_LABEL = "Idle";
 
 // isIdle reports whether the view is an idle Agent: class working (the
 // Daemon's) while its Status is anything but working, such as an Agent idle
-// since before it was ever seen working. Its Box reads Idle, in grey, and
+// since before it was ever seen working. Its Box reads Idle, in amber, and
 // gets no Waiting Time emphasis. It is the one thing the Board derives from
 // the Status; the Daemon ranks the same Agents Idle in the sort key.
 export function isIdle(view) {
   return view.attention_class === "working" && view.status !== "working";
 }
 
-// boxKind is the kind a Box is drawn as: its Attention Class, or "idle".
+// BACKGROUND_LABEL is what a Box says for an Agent waiting on background work.
+export const BACKGROUND_LABEL = "Background";
+
+// isBackground reports whether the view is an Agent waiting on background
+// work: the Daemon's background field, read as sent and never derived here
+// (operator request 2026-10-21). The Daemon sets it for a done or idle Agent,
+// or a working one whose main turn is over (ADR-0009), so it takes precedence
+// over Finished, Idle and Working.
+export function isBackground(view) {
+  return view.background === true;
+}
+
+// boxKind is the kind a Box is drawn as: "background", "idle", or its
+// Attention Class.
 export function boxKind(view) {
+  if (isBackground(view)) return "background";
   return isIdle(view) ? "idle" : view.attention_class;
 }
 
-// classLabel is the Attention Class as text, Idle for an idle Agent.
+// classLabel is the Attention Class as text, Background or Idle for those.
 export function classLabel(view) {
+  if (isBackground(view)) return BACKGROUND_LABEL;
   if (isIdle(view)) return IDLE_LABEL;
   return CLASS_LABEL[view.attention_class] || view.attention_class;
+}
+
+// backgroundTasks is the Daemon's background_tasks count, read as sent: 0
+// when it is absent or not a positive whole number.
+export function backgroundTasks(view) {
+  const n = view.background_tasks;
+  return Number.isInteger(n) && n > 0 ? n : 0;
+}
+
+// stateCount is what follows the class in a Box's State label (ADR-0009):
+// " · N bg" on a Working Box with background tasks open, " · N" on a
+// Background Box with more than one, "" otherwise.
+export function stateCount(view) {
+  const n = backgroundTasks(view);
+  const kind = boxKind(view);
+  if (kind === "working" && n > 0) return " · " + n + " bg";
+  if (kind === "background" && n > 1) return " · " + n;
+  return "";
+}
+
+// stateLabel is a Box's State label as text: the class label and its count.
+export function stateLabel(view) {
+  return classLabel(view) + stateCount(view);
+}
+
+// tasksLabel is the background task count in words for the accessible name,
+// "" when there are none.
+export function tasksLabel(view) {
+  const n = backgroundTasks(view);
+  if (n === 0) return "";
+  return n === 1 ? "1 background task" : n + " background tasks";
 }
 
 // whereLabel is "workspace › tab", leaving out an empty one and its separator.
@@ -159,15 +205,16 @@ export function headerLabel(view) {
   return view.workspace || "(no workspace)";
 }
 
-// groupCounts is a workspace group's counts, "2 working · 1 finished ·
-// 3 idle", leaving out zeros and Unknown.
+// groupCounts is a workspace group's counts in the group's reading order,
+// "1 finished · 3 idle · 1 background · 2 working", leaving out zeros and
+// Unknown.
 export function groupCounts(views) {
-  const n = { working: 0, finished: 0, idle: 0 };
+  const n = { finished: 0, idle: 0, background: 0, working: 0 };
   for (const v of views) {
     const k = boxKind(v);
     if (k in n) n[k]++;
   }
-  return ["working", "finished", "idle"]
+  return ["finished", "idle", "background", "working"]
     .filter((k) => n[k] > 0)
     .map((k) => n[k] + " " + k)
     .join(" · ");
@@ -184,8 +231,8 @@ export function documentTitle(views) {
 }
 
 // layout splits views into what the Board draws: the top zone (Needs you
-// alone) and the lower zone's workspace groups (Working, Finished, Idle,
-// Unknown), each in Board order with its header label and counts.
+// alone) and the lower zone's workspace groups (Finished, Idle, Background,
+// Working, Unknown), each in Board order with its header label and counts.
 export function layout(views) {
   const sorted = sortViews(views);
   const headers = workspaceHeaders(sorted);
@@ -198,14 +245,35 @@ export function layout(views) {
   return { top, groups };
 }
 
+// recapOf is a view's session recap (ADR-0010): Claude Code's own
+// two-sentence summary, sent only when the operator turned recaps on; ""
+// when there is none.
+export function recapOf(view) {
+  return typeof view.recap === "string" ? view.recap : "";
+}
+
+// contextText is what a Box shows in its Context Line's row: the recap when
+// there is one, else the Context Line (ADR-0010).
+export function contextText(view) {
+  return recapOf(view) || view.context_line || "";
+}
+
+// anyRecap reports whether any of views has a recap. While one does, every
+// Box is one line taller and its context row two lines high, so every Box
+// keeps one height; with none, the Board is as before ADR-0010.
+export function anyRecap(views) {
+  return views.some((v) => recapOf(v) !== "");
+}
+
 // boxLabel is a Box's accessible name at nowMs: everything it shows,
 // untruncated, so keyboard and screen-reader users can read it in full:
-// workspace and tab, pane, Context Line, directory, heading, class and time.
+// workspace and tab, pane, the recap in full or else the Context Line,
+// directory, heading, class, its background tasks, and time.
 export function boxLabel(view, nowMs) {
   const w = hasWaitingSince(view)
     ? "waiting " + waitingLabel(view, nowMs).replace("≥ ", "at least ")
     : "Waiting Time unknown";
-  return [whereLabel(view), paneLabel(view), view.context_line, view.directory, view.heading, classLabel(view), w]
+  return [whereLabel(view), paneLabel(view), contextText(view), view.directory, view.heading, classLabel(view), tasksLabel(view), w]
     .filter(Boolean)
     .join(", ");
 }
@@ -299,7 +367,7 @@ export function applyEvent(model, name, data) {
         if (agents.has(id)) return bad("has two AgentViews for one AgentKey");
         agents.set(id, v);
       }
-      return { model: { agents, connection: d.connection } };
+      return { model: { agents, connection: d.connection, runId: d.run_id } };
     }
     case "agent": {
       if (!validView(d)) return bad("is not an AgentView");
@@ -396,6 +464,9 @@ export function streamDecision(st, input) {
       const r = applyEvent(st.model, input.name, input.data);
       if (r.warning) return { st, warning: r.warning };
       if (input.name === "state") {
+        // Another Daemon run, such as one restarted onto a new build: the page
+        // reloads, so it never draws new data with old code.
+        if (st.model.runId && r.model.runId && r.model.runId !== st.model.runId) return { st, reload: true };
         return { st: { ...st, model: r.model, awaitingState: false, delay: RECONNECT_START_MS, lostSince: null } };
       }
       return r.model === st.model ? { st } : { st: { ...st, model: r.model } };

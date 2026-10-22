@@ -197,6 +197,90 @@ names the workspace. The heading of a Claude Code Agent is its Profile alone (`c
 `unresolved`). An Agent of class Working whose Status is not `working` reads `IDLE`. See
 [the Board design](design/board-design.md).
 
+*Amended 2026-10-21, operator request:* "as a user I need to be able to differentiate between an
+agent waiting for a subagent or background task vs really Finished." herdr reports a Claude Code
+Agent that ended its turn with a background shell still running as `done`, then `idle`, so the
+Board showed it Finished. A Claude Code Agent whose Status is `done` or `idle` and whose process
+still has a tool-shell child (a direct child whose arguments name its
+`/shell-snapshots/snapshot-` file) reads `BACKGROUND`, ranked right before Working in its
+workspace group (right after Working until the FR-3 amendment of 2026-10-21). The Daemon finds this by reading the Agent process's direct children locally,
+never from herdr and never from pane output. The Attention Class, Waiting Time and the record are
+unchanged: Waiting Time still counts from when the turn ended. A running subagent already reads
+Working; a Working, Needs you or Unknown Agent is never Background. Other Agent Programs have no
+rule yet and never read Background.
+
+**Consequences (testable):**
+- A `done` or `idle` Claude Code Agent with a tool-shell child reads `BACKGROUND`; one whose
+  children are only MCP servers, `gopls` or `caffeinate` reads Finished (or Idle).
+- When the shell ends, the Box reads Finished again within a few seconds, with its Waiting Time
+  unchanged.
+- A `working` Agent with a shell child reads Working.
+
+*Amended 2026-10-21, [ADR-0009](adr/0009-background-work-from-claude-code-transcripts.md)
+(accepted by the operator):* "I want to know when you are Working and you have background tasks
+or you are finished and have background tasks", including subagents. For a Claude Code Agent
+whose session record (FR-6's ADR-0008 amendment) names its `sessionId` and `cwd`, the Daemon also
+tails that session's transcript, `<config dir>/projects/<project folder>/<sessionId>.jsonl`, the
+folder being the cwd with every character but a letter or digit as "-" (or with only "/" and "."
+as "-" when only that folder exists), on the same 2 s watch, and decodes only structural markers:
+a background command's or subagent's start (its task id); its end, by a task notification (its
+task id and status) or by a TaskStop result (its task id, read as killed; added 2026-10-21, since
+a stopped task gets no notification); and whether the main thread's turn has ended (a
+`stop_reason` of `end_turn` or `stop_sequence`) or started again (a prompt, a tool result or a
+queued command). Text, inputs, outputs, prompts and results are never kept,
+logged, stored, sent or shown. The AgentView gains `background_tasks`, the open tasks plus one
+for a tool shell the process check finds that no open command accounts for. A Working Agent with
+tasks open reads `WORKING · N bg`; one whose main turn has ended while tasks are open (herdr
+reports `working` while a background subagent runs) reads `BACKGROUND`, not Working; a `done` or
+`idle` one with tasks open reads `BACKGROUND` (`BACKGROUND · N` when N > 1). Needs you and Unknown
+never change, nor do the record, the Attention Class, the Fold or Waiting Time. A missing or
+unreadable record or transcript falls back to the process check alone. This supersedes "A running
+subagent already reads Working" above for a subagent running after the main turn. Workflows are
+not claimed until one has been observed.
+
+**Consequences (testable):**
+- A `working` Claude Code Agent whose transcript shows its main turn ended while a background
+  subagent runs reads `BACKGROUND`, not Working; when the subagent's notification arrives it reads
+  Working (or whatever herdr then says).
+- A `working` Agent with one background command open and its turn not ended reads `WORKING · 1 bg`.
+- A task notification without a status leaves its task open.
+- No transcript text appears in any log, API response or the record, except Claude Code's session
+  recap in the API (`recap`), and only when `claude_recaps` is on (ADR-0010 below); never in a log
+  or the record.
+
+*Amended 2026-10-22, [ADR-0010](adr/0010-claude-code-recap-on-the-board.md) (accepted by the
+operator: "privacy is not an issue, this is used only for me at this time, and future users will
+have to consent, two lines, recaps should be up to date as often as possible"):* "the idea is to
+have a recap in the boxes". Claude Code writes a two-sentence session recap into the same
+transcript about three minutes after a turn ends. Only when the operator sets the config key
+`claude_recaps = true` (default `false`, file only: the consent), the Daemon also decodes one more
+record from the transcript it already tails: a non-sidechain `system` record with `subtype`
+`away_summary` and a string `content`. It keeps per Agent, in memory only, the newest recap's text,
+trimmed, without Claude Code's trailing "(disable recaps in /config)", and cut to at most 400
+characters; nothing else of the record. A newer recap replaces it; the main thread's next turn
+starting (a prompt, a tool result or a queued command) clears it, so a Working Agent never shows a
+stale one. The AgentView gains `recap`, set only on a Finished, Idle or Background Box and ""
+on a Working, Needs you or Unknown one, or when there is none (operator decision 2026-10-22, at
+review: herdr reports a new turn before the next transcript read). A Box with a recap shows it in the Context
+Line's row, clamped to two lines with an ellipsis, the full text in its tooltip and accessible
+name; while any Box shows one, every Box is one line taller so all keep one height. This amends
+ADR-0009's rule that no transcript text is ever sent or shown, for the recap alone. The record,
+the Attention Class, the Fold, Waiting Time and the order are unchanged.
+
+**Consequences (testable):**
+- With `claude_recaps` unset or `false`, no recap record is decoded, every AgentView's `recap` is
+  `""` and the Board is exactly as before.
+- With it `true`, a Finished Claude Code Agent whose transcript ends with a recap shows that recap,
+  without the "(disable recaps in /config)" suffix, in place of its Context Line.
+- A prompt, tool result or queued command after the recap clears it; a newer recap replaces it.
+- A recap longer than 400 characters is cut at a character boundary.
+- A sidechain recap, another `system` subtype or a non-string `content` gives no recap.
+- Only a Finished, Idle or Background Box shows a recap; a Working (not Background), Needs you or
+  Unknown Box has `recap` `""` even while the transcript holds one.
+- The recap text never appears in a log or in the record; the log says only, by pane, that a recap
+  appeared or cleared.
+- While any Box has a recap, every Box is one line taller; with none, Box heights are unchanged.
+
 #### FR-2a: Context Line derivation
 
 The Daemon derives each Agent's Context Line through a per-Agent-Program rule with a global
@@ -237,6 +321,16 @@ its workspace. Each group's heading carries its counts of working, finished and 
 the browser tab's title carries the Needs you count, `(2) herddash · Needs you`. The consequences
 above hold with "top zone" read as the Needs you zone: a `done` Agent becoming `idle` keeps its
 place, and an `idle` Agent never seen `working` is an Idle Box in its group.
+
+*Amended again 2026-10-21, operator decision:* "I want the box to be sorted according to their
+status, Most recently Finished first, and then the Idles and then the Working - this allows me to
+prioritize which ones to deal with." Inside each workspace group the order is now Finished, Idle,
+Background (an Agent waiting on background work, just before Working), Working, Unknown, and
+every class is ordered **newest first**: the most recent class start leads. Needs you is
+unchanged: alone on top, longest wait first. A group's counts read in the same order,
+`1 finished · 3 idle · 1 background · 2 working`. This supersedes the ranking and the "by
+Waiting Time descending" of the amendment above for the workspace groups only; the consequences
+hold as amended.
 
 #### FR-4: Live without reload
 
@@ -285,6 +379,25 @@ observation time.
 - Two Transitions on one Agent are ordered consistently with herdr's own sequence.
 - The record distinguishes a Transition observed live from one inferred by comparing snapshots,
   and both from one backfilled (FR-9a).
+
+*Amended 2026-10-21, [ADR-0008](adr/0008-claude-code-session-record-as-status-authority.md)
+(accepted by the operator):* on 2026-10-21 a Claude Code Agent waited on Claude Code's question
+dialog while herdr reported it `done`, and the Board showed it Finished. Claude Code's own record
+for that process, `<config dir>/sessions/<pid>.json`, said `waiting` from the same second. For a
+Claude Code Agent whose process is known, the Daemon reads only that file's `pid`, `status` and
+`statusUpdatedAt` every 2 s. While it says `waiting`, the Agent's Status is `blocked` (Needs you,
+FR-2, FR-3), whatever herdr reports; otherwise herdr's Status stands. A Status change the record
+causes, when `waiting` begins and when it ends, is a live Transition recorded with who observed
+it, `claude_session`; every other Transition is observed by herdr.
+
+**Consequences (testable):**
+- A Claude Code Agent whose session record says `waiting` while herdr says `done` is Needs you
+  within about 2 s, its Waiting Time from the record's `statusUpdatedAt` when that is neither in
+  the future nor before the Agent's previous Transition.
+- The record shows that Transition, and the return to herdr's Status when `waiting` ends, as
+  observed by `claude_session`; the history API says so in `observed_by`.
+- A missing, unreadable or mismatched session record changes nothing: herdr's Status alone.
+- Other Agent Programs, and the record's other values (`busy`, `idle`, `shell`), change nothing.
 
 #### FR-7: Never lose a Transition silently
 

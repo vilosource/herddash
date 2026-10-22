@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1556,5 +1557,96 @@ func TestServeHistory(t *testing.T) {
 	cancel()
 	if code := <-done; code != 0 {
 		t.Fatalf("exit code %d, stderr %q", code, stderr.String())
+	}
+}
+
+// TestServeRecap runs serve with and without claude_recaps = true in its
+// config file (ADR-0010). The Agent's foreground process is a child this
+// test starts with CLAUDE_CONFIG_DIR set to a directory holding its session
+// record and a transcript whose main turn ended with a subagent open (so the
+// working Agent is Background) and a recap last. With the key, /api/state
+// carries the recap; without it, "".
+func TestServeRecap(t *testing.T) {
+	const want = "I did the thing. Next I'll ship it."
+	for name, on := range map[string]bool{"on": true, "absent": false} {
+		t.Run(name, func(t *testing.T) {
+			home := hermeticEnv(t)
+			claudeDir := filepath.Join(home, "claude")
+			child := exec.Command(os.Args[0], "-test.run=^TestHelperSleep$")
+			child.Env = []string{"HERDDASH_TEST_SLEEP=1", "CLAUDE_CONFIG_DIR=" + claudeDir}
+			if err := child.Start(); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				child.Process.Kill()
+				child.Wait()
+			})
+			pid := child.Process.Pid
+			write := func(path, body string) {
+				t.Helper()
+				if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			write(filepath.Join(claudeDir, "sessions", strconv.Itoa(pid)+".json"),
+				`{"pid":`+strconv.Itoa(pid)+`,"status":"busy","sessionId":"s-1","cwd":"/w/proj"}`)
+			write(filepath.Join(claudeDir, "projects", "-w-proj", "s-1.jsonl"), strings.Join([]string{
+				`{"type":"user","message":{"role":"user","content":"go"}}`,
+				`{"type":"user","toolUseResult":{"isAsync":true,"status":"async_launched","agentId":"ag1"}}`,
+				`{"type":"assistant","message":{"stop_reason":"end_turn"}}`,
+				`{"type":"system","subtype":"away_summary","isSidechain":false,"content":"` + want + ` (disable recaps in /config)"}`,
+			}, "\n")+"\n")
+			// The Agent's process is read only for a program with a Profile
+			// rule, as the example config has for claude.
+			body := "[profiles.claude]\nrule = \"env\"\nvariable = \"CLAUDE_CONFIG_DIR\"\nabsent = \"claude\"\n"
+			if on {
+				body = "claude_recaps = true\n" + body
+			}
+			cfg := filepath.Join(t.TempDir(), "config.toml")
+			write(cfg, body)
+
+			f := startFakeHerdr(t)
+			f.procPID.Store(int32(pid))
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			var stdout, stderr syncBuffer
+			done := make(chan int, 1)
+			dataDir := filepath.Join(t.TempDir(), "data")
+			go func() { done <- run(ctx, append(serveArgs(f, dataDir), "--config", cfg), &stdout, &stderr) }()
+			addr := listenAddr(t, dataDir)
+			client := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}, Timeout: 5 * time.Second}
+			type agent struct {
+				Background bool    `json:"background"`
+				Recap      *string `json:"recap"`
+			}
+			var got agent
+			// The transcript is read once the session watch runs: wait for
+			// the Agent to be Background, which the transcript alone makes it.
+			waitFor(t, "the Background Agent in /api/state", func() bool {
+				resp, err := client.Get("http://" + addr + "/api/state")
+				if err != nil {
+					return false
+				}
+				defer resp.Body.Close()
+				var s struct {
+					Agents []agent `json:"agents"`
+				}
+				if json.NewDecoder(resp.Body).Decode(&s) != nil || len(s.Agents) != 1 {
+					return false
+				}
+				got = s.Agents[0]
+				return got.Background && got.Recap != nil && (*got.Recap != "") == on
+			})
+			if w := map[bool]string{true: want, false: ""}[on]; *got.Recap != w {
+				t.Errorf("recap %q, want %q", *got.Recap, w)
+			}
+			cancel()
+			if code := <-done; code != 0 {
+				t.Fatalf("exit code %d, stderr %q", code, stderr.String())
+			}
+		})
 	}
 }

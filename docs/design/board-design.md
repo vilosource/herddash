@@ -26,14 +26,14 @@ the workspace line and the heading; label (`0.8125`) sets the directory and the 
 | `--ink` text | `#16191F` | `#E9EBEF` | 16.0 / 16.0 on bg |
 | `--ink-muted` Working text, headers | `#4B5361` | `#A7AEBA` | 7.0 / 8.5 on bg |
 | `--ink-faint` unemphasised time, dash | `#646C79` | `#8B93A0` | 4.8 / 6.2 on bg |
-| `--needs-bg` Needs you fill | `#B42318` | `#FF7A59` | **6.0 / 7.4 against the page** |
-| `--needs-ink` / `--needs-ink-2` | `#FFFFFF` / `#FFE1DC` | `#1A0703` / `#3D1307` | 6.6, 5.3 / 7.6, 6.3 on the fill |
-| `--finished-accent` label | `#17663F` | `#5BD69A` | 7.0 / 9.2 on surface |
-| `--finished-edge` leading edge | `#1F8A55` | `#3FB37B` | 4.0 / 7.2 on bg (non-text, ≥ 3) |
-| `--working-accent` label | `#2D5A96` | `#8DB6EE` | 6.3 / 9.1 on bg |
-| `--working-edge` leading edge | `#3E6FB0` | `#5B8FD6` | 4.7 / 5.8 on bg (non-text, ≥ 3) |
-| `--idle-accent` label | `#5A616E` | `#A7AEBA` | 5.7 / 8.5 on bg |
-| `--idle-edge` leading edge | `#7E8592` | `#6B7380` | 3.4 / 4.0 on bg (non-text, ≥ 3) |
+| `--needs-bg` Needs you fill | `#B42318` | `#F2555A` | **6.0 / 5.6 against the page** |
+| `--needs-ink` / `--needs-ink-2` | `#FFFFFF` / `#FFE1DC` | `#1A0505` / `#3A0C0C` | 6.6, 5.3 / 5.8, 5.0 on the fill |
+| `--finished-accent` label | `#2D5A96` | `#8DB6EE` | 7.0 / 8.0 on surface |
+| `--finished-edge` leading edge | `#3E6FB0` | `#5B8FD6` | 4.6 / 5.8 on bg (non-text, ≥ 3) |
+| `--working-accent` label | `#17663F` | `#5BD69A` | 6.3 / 10.5 on bg |
+| `--working-edge` leading edge | `#1F8A55` | `#3FB37B` | 4.0 / 7.2 on bg (non-text, ≥ 3) |
+| `--idle-accent` label | `#8A5300` | `#FFC15E` | 5.8 / 11.8 on bg |
+| `--idle-edge` leading edge | `#C77700` | `#F5A524` | 3.1 / 9.3 on bg (non-text, ≥ 3) |
 | `--badge-bg` / `--badge-ink` pane badge | `#E4E7EC` / `#2B313B` | `#2A303A` / `#DDE1E7` | 10.6 / 10.1 |
 | `--focus` outline | `#1D4ED8` | `#7AA2FF` | 6.1 / 7.7 on bg |
 | strips: disconnected, advisory, refused | slate, amber, red | the same, darkened | 10.2, 9.4, 8.9 / 9.7, 10.8, 7.4 |
@@ -60,18 +60,36 @@ change a Box's height. Empty fields keep their row. The rows, in reading order:
    segment, the project, stays visible. `~` for the home directory is substituted by the Daemon
    (`core.ShortenDir`, AD-1), not by the Board.
 3. **Context Line**: one line, ellipsis. The row is always present, so an empty Context Line
-   keeps its space.
+   keeps its space. *Added 2026-10-22, ADR-0010:* when the AgentView's `recap` is not empty
+   (Claude Code's own session recap, sent only when the operator set `claude_recaps`), the recap
+   takes this row in place of the Context Line (class `recap`), wrapping to at most **two lines**
+   with an ellipsis (`line-clamp: 2`). A Box with no recap keeps its Context Line.
 4. **Heading and state.** On the left the heading exactly as the API sends it: the Profile alone
    for Claude Code (`cldw`, `unresolved`), otherwise `profile · program` or the program alone
    (`codex`), in the quiet meta style; it is the part that gives way with an ellipsis in a narrow
    Box. On the right, in bold, the **class label** (uppercase text) and the **Waiting Time**,
-   which is never truncated. Class Working with a Status other than `working` reads `IDLE`. A
+   which is never truncated. Class Working with a Status other than `working` reads `IDLE`. An
+   Agent the Daemon marks `background` reads `BACKGROUND`, whatever its class. *Added
+   2026-10-21, ADR-0009:* the label carries the AgentView's `background_tasks` count: a Working
+   Box with tasks open reads `WORKING · N bg`, a Background Box with more than one reads
+   `BACKGROUND · N` (`BACKGROUND` alone for one); the count, set in the label's colour, keeps its
+   lower-case unit (`bg`) while the class word stays uppercase. No other class shows a count.
+   Group counts are unchanged: each Box counts under the kind it is drawn as, so a `working`
+   Agent shown as Background counts as background, not working. A
    lower bound reads `≥ 12m`. An absent `waiting_since` shows a dash. It ticks from
    `waiting_since`. Its format has defined boundaries, with the second unit always two digits:
    `0s` to `59s`, `1m` to `59m`, `1h 00m` to `23h 59m`, then `1d 00h` onwards.
 
+**Height with recaps** (*added 2026-10-22, ADR-0010*). Every Box keeps one height. While any Box
+on the Board has a recap, the Board carries `board--recaps` and every Box is one line taller,
+`calc(8.25rem + 1.5rem)`, its context row `3rem` (two lines of `1.5rem`) instead of `1.5rem`; a
+Box without a recap shows its one-line Context Line in that taller row. With no recap anywhere,
+the layout and heights are exactly as above.
+
 The Box's hover `title` and its accessible name both carry everything, untruncated: workspace and
-tab, pane position, Context Line, directory, heading, class and Waiting Time. The rows carry no
+tab, pane position, Context Line (or, *added 2026-10-22 for ADR-0010*, the full recap in its
+place), directory, heading, class, its background tasks in words
+("2 background tasks", added 2026-10-21 for ADR-0009) and Waiting Time. The rows carry no
 titles of their own, so hovering anywhere on the Box shows it all.
 
 *Changed 2026-10-21 at the operator's request, three times.* First, workspace › tab moved from
@@ -84,37 +102,54 @@ the group heading (or the second line in Needs you), the heading lost ` · claud
 read `IDLE`, and the Box shrank to 8.25rem. `docs/design/board.html` predates all three.
 
 **Order.** Boxes arrive sorted by `sort_key`, `[zone, group, class_rank, start, key]`. Zone 0 is
-Needs you alone; zone 1 is every other Agent, grouped by workspace position and ranked Working 1,
-Finished 2, Idle 3, Unknown 4. A Board that re-sorts must tie-break exactly as the Daemon does
+Needs you alone, longest wait first; zone 1 is every other Agent, grouped by workspace position
+and ranked Finished 1, Idle 2, Background 3, Working 4, Unknown 5, each class newest first, so a
+zone-1 `start` is the negated class start (operator decision 2026-10-21, which replaced Working 1,
+Background 2, Finished 3, Idle 4, Unknown 5). A Board that re-sorts must tie-break exactly as the Daemon does
 (`internal/core/view.go`, `SortKey.compare`): zone, group, class rank, start, then the AgentKey
 as host, server, epoch (numerically) and pane id. It must never compare `sort_key[4]` as one
 string. Otherwise it should trust the API's order.
 
 ## Emphasis by class
 
+*Amended 2026-10-21 (operator decision): traffic lights.* Red is Needs you, amber is Idle and
+green is Working; Finished, which green meant before, takes the blue Working gave up. The dark
+Needs you fill moved from red-orange to red so it cannot be mistaken for amber.
+
 - **Needs you is dominant.** It has a solid fill, a 3px ring, white (light) or near-black (dark)
   text, a bold Context Line and an extra-bold Waiting Time. It never relies on colour alone: the
   uppercase `NEEDS YOU` label, the heavy ring and the weight carry it in greyscale too, and it is
   always first on the page.
-- **Finished is quieter.** It sits on a raised surface with a 6px green leading edge and a green
+- **Finished is quieter.** It sits on a raised surface with a 6px blue leading edge and a blue
   `FINISHED` label, in its workspace's group.
-- **Working has a blue leading edge**, the same 6px bar as Finished in blue, flush with the page
-  rather than raised, with a blue `WORKING` label. Blue says busy, green says done; the label
-  says it in text too.
+- **Working has a green leading edge**, the same 6px bar as Finished in green, flush with the
+  page rather than raised, with a green `WORKING` label. Green says busy and fine, blue says
+  done; the label says it in text too.
 - **Unknown recedes.** It sits flush with the page with a dashed hairline border and muted text.
-- **Idle is grey.** An Agent of class Working whose Status is not `working`, such as one idle
-  since before it was ever seen working, has a 6px grey leading edge (`--idle-edge`), an `IDLE`
+- **Idle is amber.** An Agent of class Working whose Status is not `working`, such as one idle
+  since before it was ever seen working, has a 6px amber leading edge (`--idle-edge`), an `IDLE`
   label in `--idle-accent`, and no Waiting Time emphasis: its time is set in `--ink-faint`. It is
   the one thing the Board derives from the Status, and the Daemon ranks the same Agents Idle.
+- **Background is Working's edge, dashed.** *Added 2026-10-21, operator request.* An Agent whose
+  Status is `done` or `idle` but whose process still runs a background task (the AgentView's
+  `background: true`, decided by the Daemon and never derived by the Board) has a 6px **dashed**
+  leading edge in `--working-edge` and a `BACKGROUND` label in `--working-accent`, flush with the
+  page like Working, so it reads as not yet done; its Waiting Time is in full ink, as Finished's,
+  counting from when the turn ended; a `working` Agent shown as Background (ADR-0009) keeps
+  Working's Waiting Time, counting from when it started working, since the Daemon's Waiting Time
+  is the Attention Class's and never changes for background work. It takes precedence over Finished and Idle, and (ADR-0009)
+  over Working for a `working` Agent whose main turn has ended while background tasks run. The dash, the
+  label and its place right before Working carry it without colour.
 
 ## Zones and workspace groups
 
 *Amended 2026-10-21 (operator decision).* The top zone holds **Needs you alone**, longest wait
 first, flat across workspaces, under a plain visible "Needs you" heading. Below it, one group per
 workspace in herdr's workspace order (`headers` gives where each starts), each holding that
-workspace's Working, then Finished, then Idle, then Unknown Agents. A group's heading is the
-workspace label, large and bold (`1.375rem`, 800), followed by its counts in muted meta text,
-`2 working · 1 finished · 3 idle`, leaving out zeros. Every heading but the first on the page
+workspace's Finished, then Idle, then Background, then Working, then Unknown Agents, each class
+most recent first: what to deal with first comes first (operator decision 2026-10-21). A group's
+heading is the workspace label, large and bold (`1.375rem`, 800), followed by its counts in muted
+meta text in the same order, `1 finished · 3 idle · 1 background · 2 working`, leaving out zeros. Every heading but the first on the page
 draws a 1px rule above it. The page adds no other dividers.
 
 The browser tab's title carries the Needs you count: `(2) herddash · Needs you` when two Agents
@@ -150,6 +185,11 @@ connection comes first, then version.
 - **Refused** (`gate: refused`): a red strip naming `herdr_version` and `herdr_minimum` and saying
   nothing is being recorded. No Boxes are shown.
 
+**A restarted Daemon reloads the page.** *Added 2026-10-21.* When the stream's `state` event
+comes from another Daemon run (`run_id`), such as a Daemon restarted onto a new build, the Board
+reloads itself, so an open tab never draws new data with old code. A reconnect to the same run
+does not reload.
+
 ## Responsive behaviour
 
 The layout runs from a side window of about 320px, with one column and a 16px gutter, to a wide
@@ -165,7 +205,7 @@ and workspace labels are headings.
 Each Box is focusable and shows a 3px `--focus` outline offset outside it, and the review
 toolbar's controls show the same outline. Boxes are focusable so that keyboard and screen-reader
 users can read a Box in full. Each Box's accessible name carries its workspace and tab, pane position, full
-Context Line, directory, heading, class label and Waiting Time ("at least" for a lower bound),
+Context Line (or the full recap in its place, ADR-0010), directory, heading, class label and Waiting Time ("at least" for a lower bound),
 and it is kept current as the time ticks. Focusing a Box does nothing else. Needs you is conveyed in
 text, not only colour.
 

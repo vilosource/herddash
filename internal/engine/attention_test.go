@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/vilosource/herddash/internal/core"
+	"github.com/vilosource/herddash/internal/procenv"
 	"github.com/vilosource/herddash/internal/store"
 )
 
@@ -372,7 +373,8 @@ func TestWaitingRestartChangedLive(t *testing.T) {
 // goroutines end when the test does.
 func directEngine(t *testing.T, fake *fakeClient, st Recorder) *Engine {
 	t.Helper()
-	o := Options{Host: "mac", Server: "default", Client: fake, Sink: newRecorder()}
+	o := Options{Host: "mac", Server: "default", Client: fake, Sink: newRecorder(), Session: noSession,
+		Children: func(int) ([]procenv.Process, error) { return nil, nil }}
 	if st != nil {
 		o.Store = st
 	}

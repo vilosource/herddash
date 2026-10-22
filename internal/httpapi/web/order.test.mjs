@@ -17,6 +17,9 @@ import {
   applyEvent,
   boardStatus,
   boxLabel,
+  anyRecap,
+  contextText,
+  recapOf,
   clockUTC,
   compareViews,
   emptyModel,
@@ -27,8 +30,14 @@ import {
   layout,
   modelViews,
   isIdle,
+  isBackground,
+  BACKGROUND_LABEL,
   boxKind,
   classLabel,
+  backgroundTasks,
+  stateCount,
+  stateLabel,
+  tasksLabel,
   documentTitle,
   groupCounts,
   inNeedsYou,
@@ -234,6 +243,58 @@ test("idle label: class working, status idle reads Idle and draws as idle", () =
   assert.equal(boxKind({ status: "blocked", attention_class: "needs_you" }), "needs_you");
 });
 
+test("background: the Daemon's field, read as sent, before Finished and Idle", () => {
+  const done = { status: "done", attention_class: "finished", background: true };
+  const idle = { status: "idle", attention_class: "working", background: true };
+  for (const v of [done, idle]) {
+    assert.equal(isBackground(v), true);
+    assert.equal(boxKind(v), "background");
+    assert.equal(classLabel(v), "Background");
+  }
+  assert.equal(BACKGROUND_LABEL, "Background");
+  // Never derived from the Status or class: false or absent is not Background.
+  assert.equal(boxKind({ ...done, background: false }), "finished");
+  assert.equal(boxKind({ status: "done", attention_class: "finished" }), "finished");
+  assert.equal(boxKind({ ...idle, background: false }), "idle");
+  assert.equal(classLabel({ ...idle, background: "yes" }), "Idle");
+});
+
+test("background box label says Background", () => {
+  const now = 1_000_000;
+  const v = {
+    key: { host: "h", server: "default", epoch: 1, pane_id: "w1:p1" },
+    attention_class: "finished",
+    status: "done",
+    background: true,
+    heading: "cldw",
+    context_line: "await-ci",
+    directory: "~/src/p",
+    workspace: "ops",
+    tab: "1",
+    pane_position: "",
+    waiting_since: now - 75_000,
+    waiting_exact: true,
+  };
+  assert.equal(boxLabel(v, now), "ops › 1, await-ci, ~/src/p, cldw, Background, waiting 1m");
+});
+
+test("golden fixture: Background views are the Daemon's, ranked 3", () => {
+  const bg = fixture.input.filter((i) => i.view.background);
+  assert.ok(bg.length > 0, "no Background view in the fixture");
+  for (const { view: v } of bg) {
+    assert.equal(boxKind(v), "background", keyString(v));
+    assert.equal(v.sort_key[2], 3, keyString(v));
+    assert.ok(v.status === "done" || v.status === "idle" || v.status === "working", keyString(v));
+  }
+  // A working one is Background only with its main turn over (ADR-0009).
+  const working = bg.filter((i) => i.view.status === "working");
+  assert.ok(working.length > 0, "no working Background view in the fixture");
+  for (const i of working) assert.equal(i.turn_ended, true, keyString(i.view));
+  // An input marked background that the Daemon did not show as such (another
+  // program) stays Finished.
+  assert.ok(fixture.input.some((i) => i.background && !i.view.background));
+});
+
 test("tab label: the tab, else the workspace", () => {
   assert.equal(tabLabel({ workspace: "ops", tab: "2: api" }), "2: api");
   assert.equal(tabLabel({ workspace: "ops", tab: "" }), "ops");
@@ -250,14 +311,17 @@ test("needs you zone is the Daemon's zone 0", () => {
   for (const { view: v } of fixture.input) assert.equal(inNeedsYou(v), v.attention_class === "needs_you", keyString(v));
 });
 
-test("group counts: working, finished and idle, zeros left out", () => {
+test("group counts: finished, idle, background and working, zeros left out", () => {
   const w = { status: "working", attention_class: "working" };
   const f = { status: "done", attention_class: "finished" };
   const i = { status: "idle", attention_class: "working" };
   const u = { status: "unknown", attention_class: "unknown" };
-  assert.equal(groupCounts([w, f, i, i, u]), "1 working · 1 finished · 2 idle");
+  const b = { status: "done", attention_class: "finished", background: true };
+  assert.equal(groupCounts([w, f, i, i, u]), "1 finished · 2 idle · 1 working");
   assert.equal(groupCounts([i, f]), "1 finished · 1 idle");
   assert.equal(groupCounts([u]), "");
+  assert.equal(groupCounts([f, b, w, b]), "1 finished · 2 background · 1 working");
+  assert.equal(groupCounts([b]), "1 background");
 });
 
 test("title: the Needs you count, or plain herddash", () => {
@@ -268,19 +332,26 @@ test("title: the Needs you count, or plain herddash", () => {
   assert.equal(documentTitle([]), "herddash");
 });
 
-test("golden fixture: needs you alone on top, then each group working, finished, idle, unknown", () => {
+test("golden fixture: needs you alone on top, then each group finished, idle, background, working, unknown", () => {
   const { top, groups } = layout(fixture.input.map((i) => i.view).reverse());
   assert.ok(top.length > 0);
   for (const v of top) assert.equal(v.attention_class, "needs_you");
-  const rank = { working: 1, finished: 2, idle: 3, unknown: 4 };
+  const rank = { finished: 1, idle: 2, background: 3, working: 4, unknown: 5 };
   for (const g of groups) {
     const ranks = g.views.map((v) => rank[boxKind(v)]);
     assert.deepEqual(ranks, ranks.slice().sort((a, b) => a - b), g.label);
+    // Inside a class the most recent comes first (operator decision 2026-10-21).
+    for (let j = 1; j < g.views.length; j++) {
+      const [p, v] = [g.views[j - 1], g.views[j]];
+      if (rank[boxKind(p)] === rank[boxKind(v)] && p.waiting_since !== undefined && v.waiting_since !== undefined) {
+        assert.ok(p.waiting_since >= v.waiting_since, keyString(v));
+      }
+    }
     assert.ok(g.views.every((v) => v.attention_class !== "needs_you"));
   }
   const one = groups.find((g) => g.label === "herddash");
-  assert.deepEqual(one.views.map(boxKind), ["working", "finished", "idle", "unknown"]);
-  assert.equal(one.counts, "1 working · 1 finished · 1 idle");
+  assert.deepEqual(one.views.map(boxKind), ["finished", "idle", "background", "working", "unknown"]);
+  assert.equal(one.counts, "1 finished · 1 idle · 1 background · 1 working");
 });
 
 test("layout: golden fixture's top zone and groups", () => {
@@ -392,13 +463,14 @@ test("state replaces the AgentViews and the ConnectionTruth", () => {
 test("agent adds an unseen Agent in its sort position", () => {
   const model = fixtureModel();
   const base = fixtureView("w2:p3");
-  const v = changed(base, { key: { ...base.key, pane_id: "w2:p9" } }, [1, 2, 1, 45]);
+  // Working since 45, more recent than w2:p3's 40, so just before it.
+  const v = changed(base, { key: { ...base.key, pane_id: "w2:p9" }, waiting_since: 45 }, [1, 2, 4, -45]);
   v.sort_key[4] = "mac/default/1/w2:p9";
   const { model: next, warning } = applyEvent(model, "agent", JSON.stringify(v));
   assert.equal(warning, undefined);
   assert.equal(next.agents.size, model.agents.size + 1);
   const order = boardOrder(next);
-  assert.equal(order.indexOf("mac/default/1/w2:p9"), order.indexOf("mac/default/1/w2:p3") + 1);
+  assert.equal(order.indexOf("mac/default/1/w2:p9"), order.indexOf("mac/default/1/w2:p3") - 1);
 });
 
 test("agent replaces a known Agent", () => {
@@ -422,13 +494,13 @@ test("transition into blocked lands in Needs you at its longest-waiting position
 
 test("transition into working moves the Box out of the top zone into its workspace group", () => {
   const model = fixtureModel();
-  const v = changed(fixtureView("w1:p1"), { status: "working", attention_class: "working", waiting_since: 200, waiting_exact: true }, [1, 1, 1, 200]);
+  const v = changed(fixtureView("w1:p1"), { status: "working", attention_class: "working", waiting_since: 200, waiting_exact: true }, [1, 1, 4, -200]);
   const { model: next } = applyEvent(model, "transition", transitionData(v, "blocked"));
   const { top, groups } = layout(modelViews(next));
   assert.ok(!top.some((x) => keyString(x) === "mac/default/1/w1:p1"));
   const g = groups.find((g) => g.views.some((x) => keyString(x) === "mac/default/1/w1:p1"));
   assert.equal(g.label, "herddash");
-  assert.deepEqual(g.views.map(keyString), ["mac/default/1/w1:p3", "mac/default/1/w1:p1", "mac/default/1/w1:p2", "mac/default/1/w1:p5", "mac/default/1/w1:p4"]);
+  assert.deepEqual(g.views.map(keyString), ["mac/default/1/w1:p2", "mac/default/1/w1:p5", "mac/default/1/w1:p6", "mac/default/1/w1:p1", "mac/default/1/w1:p3", "mac/default/1/w1:p4"]);
 });
 
 test("applyEvent keeps the sort key and waiting_since a done-to-idle transition carries (core owns the guarantee)", () => {
@@ -892,4 +964,132 @@ test("formatAge keeps seconds below an hour, then follows formatDuration", () =>
   assert.equal(formatAge(3600000), "1h 00m");
   assert.equal(formatAge(86400000), "1d 00h");
   assert.equal(clockUTC(Date.UTC(2026, 0, 2, 3, 4, 5)), "03:04:05 UTC");
+});
+
+test("stream: a state from another Daemon run reloads the page; the same run does not", () => {
+  const source = {};
+  const state = (run) =>
+    JSON.stringify({ run_id: run, agents: fixture.input.map((i) => i.view), connection: fixtureConnection, headers: fixture.headers });
+  let { st } = streamDecision(streamState(), { kind: "open", source });
+  let d = streamDecision(st, { kind: "event", source, name: "state", data: state("run-a") });
+  assert.equal(d.reload, undefined, "the first state");
+  st = d.st;
+  ({ st } = streamDecision(st, { kind: "open", source }));
+  d = streamDecision(st, { kind: "event", source, name: "state", data: state("run-a") });
+  assert.equal(d.reload, undefined, "a reconnect to the same run");
+  st = d.st;
+  ({ st } = streamDecision(st, { kind: "open", source }));
+  d = streamDecision(st, { kind: "event", source, name: "state", data: state("run-b") });
+  assert.equal(d.reload, true, "a restarted Daemon");
+});
+
+test("state label: WORKING · N bg, BACKGROUND · N when N > 1 (ADR-0009)", () => {
+  const working = { status: "working", attention_class: "working" };
+  const bg = { status: "working", attention_class: "working", background: true };
+  const done = { status: "done", attention_class: "finished", background: true };
+  assert.equal(stateLabel({ ...working, background_tasks: 1 }), "Working · 1 bg");
+  assert.equal(stateLabel({ ...working, background_tasks: 3 }), "Working · 3 bg");
+  assert.equal(stateLabel({ ...working, background_tasks: 0 }), "Working");
+  assert.equal(stateLabel(working), "Working");
+  assert.equal(stateLabel({ ...bg, background_tasks: 1 }), "Background");
+  assert.equal(stateLabel({ ...bg, background_tasks: 2 }), "Background · 2");
+  assert.equal(stateLabel({ ...done, background_tasks: 4 }), "Background · 4");
+  assert.equal(stateCount({ ...done, background_tasks: 1 }), "");
+  // Read as sent: never a count from anything but a positive whole number.
+  for (const n of [-1, 1.5, "2", null, undefined]) assert.equal(backgroundTasks({ background_tasks: n }), 0);
+  // Other kinds show no count, whatever is sent.
+  const others = [
+    { status: "done", attention_class: "finished", background_tasks: 2 },
+    { status: "idle", attention_class: "working", background_tasks: 2 },
+    { status: "blocked", attention_class: "needs_you", background_tasks: 2 },
+    { status: "unknown", attention_class: "unknown", background_tasks: 2 },
+  ];
+  for (const v of others) assert.equal(stateCount(v), "", JSON.stringify(v));
+});
+
+test("accessible name says the background tasks", () => {
+  const now = 1_000_000;
+  const v = {
+    key: { host: "h", server: "default", epoch: 1, pane_id: "w1:p1" },
+    attention_class: "working",
+    status: "working",
+    background: false,
+    background_tasks: 2,
+    heading: "cldw",
+    context_line: "build",
+    directory: "~/src/p",
+    workspace: "ops",
+    tab: "1",
+    pane_position: "",
+    waiting_since: now - 75_000,
+    waiting_exact: true,
+  };
+  assert.equal(boxLabel(v, now), "ops › 1, build, ~/src/p, cldw, Working, 2 background tasks, waiting 1m");
+  assert.equal(tasksLabel({ background_tasks: 1 }), "1 background task");
+  assert.equal(tasksLabel({}), "");
+  // Group counts are unchanged by the count.
+  assert.equal(groupCounts([v, { ...v, background: true }]), "1 background · 1 working");
+});
+
+test("golden fixture: background_tasks as the Daemon sent it", () => {
+  const w = fixture.input.find((i) => i.view.status === "working" && i.view.background_tasks > 0 && !i.view.background);
+  assert.ok(w, "no Working view with background tasks in the fixture");
+  assert.equal(stateLabel(w.view), "Working · " + w.view.background_tasks + " bg");
+  for (const { view: v } of fixture.input) {
+    assert.ok(Number.isInteger(v.background_tasks), keyString(v));
+    if (v.attention_class === "needs_you" || v.attention_class === "unknown") assert.equal(v.background_tasks, 0);
+  }
+});
+
+test("recap: the Box's context text and accessible name use it in full (ADR-0010)", () => {
+  const now = 1_000_000;
+  const recap = "I wrote the store tests and they pass. Next I'll open the pull request, then wait for review of every change.";
+  const v = {
+    key: { host: "h", server: "default", epoch: 1, pane_id: "w1:p1" },
+    attention_class: "finished",
+    status: "done",
+    background: false,
+    background_tasks: 0,
+    heading: "cldw",
+    context_line: "write-tests",
+    recap,
+    directory: "~/src/p",
+    workspace: "ops",
+    tab: "1",
+    pane_position: "",
+    waiting_since: now - 75_000,
+    waiting_exact: true,
+  };
+  assert.equal(recapOf(v), recap);
+  assert.equal(contextText(v), recap);
+  assert.equal(boxLabel(v, now), "ops › 1, " + recap + ", ~/src/p, cldw, Finished, waiting 1m");
+  assert.ok(!boxLabel(v, now).includes("write-tests"));
+  // No recap, an empty one, or one of another type: the Context Line, as before.
+  for (const r of [undefined, "", null, 5]) {
+    const w = { ...v, recap: r };
+    assert.equal(recapOf(w), "");
+    assert.equal(contextText(w), "write-tests");
+    assert.equal(boxLabel(w, now), "ops › 1, write-tests, ~/src/p, cldw, Finished, waiting 1m");
+  }
+  assert.equal(contextText({ ...v, recap: "", context_line: "" }), "");
+  // Class, kind and group counts are unchanged by a recap.
+  assert.equal(boxKind(v), boxKind({ ...v, recap: "" }));
+  assert.equal(groupCounts([v]), groupCounts([{ ...v, recap: "" }]));
+});
+
+test("anyRecap: true while any view has a recap", () => {
+  assert.equal(anyRecap([]), false);
+  assert.equal(anyRecap([{ recap: "" }, { context_line: "x" }]), false);
+  assert.equal(anyRecap([{ recap: "" }, { recap: "A. Next B." }]), true);
+});
+
+test("golden fixture: recap as the Daemon sent it", () => {
+  const withRecap = fixture.input.filter((i) => i.view.recap !== "");
+  assert.ok(withRecap.length > 0, "no view with a recap in the fixture");
+  for (const { view: v } of fixture.input) assert.equal(typeof v.recap, "string", keyString(v));
+  for (const i of withRecap) {
+    assert.equal(i.view.recap, i.recap, keyString(i.view));
+    assert.equal(contextText(i.view), i.recap);
+  }
+  assert.equal(anyRecap(fixture.input.map((i) => i.view)), true);
 });

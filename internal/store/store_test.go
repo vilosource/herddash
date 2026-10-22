@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -207,8 +208,8 @@ func TestOpenRefusesNewerSchema(t *testing.T) {
 		s.Close()
 		t.Fatal("Open accepted schema version 99")
 	}
-	if !errors.Is(err, ErrSchemaNewer) || !strings.Contains(err.Error(), "99") || !strings.Contains(err.Error(), "up to 2") {
-		t.Errorf("error %q: want ErrSchemaNewer naming 99 and 2", err)
+	if !errors.Is(err, ErrSchemaNewer) || !strings.Contains(err.Error(), "99") || !strings.Contains(err.Error(), "up to "+strconv.Itoa(schemaVersion)) {
+		t.Errorf("error %q: want ErrSchemaNewer naming 99 and %d", err, schemaVersion)
 	}
 	after, err := os.ReadFile(path)
 	if err != nil {
@@ -385,6 +386,7 @@ func TestColumns(t *testing.T) {
 			{"possibly_spurious", "INTEGER", true, false},
 			{"observed_at", "INTEGER", true, false},
 			{"import_key", "TEXT", false, false},
+			{"observed_by", "TEXT", false, false},
 		},
 		"resync_markers": {
 			{"id", "INTEGER", false, true},
@@ -555,7 +557,7 @@ func TestMigrationsNumbered(t *testing.T) {
 	for _, m := range ms {
 		names = append(names, m.name)
 	}
-	if got, want := strings.Join(names, ","), "0001_initial.sql,0002_server_state.sql"; got != want {
+	if got, want := strings.Join(names, ","), "0001_initial.sql,0002_server_state.sql,0003_observed_by.sql"; got != want {
 		t.Errorf("migrations %s, want %s", got, want)
 	}
 	if len(ms) != schemaVersion {
@@ -564,7 +566,7 @@ func TestMigrationsNumbered(t *testing.T) {
 }
 
 // schemaVersion is the user_version a fully migrated database has.
-const schemaVersion = 2
+const schemaVersion = 3
 
 // TestFailedMigrationRollsBack runs a migration list whose second step fails:
 // nothing from the first step survives and user_version is unchanged.

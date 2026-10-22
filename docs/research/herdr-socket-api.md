@@ -479,6 +479,27 @@ string, so `events_lost` has no generated type. A client recognises it by matchi
 - **A pane can change id.** `pane_moved` carries `previous_pane_id`, and pane ids are scoped to their
   workspace (`w1:p1`). Untested here; a move across workspaces would look like one pane closing and
   another appearing unless the engine follows `pane.moved`.
+- **A zoomed tab keeps its layout.** *Added 2026-10-21, against an isolated herdr 0.9.5 (a
+  one-off probe under `env -i` with its own `HOME`, the same isolation as
+  `herdr-0.9.5-probe.sh`).* With one pane left and two stacked right (120×40), `pane.zoom` on the
+  left pane set the snapshot layout's `zoomed` to true but left every pane's `rect` as it was;
+  turning zoom off changed nothing either. Zoom on and zoom off each emitted one `layout_updated`.
+  So pane positions computed from `rect` (`core.PanePositions`) do not change while a pane is
+  zoomed, and herddash can ignore `zoomed`.
+- **`pane.process_info` lists only the foreground process group.** *Added 2026-10-21, against an
+  isolated herdr 0.9.5, as recorded in `docs/implementation/spec-background-tasks.md`.* Claude Code
+  runs every Bash tool call, foreground or background, as a direct child shell in its own process
+  group (pgid = its pid), so `pane.process_info` does not show those shells, and herdr reports a
+  Claude Code agent waiting on a background shell as `done`. herddash reads the agent process's
+  children itself (`procenv.Children`) to tell that apart from Finished.
+- **A Claude Code question dialog went undetected.** *Added 2026-10-21, from the live server's
+  record on this machine, as ADR-0008 records it; not reproduced in isolation.* The Claude Code
+  agent in tab `6: DNS` (pane `wB:pE`) was reported `blocked` at 14:52:01, 14:59:28 and 15:00:59
+  for Claude Code's ordinary prompts, but `done` at 15:13:15 and `idle` at 15:17:15 while it
+  showed the question dialog in its side-by-side form with a preview panel. Claude Code's own
+  `<config dir>/sessions/<pid>.json` said `status: "waiting"` from 15:13:15 and still at 15:32.
+  herdr's screen detection evidently does not recognise that dialog's layout: a herdr detection
+  gap, to be reported upstream. herddash reads that record for `waiting` (ADR-0008).
 
 ## Open items
 

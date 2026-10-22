@@ -152,6 +152,7 @@ type Config struct {
 	database              string
 	retentionDays         int
 	allowUnsupportedHerdr bool
+	claudeRecaps          bool
 	profiles              map[core.AgentProgram]ProfileRule
 }
 
@@ -185,6 +186,11 @@ func (c Config) RetentionDays() int { return c.retentionDays }
 
 // AllowUnsupportedHerdr reports FR-16's dogfooding override.
 func (c Config) AllowUnsupportedHerdr() bool { return c.allowUnsupportedHerdr }
+
+// ClaudeRecaps reports whether Claude Code's session recap is read from its
+// transcript and shown on the Board (ADR-0010). It is the operator's consent,
+// set only in the file; the default is false.
+func (c Config) ClaudeRecaps() bool { return c.claudeRecaps }
 
 // Profile returns the Profile rule for an Agent Program, if the Profile Map has one.
 func (c Config) Profile(p core.AgentProgram) (ProfileRule, bool) {
@@ -240,6 +246,7 @@ func (c Config) MarshalJSON() ([]byte, error) {
 		Database              string                 `json:"database"`
 		RetentionDays         int                    `json:"retention_days"`
 		AllowUnsupportedHerdr bool                   `json:"allow_unsupported_herdr"`
+		ClaudeRecaps          bool                   `json:"claude_recaps"`
 		Profiles              map[string]profileJSON `json:"profiles"`
 	}{
 		File:                  c.file,
@@ -252,6 +259,7 @@ func (c Config) MarshalJSON() ([]byte, error) {
 		Database:              c.database,
 		RetentionDays:         c.retentionDays,
 		AllowUnsupportedHerdr: c.allowUnsupportedHerdr,
+		ClaudeRecaps:          c.claudeRecaps,
 		Profiles:              profiles,
 	})
 }
@@ -267,6 +275,7 @@ type fileConfig struct {
 	Database              *string                `toml:"database"`
 	RetentionDays         *int                   `toml:"retention_days"`
 	AllowUnsupportedHerdr *bool                  `toml:"allow_unsupported_herdr"`
+	ClaudeRecaps          *bool                  `toml:"claude_recaps"`
 	Profiles              map[string]fileProfile `toml:"profiles"`
 }
 
@@ -386,6 +395,10 @@ func Load(flags Flags, env Env) (Config, error) {
 
 	allow := pick(flags.AllowUnsupportedHerdr, "--allow-unsupported-herdr", fc.AllowUnsupportedHerdr, fileName)
 	c.allowUnsupportedHerdr = allow.set && allow.value
+
+	// claude_recaps has no flag: it is consent, kept in the file (ADR-0010).
+	recaps := pick[bool](nil, "", fc.ClaudeRecaps, fileName)
+	c.claudeRecaps = recaps.set && recaps.value
 
 	c.profiles, err = buildProfiles(fc.Profiles, fileName, env.Home)
 	if err != nil {

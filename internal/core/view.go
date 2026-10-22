@@ -97,6 +97,15 @@ type AgentViewInput struct {
 	// Home is the Daemon user's home directory, for shortening the project
 	// directory; "" shortens nothing.
 	Home string
+	// Background is set when the Agent's process has a child its program's
+	// BackgroundRule names a background task (HasBackground). The view shows
+	// it only while ChecksBackground holds for the Status and the class is
+	// finished or working.
+	Background bool
+	// Transcript is the Agent's background work and latest session recap as
+	// its Claude Code transcript shows them (ADR-0009, ADR-0010); the zero
+	// value when it is not read.
+	Transcript BackgroundTasks
 }
 
 // AgentView is how every surface (the API, the event stream and the Board)
@@ -123,8 +132,28 @@ type AgentView struct {
 	WaitingExact bool   `json:"waiting_exact"`
 	PaneTitle    string `json:"pane_title"`
 	// ContextLine is never omitted: an empty one is sent as "".
-	ContextLine string  `json:"context_line"`
-	SortKey     SortKey `json:"sort_key"`
+	ContextLine string `json:"context_line"`
+	// Recap is Claude Code's latest session recap (ADR-0010), read only when
+	// the operator turned recaps on, and cleared when the Agent's next turn
+	// starts. It is set only on a Finished, Idle or Background Box; a
+	// Working, Needs you or Unknown one gets "", since herdr reports a new
+	// turn before the next transcript read (operator decision 2026-10-22).
+	// The Board shows it in place of the Context Line. Never omitted: ""
+	// when there is none. It changes no other value.
+	Recap string `json:"recap"`
+	// Background is set when the Agent is waiting on background work: its
+	// Status is done or idle, or working with its main turn over (ADR-0009),
+	// and it has background tasks open. The class, the Waiting Time and the
+	// record are unchanged by it; only the Board's kind and the sort key's
+	// class rank are.
+	Background bool `json:"background"`
+	// BackgroundTasks is how many background tasks the Agent has open
+	// (ADR-0009): its transcript's open tasks, plus one for a live tool
+	// shell the process check finds that no open command accounts for. It
+	// is shown on a Working Box ("WORKING · 2 bg") and a Background one,
+	// and is 0 for Needs you and Unknown.
+	BackgroundTasks int     `json:"background_tasks"`
+	SortKey         SortKey `json:"sort_key"`
 }
 
 // NewAgentView builds the view of one Agent. The Attention Class comes from
@@ -134,6 +163,7 @@ func NewAgentView(in AgentViewInput) AgentView {
 	if !in.Fold.Known {
 		class = ClassOf(in.Status, in.Fold.EverWorking)
 	}
+	tasks, background := backgroundOf(in, class)
 	var since int64
 	var exact bool
 	if in.Fold.Known && in.Fold.Since > 0 {
@@ -155,9 +185,53 @@ func NewAgentView(in AgentViewInput) AgentView {
 		WaitingExact: exact,
 		PaneTitle:    in.Context.PaneTitle,
 		ContextLine:  ContextLine(in.AgentProgram, in.Context.PaneTitle),
+		Recap:        shownRecap(in, class, background),
+		Background:   background,
+
+		BackgroundTasks: tasks,
 	}
-	v.SortKey = newSortKey(class, in.Status, in.Context.WorkspacePosition, since, in.Key)
+	v.SortKey = newSortKey(class, in.Status, background, in.Context.WorkspacePosition, since, in.Key)
 	return v
+}
+
+// backgroundOf is an Agent's open background tasks and whether its Box is
+// Background (ADR-0009). The count is the transcript's open tasks, plus one
+// when the process check (shown only while ChecksBackground holds) finds a
+// tool shell and no open command accounts for it. With any open:
+//   - Status done or idle, class finished or working: Background;
+//   - Status working and the main turn ended: Background, as an idle one;
+//   - Status working otherwise: Working, with the count shown.
+//
+// Needs you and Unknown never change: no count, never Background.
+func backgroundOf(in AgentViewInput, class AttentionClass) (int, bool) {
+	if class != ClassFinished && class != ClassWorking {
+		return 0, false
+	}
+	switch in.Status {
+	case StatusDone, StatusIdle, StatusWorking:
+	default:
+		return 0, false
+	}
+	n := in.Transcript.Count()
+	if in.Background && ChecksBackground(in.AgentProgram, in.Status) && !in.Transcript.OpenCommand() {
+		n++
+	}
+	switch {
+	case n == 0:
+		return 0, false
+	case in.Status == StatusWorking:
+		return n, in.Transcript.TurnEnded()
+	}
+	return n, true
+}
+
+// shownRecap is the Agent's recap when its Box is Finished, Idle or Background
+// (ADR-0010), "" otherwise.
+func shownRecap(in AgentViewInput, class AttentionClass, background bool) string {
+	if background || class == ClassFinished || (class == ClassWorking && in.Status != StatusWorking) {
+		return in.Transcript.Recap()
+	}
+	return ""
 }
 
 // SortKey is where an Agent sorts on the Board (FR-3):
@@ -168,11 +242,16 @@ func NewAgentView(in AgentViewInput) AgentView {
 //   - Group is 0 in zone 0. In zone 1 it is the workspace's position in
 //     herdr's order, with an unknown position (0) sorting last as
 //     SortUnknown.
-//   - ClassRank is needs_you 0; then, inside a workspace group, Working (class
-//     working with Status working) 1, finished 2, Idle (class working with any
-//     other Status) 3, unknown 4.
-//   - Start is WaitingSince, so the longest wait comes first; an unknown one
-//     sorts after every known one, as SortUnknown.
+//   - ClassRank is needs_you 0; then, inside a workspace group, finished 1,
+//     Idle (class working with a Status other than working) 2, Background
+//     (finished, Idle, or Working with its main turn over, waiting on
+//     background work; ADR-0009) 3, Working (Status
+//     working) 4, unknown 5: what to deal with first comes first (operator
+//     decision 2026-10-21).
+//   - Start orders a class by WaitingSince. In zone 0 it is WaitingSince, so
+//     the longest wait comes first. In zone 1 it is its negation, so the most
+//     recent comes first. An unknown one sorts after every known one, as
+//     SortUnknown.
 //   - Key breaks ties: host, server, epoch (numerically), then pane id.
 //
 // It serialises as a JSON array of five values, the last being the key
@@ -189,20 +268,21 @@ type SortKey struct {
 // JavaScript's Number.MAX_SAFE_INTEGER, so the Board compares it exactly.
 const SortUnknown int64 = 1<<53 - 1
 
-func newSortKey(class AttentionClass, status Status, workspacePosition int, since int64, key AgentKey) SortKey {
+func newSortKey(class AttentionClass, status Status, background bool, workspacePosition int, since int64, key AgentKey) SortKey {
 	k := SortKey{Key: key, Start: since}
-	switch class {
-	case ClassNeedsYou:
+	switch {
+	case class == ClassNeedsYou:
 		k.ClassRank = 0
-	case ClassWorking:
+	case background:
+		k.ClassRank = 3
+	case class == ClassFinished:
 		k.ClassRank = 1
-		if status != StatusWorking {
-			k.ClassRank = 3
-		}
-	case ClassFinished:
+	case class == ClassWorking && status == StatusWorking:
+		k.ClassRank = 4
+	case class == ClassWorking:
 		k.ClassRank = 2
 	default:
-		k.ClassRank = 4
+		k.ClassRank = 5
 	}
 	if k.ClassRank > 0 {
 		k.Zone = 1
@@ -210,6 +290,7 @@ func newSortKey(class AttentionClass, status Status, workspacePosition int, sinc
 		if k.Group <= 0 {
 			k.Group = SortUnknown
 		}
+		k.Start = -since // the most recent first
 	}
 	if since == 0 {
 		k.Start = SortUnknown

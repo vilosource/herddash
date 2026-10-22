@@ -270,7 +270,8 @@ func TestHistoryOrderAndRoundTrip(t *testing.T) {
 			HerdrVersion: "0.9.5", ObservedAt: 10, Provenance: core.ProvenanceLive},
 		{Key: other, New: core.StatusIdle, ObservedAt: 15, Provenance: core.ProvenanceLive},
 		{Key: otherEpoch, New: core.StatusIdle, ObservedAt: 15, Provenance: core.ProvenanceLive},
-		{Key: keyP1, Previous: status(core.StatusBlocked), New: core.StatusDone, ObservedAt: 10, Provenance: core.ProvenanceLive},
+		{Key: keyP1, Previous: status(core.StatusBlocked), New: core.StatusDone, ObservedAt: 10, Provenance: core.ProvenanceLive,
+			ObservedBy: core.ObservedByClaudeSession},
 	}
 	var trs []core.Transition
 	for _, i := range in {
@@ -307,13 +308,14 @@ type described struct {
 	Provenance                               core.Provenance
 	ImportKey                                string
 	Spurious                                 bool
+	ObservedBy                               core.Observer
 }
 
 func describe(t core.Transition) described {
 	prev, hasPrev := t.Previous()
 	o, hasOrder := t.HerdrOrder()
 	return described{t.Key(), string(t.AgentProgram()), t.Profile(), string(prev), string(t.New()), t.HerdrVersion(),
-		hasPrev, hasOrder, o, t.ObservedAt(), t.Provenance(), t.ImportKey(), t.PossiblySpurious()}
+		hasPrev, hasOrder, o, t.ObservedAt(), t.Provenance(), t.ImportKey(), t.PossiblySpurious(), t.ObservedBy()}
 }
 
 func sameTransition(a, b core.Transition) bool { return describe(a) == describe(b) }
@@ -404,5 +406,104 @@ func TestUpgradeFromSchema1(t *testing.T) {
 	}
 	if err := s.SaveServerState("h", "s", ServerState{Epoch: 1}); err != nil {
 		t.Errorf("server_state after the upgrade: %v", err)
+	}
+}
+
+// TestAppendObservedBy: a Transition the session record observed stores
+// observed_by 'claude_session', one herdr observed NULL, and History returns
+// both as they were.
+func TestAppendObservedBy(t *testing.T) {
+	s, _ := openTemp(t)
+	for i, by := range []core.Observer{core.ObservedByHerdr, core.ObservedByClaudeSession} {
+		tr := mustTransition(t, core.TransitionInput{Key: keyP1, AgentProgram: "claude", New: core.StatusBlocked,
+			ObservedAt: int64(10 + i), Provenance: core.ProvenanceLive, ObservedBy: by})
+		if err := s.Append(tr); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var by []sql.NullString
+	rows, err := s.db.Query("SELECT observed_by FROM transitions ORDER BY id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var v sql.NullString
+		if err := rows.Scan(&v); err != nil {
+			t.Fatal(err)
+		}
+		by = append(by, v)
+	}
+	rows.Close()
+	if len(by) != 2 || by[0].Valid || by[1].String != "claude_session" {
+		t.Errorf("observed_by %v, want NULL then claude_session", by)
+	}
+	h, err := s.History(context.Background(), keyP1)
+	if err != nil || len(h) != 2 || h[0].ObservedBy() != core.ObservedByHerdr || h[1].ObservedBy() != core.ObservedByClaudeSession {
+		t.Fatalf("history %v, %v", h, err)
+	}
+	if _, err := s.db.Exec(`INSERT INTO transitions (host, server, epoch, pane_id, new_status, provenance, observed_at, observed_by)
+		VALUES ('h', 's', 1, 'w1:p1', 'blocked', 'live', 1, 'guess')`); err == nil {
+		t.Error("observed_by 'guess' accepted")
+	}
+}
+
+// TestUpgradeFromSchema2 covers the matrix's "Migration" row: a database at
+// schema version 2 holding Transitions is migrated to 3 by ADD COLUMN, its
+// rows untouched and read as observed by herdr, the table not rebuilt.
+func TestUpgradeFromSchema2(t *testing.T) {
+	path := dbPath(t)
+	ms, err := migrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := sql.Open("sqlite", (&url.URL{Scheme: "file", Path: path}).String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw.SetMaxOpenConns(1)
+	old := &Store{db: raw}
+	if err := old.prepare(context.Background(), path, ms[:2]); err != nil {
+		t.Fatal(err)
+	}
+	if v := userVersion(t, raw); v != 2 {
+		t.Fatalf("old database at %d, want 2", v)
+	}
+	if _, err := raw.Exec(`INSERT INTO transitions (host, server, epoch, pane_id, agent_program, new_status, provenance, observed_at)
+		VALUES ('mac', 'default', 1, 'w1:p1', 'claude', 'working', 'live', 10),
+		       ('mac', 'default', 1, 'w1:p1', 'claude', 'done', 'snapshot', 20)`); err != nil {
+		t.Fatal(err)
+	}
+	var rootBefore int
+	if err := raw.QueryRow("SELECT rootpage FROM sqlite_schema WHERE name = 'transitions'").Scan(&rootBefore); err != nil {
+		t.Fatal(err)
+	}
+	raw.Close()
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if v := userVersion(t, s.db); v != schemaVersion || schemaVersion != 3 {
+		t.Errorf("user_version %d, want 3", v)
+	}
+	var rootAfter, nulls int
+	if err := s.db.QueryRow("SELECT rootpage FROM sqlite_schema WHERE name = 'transitions'").Scan(&rootAfter); err != nil {
+		t.Fatal(err)
+	}
+	if rootAfter != rootBefore {
+		t.Errorf("transitions rebuilt: root page %d, was %d", rootAfter, rootBefore)
+	}
+	if err := s.db.QueryRow("SELECT count(*) FROM transitions WHERE observed_by IS NULL").Scan(&nulls); err != nil || nulls != 2 {
+		t.Errorf("%d rows with observed_by NULL (%v), want 2", nulls, err)
+	}
+	h, err := s.History(context.Background(), keyP1)
+	if err != nil || len(h) != 2 || h[0].ObservedBy() != core.ObservedByHerdr || h[1].New() != core.StatusDone {
+		t.Fatalf("history %v, %v", h, err)
+	}
+	tr := mustTransition(t, core.TransitionInput{Key: keyP1, AgentProgram: "claude", Previous: status(core.StatusDone),
+		New: core.StatusBlocked, ObservedAt: 30, Provenance: core.ProvenanceLive, ObservedBy: core.ObservedByClaudeSession})
+	if err := s.Append(tr); err != nil {
+		t.Errorf("append after the upgrade: %v", err)
 	}
 }

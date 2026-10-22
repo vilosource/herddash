@@ -51,7 +51,8 @@ var (
 	backfillKey = core.AgentKey{Host: "mac", Server: "default", Epoch: core.BackfillEpoch, PaneID: "w3:p2"}
 )
 
-// historyFixture holds three rows for liveKey, one for escapedKey and two
+// historyFixture holds three rows for liveKey (the second observed by Claude
+// Code's session record, the others by herdr), one for escapedKey and two
 // backfill rows for backfillKey.
 func historyFixture(t *testing.T) *fakeHistory {
 	order := uint64(41)
@@ -60,7 +61,8 @@ func historyFixture(t *testing.T) *fakeHistory {
 			mustTransition(t, core.TransitionInput{Key: liveKey, AgentProgram: "claude", Profile: "work", New: core.StatusWorking,
 				HerdrOrder: &order, HerdrVersion: "0.9.5", ObservedAt: 1000, Provenance: core.ProvenanceSnapshot}),
 			mustTransition(t, core.TransitionInput{Key: liveKey, AgentProgram: "claude", Profile: "work", Previous: statusPtr(core.StatusWorking),
-				New: core.StatusBlocked, HerdrVersion: "0.9.5", ObservedAt: 2000, Provenance: core.ProvenanceLive}),
+				New: core.StatusBlocked, HerdrVersion: "0.9.5", ObservedAt: 2000, Provenance: core.ProvenanceLive,
+				ObservedBy: core.ObservedByClaudeSession}),
 			mustTransition(t, core.TransitionInput{Key: liveKey, AgentProgram: "claude", Profile: "work", Previous: statusPtr(core.StatusBlocked),
 				New: core.StatusWorking, HerdrVersion: "0.9.5", ObservedAt: 3000, Provenance: core.ProvenanceLive}),
 		},
@@ -107,7 +109,7 @@ func TestHistoryFound(t *testing.T) {
 	}
 	want := `{"key":{"host":"mac","server":"default","epoch":2,"pane_id":"w1:p1"},"transitions":[` +
 		`{"agent_program":"claude","profile":"work","new":"working","herdr_order":41,"herdr_version":"0.9.5","observed_at":1000,"provenance":"snapshot","possibly_spurious":false},` +
-		`{"agent_program":"claude","profile":"work","previous":"working","new":"blocked","herdr_version":"0.9.5","observed_at":2000,"provenance":"live","possibly_spurious":false},` +
+		`{"agent_program":"claude","profile":"work","previous":"working","new":"blocked","herdr_version":"0.9.5","observed_at":2000,"provenance":"live","possibly_spurious":false,"observed_by":"claude_session"},` +
 		`{"agent_program":"claude","profile":"work","previous":"blocked","new":"working","herdr_version":"0.9.5","observed_at":3000,"provenance":"live","possibly_spurious":false}]}`
 	if got := w.Body.String(); got != want {
 		t.Errorf("body\n%s\nwant\n%s", got, want)

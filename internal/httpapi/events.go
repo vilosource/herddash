@@ -57,7 +57,8 @@ type wireRemoved struct {
 
 // wireTransition is a core.Transition as the event stream sends it, built
 // from its accessors. Unknown values are omitted. observed_at is UTC Unix
-// milliseconds. The import key is deliberately not sent: it identifies a
+// milliseconds. observed_by is omitted when herdr observed the change, and
+// "claude_session" when Claude Code's session record did (ADR-0008). The import key is deliberately not sent: it identifies a
 // backfilled row for re-import and means nothing to a reader.
 type wireTransition struct {
 	AgentProgram     core.AgentProgram `json:"agent_program"`
@@ -69,6 +70,7 @@ type wireTransition struct {
 	ObservedAt       int64             `json:"observed_at"`
 	Provenance       core.Provenance   `json:"provenance"`
 	PossiblySpurious bool              `json:"possibly_spurious"`
+	ObservedBy       core.Observer     `json:"observed_by,omitempty"`
 }
 
 // wireTransitionEvent is the data of a transition event: the Agent's key, the
@@ -94,6 +96,7 @@ func newWireTransition(t core.Transition) wireTransition {
 		ObservedAt:       t.ObservedAt(),
 		Provenance:       t.Provenance(),
 		PossiblySpurious: t.PossiblySpurious(),
+		ObservedBy:       t.ObservedBy(),
 	}
 	if p, ok := t.Previous(); ok {
 		w.Previous = &p

@@ -16,6 +16,7 @@ import (
 
 	"github.com/vilosource/herddash/internal/core"
 	"github.com/vilosource/herddash/internal/herdr"
+	"github.com/vilosource/herddash/internal/procenv"
 	"github.com/vilosource/herddash/internal/store"
 )
 
@@ -171,6 +172,13 @@ func (f *fakeClient) ForegroundProcess(ctx context.Context, paneID string) (core
 func (f *fakeClient) setProc(paneID string, pid int) {
 	f.mu.Lock()
 	f.procs[paneID] = core.ForegroundProcess{PID: pid, Name: "claude"}
+	f.mu.Unlock()
+}
+
+// clearProc makes paneID's foreground process unreadable.
+func (f *fakeClient) clearProc(paneID string) {
+	f.mu.Lock()
+	delete(f.procs, paneID)
 	f.mu.Unlock()
 }
 
@@ -758,7 +766,11 @@ func startEngineWith(t *testing.T, fake *fakeClient, opts func(*Options, *record
 func startEngineBefore(t *testing.T, fake *fakeClient, opts func(*Options, *recorder), before func(*Engine)) *harness {
 	t.Helper()
 	rec := newRecorder()
-	o := Options{Host: "mac", Server: "default", Client: fake, Sink: rec, Clock: testClock()}
+	// No engine test reads a real process's children or a real session
+	// record: a test of them injects a fakeChildren or a fakeSessions.
+	o := Options{Host: "mac", Server: "default", Client: fake, Sink: rec, Clock: testClock(),
+		Children: func(int) ([]procenv.Process, error) { return nil, nil },
+		Session:  noSession}
 	if opts != nil {
 		opts(&o, rec)
 	}

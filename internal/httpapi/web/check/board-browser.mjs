@@ -1,5 +1,7 @@
-// Hand-run headless-Chrome check of the Board's connection and version strips
-// (Story 3.9). Not embedded, not run in CI.
+// Hand-run headless-Chrome check of the Board's Boxes and workspace groups
+// (layout v4), the State label's background task count (ADR-0009), Claude
+// Code's recap in the Context Line's row (ADR-0010) and its connection and
+// version strips (Story 3.9). Not embedded, not run in CI.
 //
 //   go build -o /tmp/herddash ./cmd/herddash
 //   node internal/httpapi/web/check/board-browser.mjs /tmp/herddash
@@ -53,10 +55,26 @@ const SNAPSHOT = {
     version: "0.9.5",
     protocol: 22,
     workspaces: [{ workspace_id: "w1", number: 1, label: "probe", focused: true, pane_count: 1, tab_count: 1, active_tab_id: "w1:t1", agent_status: "working" }],
-    tabs: [{ tab_id: "w1:t1", workspace_id: "w1", number: 1, label: "1", focused: true, pane_count: 1, agent_status: "working" }],
-    panes: [{ pane_id: "w1:p1", terminal_id: "t1", workspace_id: "w1", tab_id: "w1:t1", focused: true, agent: "claude", agent_status: "working", revision: 0 }],
-    layouts: [],
-    agents: [{ terminal_id: "t1", agent: "claude", agent_status: "working", workspace_id: "w1", tab_id: "w1:t1", pane_id: "w1:p1", focused: true, state_change_seq: 3, revision: 0 }],
+    tabs: [{ tab_id: "w1:t1", workspace_id: "w1", number: 1, label: "1: build", focused: true, pane_count: 2, agent_status: "blocked" }],
+    panes: [
+      { pane_id: "w1:p1", terminal_id: "t1", workspace_id: "w1", tab_id: "w1:t1", focused: true, cwd: "/srv/proj", agent: "claude", agent_status: "working", revision: 0 },
+      { pane_id: "w1:p2", terminal_id: "t2", workspace_id: "w1", tab_id: "w1:t1", focused: false, cwd: "/srv/proj", agent: "claude", agent_status: "blocked", revision: 0 },
+    ],
+    layouts: [
+      {
+        workspace_id: "w1", tab_id: "w1:t1", zoomed: false, focused_pane_id: "w1:p1",
+        area: { x: 0, y: 0, width: 120, height: 40 },
+        panes: [
+          { pane_id: "w1:p1", focused: true, rect: { x: 0, y: 0, width: 60, height: 40 } },
+          { pane_id: "w1:p2", focused: false, rect: { x: 60, y: 0, width: 60, height: 40 } },
+        ],
+        splits: [],
+      },
+    ],
+    agents: [
+      { terminal_id: "t1", agent: "claude", agent_status: "working", workspace_id: "w1", tab_id: "w1:t1", pane_id: "w1:p1", focused: true, state_change_seq: 3, revision: 0 },
+      { terminal_id: "t2", agent: "claude", agent_status: "blocked", workspace_id: "w1", tab_id: "w1:t1", pane_id: "w1:p2", focused: false, state_change_seq: 2, revision: 0 },
+    ],
   },
 };
 
@@ -85,7 +103,7 @@ function fakeHerdr(path, version) {
           reply(SNAPSHOT);
           break;
         case "pane.process_info":
-          reply({ type: "pane_process_info", process_info: { pane_id: "w1:p1", shell_pid: 1, foreground_processes: [] } });
+          reply({ type: "pane_process_info", process_info: { pane_id: req.params.pane_id, shell_pid: 1, foreground_processes: [] } });
           break;
         case "events.subscribe":
           reply({ type: "subscription_started" }); // held open until the client closes it
@@ -167,8 +185,10 @@ async function chrome() {
   const { result: att } = await send("Target.attachToTarget", { targetId: result.targetId, flatten: true });
   const sid = att.sessionId;
   await send("Runtime.enable", {}, sid);
+  await send("Page.enable", {}, sid);
   return {
     warnings,
+    send: (method, params) => send(method, params, sid),
     open: (url) => send("Page.navigate", { url }, sid),
     eval: async (expr) => (await send("Runtime.evaluate", { expression: expr, returnByValue: true }, sid)).result.result.value,
     close: () => {
@@ -185,6 +205,23 @@ const SNAP = `JSON.stringify({
   boxes: document.querySelectorAll("#board .box").length,
 })`;
 
+// Each Box in document order: where it sits and what its four rows say.
+const BOXES = `JSON.stringify({
+  title: document.title,
+  headings: [...document.querySelectorAll("#board .group-head")].map((h) => h.textContent),
+  boxes: [...document.querySelectorAll("#board .box")].map((b) => ({
+    kind: b.className,
+    inGroup: !!b.closest(".group"),
+    tab: b.querySelector(".tab")?.textContent,
+    pane: b.querySelector(".pane")?.textContent ?? null,
+    second: b.children[1]?.className,
+    secondText: b.children[1]?.textContent,
+    rows: b.children.length,
+    height: b.getBoundingClientRect().height,
+    titleIsLabel: b.title !== "" && b.title === b.getAttribute("aria-label"),
+  })),
+})`;
+
 async function main() {
   const browser = await chrome();
   const snap = async () => JSON.parse(await browser.eval(SNAP));
@@ -199,6 +236,153 @@ async function main() {
     await browser.open("http://" + addr + "/");
     let s = await until("a Box", async () => ((await snap()).boxes > 0 ? snap() : null));
     check("connected: no strip, Boxes not dimmed", s.strips.length === 0 && !s.stale, s);
+
+    const b = await until("both Boxes", async () => {
+      const x = JSON.parse(await browser.eval(BOXES));
+      return x.boxes.length === 2 ? x : null;
+    });
+    const [needs, work] = b.boxes;
+    check("title carries the Needs you count", b.title === "(1) herddash · Needs you", b);
+    check("headings: Needs you, then the workspace with its counts", b.headings.join("|") === "Needs you|probe1 working", b);
+    check(
+      "Needs you Box: top zone, tab, right badge, workspace second",
+      needs.kind === "box box--needs_you" && !needs.inGroup && needs.tab === "1: build" && needs.pane === "right" &&
+        needs.second === "workspace line" && needs.secondText === "probe",
+      needs,
+    );
+    check(
+      "Working Box: in its group, left badge, directory second",
+      work.kind === "box box--working" && work.inGroup && work.pane === "left" && work.second === "dir line" && work.secondText === "/srv/proj",
+      work,
+    );
+    check("four rows, one height, title equals the accessible name", b.boxes.every((x) => x.rows === 4 && x.titleIsLabel && x.height === needs.height), b);
+
+    // The State label's task count (ADR-0009). The fake herdr has no Claude
+    // process, so the Daemon reports none: the page is given the Daemon's own
+    // state with counts set, through a stand-in EventSource that sends it
+    // once as the state event.
+    const state = JSON.parse(await (await fetch("http://" + addr + "/api/state")).text());
+    const variants = [
+      { name: "Working Box with 2 tasks shows · 2 bg after its class", tasks: 2, background: false, want: "working · 2 bg", kind: "box box--working" },
+      { name: "Background Box with 3 tasks shows · 3 after its class", tasks: 3, background: true, want: "background · 3", kind: "box box--background" },
+    ];
+    for (const v of variants) {
+      const sent = structuredClone(state);
+      for (const a of sent.agents) {
+        // Needs you never carries a count; it is set anyway to show so.
+        a.background_tasks = v.tasks;
+        if (a.status === "working") a.background = v.background;
+      }
+      const { result: added } = await browser.send("Page.addScriptToEvaluateOnNewDocument", {
+        source: `window.EventSource = class extends EventTarget {
+          static CLOSED = 2;
+          readyState = 1;
+          constructor() {
+            super();
+            window.standIn = (window.standIn || 0) + 1;
+            setTimeout(() => this.dispatchEvent(new MessageEvent("state", { data: ${JSON.stringify(JSON.stringify(sent))}, lastEventId: "1" })), 0);
+          }
+          close() {}
+        };`,
+      });
+      await browser.open("http://" + addr + "/");
+      const labels = await until("the stand-in state", async () => {
+        if (!(await browser.eval("window.standIn"))) return null;
+        const x = JSON.parse(
+          await browser.eval(`JSON.stringify([...document.querySelectorAll("#board .box")].map((b) => ({
+            kind: b.className, state: b.querySelector(".class")?.textContent,
+            count: b.querySelector(".class .count")?.textContent ?? null, label: b.getAttribute("aria-label") })))`),
+        );
+        return x.length === 2 && x.some((b) => b.kind === v.kind) ? x : null;
+      }, 5000).catch(async (err) => {
+        throw new Error(err.message + ": stand-in ran " + (await browser.eval("window.standIn")) + ", boxes " + (await browser.eval(BOXES)));
+      });
+      const box = labels.find((x) => x.kind === v.kind);
+      const needsYou = labels.find((x) => x.kind === "box box--needs_you");
+      check(
+        v.name + ", and its accessible name says so",
+        box.state.toLowerCase() === v.want && box.count !== null && new RegExp(v.tasks + " background tasks").test(box.label),
+        labels,
+      );
+      check("Needs you Box shows no count (" + v.tasks + " sent)", !!needsYou && needsYou.count === null, labels);
+      await browser.send("Page.removeScriptToEvaluateOnNewDocument", { identifier: added.identifier });
+    }
+
+    // Claude Code's recap (ADR-0010), through the same stand-in: the Working
+    // Box gets a recap far longer than two lines, the Needs you Box none.
+    const RECAP =
+      "I refactored the store's retention sweep and every test passes. Next I'll open the pull request, " +
+      "wait for CI, and then write the follow-up for the importer, which still reads the whole log at once.";
+    {
+      const sent = structuredClone(state);
+      for (const a of sent.agents) a.recap = a.status === "working" ? RECAP : "";
+      const { result: added } = await browser.send("Page.addScriptToEvaluateOnNewDocument", {
+        source: `window.EventSource = class extends EventTarget {
+          static CLOSED = 2;
+          readyState = 1;
+          constructor() {
+            super();
+            window.standIn = (window.standIn || 0) + 1;
+            setTimeout(() => this.dispatchEvent(new MessageEvent("state", { data: ${JSON.stringify(JSON.stringify(sent))}, lastEventId: "1" })), 0);
+          }
+          close() {}
+        };`,
+      });
+      await browser.open("http://" + addr + "/");
+      const x = await until("the stand-in state with a recap", async () => {
+        if (!(await browser.eval("window.standIn"))) return null;
+        const y = JSON.parse(
+          await browser.eval(`JSON.stringify({
+            recaps: document.getElementById("board").classList.contains("board--recaps"),
+            boxes: [...document.querySelectorAll("#board .box")].map((b) => {
+              const c = b.children[2];
+              const cs = getComputedStyle(c);
+              return {
+                kind: b.className, height: b.getBoundingClientRect().height, label: b.getAttribute("aria-label"),
+                titleIsLabel: b.title === b.getAttribute("aria-label"),
+                ctxClass: c.className, ctxText: c.textContent, ctxHeight: c.getBoundingClientRect().height,
+                ctxScroll: c.scrollHeight, ctxClient: c.clientHeight, lineHeight: parseFloat(cs.lineHeight),
+                clamp: cs.webkitLineClamp || cs.getPropertyValue("-webkit-line-clamp"), ellipsis: cs.textOverflow,
+              };
+            }),
+          })`),
+        );
+        return y.boxes.length === 2 && y.recaps ? y : null;
+      }, 5000);
+      const withRecap = x.boxes.find((b) => b.kind === "box box--working");
+      const other = x.boxes.find((b) => b.kind === "box box--needs_you");
+      const line = withRecap.lineHeight;
+      check(
+        "recap Box: the recap in the context row, class recap, clamped to two lines",
+        withRecap.ctxClass === "context recap" && withRecap.ctxText === RECAP && String(withRecap.clamp) === "2" &&
+          Math.abs(withRecap.ctxHeight - 2 * line) < 1 && withRecap.ctxScroll > withRecap.ctxClient,
+        withRecap,
+      );
+      check(
+        "recap Box: accessible name and tooltip carry the full recap, not the Context Line",
+        withRecap.label.includes(RECAP) && withRecap.titleIsLabel,
+        withRecap,
+      );
+      check("Box without a recap keeps its Context Line row", other.ctxClass === "context line", other);
+      check(
+        "while a Box has a recap, every Box is one line taller",
+        x.boxes.every((b) => Math.abs(b.height - (needs.height + line)) < 1),
+        { base: needs.height, line, boxes: x.boxes.map((b) => b.height) },
+      );
+      await browser.send("Page.removeScriptToEvaluateOnNewDocument", { identifier: added.identifier });
+    }
+
+    await browser.open("http://" + addr + "/");
+    await until("the real stream back", async () => ((await snap()).boxes === 2 ? true : null));
+    {
+      const y = JSON.parse(await browser.eval(BOXES));
+      const recaps = await browser.eval(`document.getElementById("board").classList.contains("board--recaps")`);
+      check(
+        "no recap: no board--recaps, every Box its usual height",
+        !recaps && y.boxes.every((b) => b.height === needs.height && b.rows === 4),
+        { recaps, y },
+      );
+    }
 
     await herdr.stop();
     s = await until("the disconnected strip", async () => ((await snap()).strips.length ? snap() : null));

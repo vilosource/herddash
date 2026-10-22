@@ -71,6 +71,17 @@
 # herdr. Default: false.                                Flag: --allow-unsupported-herdr
 # allow_unsupported_herdr = false
 
+# --- Claude Code recaps (ADR-0010) -------------------------------------------
+
+# Show Claude Code's own session recap on the Board. When true, herddash reads
+# the two-sentence recap Claude Code writes into the session transcript about
+# three minutes after a turn ends ("... Next I'll ...") and shows it in the
+# Box in place of the Context Line, until the Agent's next turn starts. The
+# recap is model-written text about your work: it is kept in memory only,
+# never stored or logged, and is served on loopback like the rest of the
+# Board. Turning this on is your consent. File only, no flag. Default: false.
+# claude_recaps = false
+
 # --- Profile Map -------------------------------------------------------------
 #
 # One table per Agent Program, as herdr names it, saying how to tell which
