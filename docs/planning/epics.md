@@ -1029,3 +1029,75 @@ So that names are not mangled and groups are not merged.
 **Then** bidi controls are neutralised and the text is isolated, and only Claude Code's own glyph prefix is stripped
 **And** workspaces with no known position each get their own group with their own name, ordered after positioned ones
 
+
+### Story 5.14: A manual `/recap` reaches the Board, and local commands are not turns
+
+As the operator,
+I want the recap I ask for with `/recap` to show on the Box, and commands such as `/usage` to leave the Box alone,
+So that the Board shows the latest recap however it was made.
+
+Source: operator report, 2026-10-23. Running `/recap` in a pane did not update its Box. Evidence
+from this machine's transcripts (Claude Code 2.1.292): a manual `/recap` writes a `user` record whose
+content starts `<command-name>/recap</command-name>` (preceded by an `isMeta` user record holding
+`<local-command-caveat>`), then a `system` record with subtype `local_command`,
+`commandRun: {"command":"recap","args":""}` and content `<local-command-stdout>…</local-command-stdout>`.
+The decoder reads only `away_summary`, and both user records count as a new turn, which clears the
+recap and resets the turn state. A skill command such as `/vfkb:handoff` writes a user record that
+starts `<command-message>` and is followed by an `isMeta` user record and an assistant turn, so it
+is a real turn. Seen across transcripts: `/recap` 63, `/usage` 53, `/compact` 42, `/model` 20, `/rename` 12.
+
+**Acceptance Criteria:**
+
+**Given** recaps are on and the operator runs `/recap`
+**When** the `local_command` record with `commandRun.command` "recap" is read
+**Then** its stdout text (tags removed, same trimming and cap as `away_summary`) becomes the Box's recap within the Board's usual latency
+**And** a local command's own records (the caveat, the `<command-name>` user record and its `local_command` result) neither clear the recap nor mark a turn as started
+**And** a skill command that does start a model turn still clears the recap as a turn does
+**And** decoder and fold tests use record shapes copied from real transcripts, with no transcript text beyond what the test needs
+**And** with recaps off, neither record's content is read (ADR-0010 consent)
+
+### Story 5.15: Bash-mode commands are not turns either
+
+As the operator,
+I want a `!command` I run in Claude Code's bash mode to leave the Box's recap and turn state alone,
+So that the Board treats every local action the same way.
+
+Source: Story 5.14's deferred finding, confirmed by the orchestrator on 2026-10-23. This machine's
+transcripts hold 56 user records whose content starts `<bash-input>` and 56 starting
+`<bash-stdout>`; both count as a turn start today. `<local-command-stderr>` was also left unverified.
+
+**Acceptance Criteria:**
+
+**Given** the operator runs `!cmd` in bash mode, or a local command writes `<local-command-stderr>`
+**When** those records are read
+**Then** they neither clear the recap nor mark a turn as started, judged by structure only and verified against real record shapes
+**And** a prompt typed after them still starts a turn
+**And** Story 5.14's code gets the follow-up review its builder recommended, and its findings are fixed or deferred
+
+**Amended 2026-10-23 (built):** the verification this story asks for refuted its premise for bash mode.
+Claude Code sends a `!cmd`'s output to the model, which answers it: 54 of the 56 bash commands in
+this machine's transcripts were answered by a model turn with no prompt between
+(`docs/research/claude-code-bash-mode-2026-10-23.md`). Bash-mode records therefore stay turn starts
+and clear the recap, now pinned by tests; only the `<local-command-stderr>` half was changed. The
+title is kept for traceability. See `docs/implementation/spec-5-15-bash-mode-commands-are-not-turns-either.md`.
+
+### Story 5.16: A resumed subagent counts as background work
+
+As the operator,
+I want a subagent that Claude Code resumes to count as background work on its Box,
+So that a pane whose agent is waiting on resumed subagents does not look less busy than it is.
+
+Source: operator report, 2026-10-23. The orchestrator resumed two subagents with SendMessage; the
+transcript recorded a user record whose `toolUseResult` is
+`{"success":true,"message":"Resuming agent …","resumedAgentId":"<id>",…}`, which ADR-0009's decoder
+does not treat as a task start, so the Box counted 1 background task while 3 ran. The earlier
+"Finished while waiting" observation was correct: both subagents had sent completed notifications and
+nothing was running.
+
+**Acceptance Criteria:**
+
+**Given** a transcript where a `toolUseResult` with `success` true and a non-empty `resumedAgentId` appears
+**When** it is read
+**Then** that id is an open task until a notification for it closes it (completed, failed, killed or stopped), exactly like a launched subagent
+**And** a failed resume (`success` false or no id) opens nothing
+**And** tests use the record shape observed on Claude Code 2.1.292 with placeholder text, and ADR-0009 gets a dated amendment

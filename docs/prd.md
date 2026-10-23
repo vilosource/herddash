@@ -255,7 +255,7 @@ have a recap in the boxes". Claude Code writes a two-sentence session recap into
 transcript about three minutes after a turn ends. Only when the operator sets the config key
 `claude_recaps = true` (default `false`, file only: the consent), the Daemon also decodes one more
 record from the transcript it already tails: a non-sidechain `system` record with `subtype`
-`away_summary` and a string `content`. It keeps per Agent, in memory only, the newest recap's text,
+`away_summary` and a string `content`; from 2026-10-23 (ADR-0010 amendment, Story 5.14), also a non-sidechain `system` record of `subtype` `local_command` whose `commandRun.command` is "recap", for the text inside its string content's `<local-command-stdout>` wrapper. It keeps per Agent, in memory only, the newest recap's text,
 trimmed, without Claude Code's trailing "(disable recaps in /config)", and cut to at most 400
 characters; nothing else of the record. A newer recap replaces it; the main thread's next turn
 starting (a prompt, a tool result or a queued command) clears it, so a Working Agent never shows a

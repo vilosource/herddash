@@ -104,11 +104,14 @@ read `IDLE`, and the Box shrank to 8.25rem. `docs/design/board.html` predates al
 **Order.** Boxes arrive sorted by `sort_key`, `[zone, group, class_rank, start, key]`. Zone 0 is
 Needs you alone, longest wait first; zone 1 is every other Agent, grouped by workspace position
 and ranked Finished 1, Idle 2, Background 3, Working 4, Unknown 5, each class newest first, so a
-zone-1 `start` is the negated class start (operator decision 2026-10-21, which replaced Working 1,
-Background 2, Finished 3, Idle 4, Unknown 5). A Board that re-sorts must tie-break exactly as the Daemon does
-(`internal/core/view.go`, `SortKey.compare`): zone, group, class rank, start, then the AgentKey
-as host, server, epoch (numerically) and pane id. It must never compare `sort_key[4]` as one
-string. Otherwise it should trust the API's order.
+zone-1 `start` is the negated class start (operator decision 2026-10-21, which replaced Working
+1, Background 2, Finished 3, Idle 4, Unknown 5). A workspace herdr did not position gets its own
+group and header after the positioned ones (Story 5.13); such groups come in a stable but
+arbitrary order, a hash of the workspace id, each headed by its label or `(unlisted workspace)`.
+Agents with no workspace id at all come last, under `(no workspace)`. A Board that re-sorts must
+tie-break exactly as the Daemon does (`internal/core/view.go`, `SortKey.compare`): zone, group,
+class rank, start, then the AgentKey as host, server, epoch (numerically) and pane id. It must
+never compare `sort_key[4]` as one string. Otherwise it should trust the API's order.
 
 ## Emphasis by class
 
@@ -184,6 +187,20 @@ connection comes first, then version.
   and cannot signal lost ones. Boxes are shown.
 - **Refused** (`gate: refused`): a red strip naming `herdr_version` and `herdr_minimum` and saying
   nothing is being recorded. No Boxes are shown.
+- **Version unreadable** (*added 2026-10-23*): when `herdr_version` is empty or absent, herddash
+  could not read herdr's version, and the gate treats it as below the minimum. The strips say so
+  instead of calling it old. Refused reads "herddash could not read herdr's version. It needs
+  *Y* or newer and is recording nothing." Advisory reads "herddash could not read herdr's version;
+  recording under the dogfooding flag.", plus the resync sentence when `resync_guaranteed` is not
+  true.
+
+**A silent Daemon is a lost stream.** *Added 2026-10-23 (ADR-0012).* The Daemon sends a
+`keepalive` event every 15 s. When the stream delivers nothing at all for 35 s, the Daemon is hung
+or the socket is half-open, so the Board shows the slate "Lost contact with herddash.
+Reconnecting…" strip at once, dims every Box and reopens the stream with its usual backoff. A
+`state` or change event the Board rejects, or a skipped view sequence, also counts as a lost
+stream and is reopened, because a reopened stream starts with the whole state. The strip for
+those shows only if the reopen has not healed within the usual 3 s grace period.
 
 **A restarted Daemon reloads the page.** *Added 2026-10-21.* When the stream's `state` event
 comes from another Daemon run (`run_id`), such as a Daemon restarted onto a new build, the Board

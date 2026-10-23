@@ -21,7 +21,9 @@ type Client interface {
 
 // Subscription is one live subscription, as herdr.Subscription provides it:
 // Deliveries yields events in order and at most one health signal last, then
-// closes; Close ends it and is safe to call more than once.
+// closes. The lifecycle subscription may also yield non-final deliveries
+// flagged Unexpected, for lines it cannot deliver as events; the stream goes
+// on after them. Close ends it and is safe to call more than once.
 type Subscription[T any] interface {
 	Deliveries() <-chan herdr.Delivery[T]
 	Close() error

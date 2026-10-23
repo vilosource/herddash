@@ -52,6 +52,95 @@ jobs:
             exit 1
           fi
 
+  # The Board's drawing check (strips, dimming, recap rows, live updates,
+  # reconnect): board-browser.mjs drives the runner's preinstalled Google
+  # Chrome over the DevTools protocol with Node's built-in WebSocket, against
+  # a fake herdr with its own HOME. No npm packages, no extra action.
+  # Removing the .board--recaps rule from board.css fails it.
+  board-browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: board browser check
+        run: |
+          set -eu
+          node --version
+          major="$(node -p 'process.versions.node.split(".")[0]')"
+          if [ "$major" -lt 22 ]; then
+            echo "node $major is older than 22; the check needs Node 22's global WebSocket"
+            exit 1
+          fi
+          if [ "$(node -p 'typeof WebSocket')" != "function" ]; then
+            echo "node $(node --version) has no global WebSocket; the check needs it"
+            exit 1
+          fi
+          chrome="${CHROME:-$(command -v google-chrome || true)}"
+          if [ -z "$chrome" ]; then
+            echo "no Chrome found: google-chrome is not on PATH and CHROME is unset"
+            exit 1
+          fi
+          "$chrome" --version
+          go build -o "$RUNNER_TEMP/herddash" ./cmd/herddash
+          CHROME="$chrome" node internal/httpapi/web/check/board-browser.mjs "$RUNNER_TEMP/herddash"
+
+  # The test suite on macOS, where procenv's darwin reader (kern.procargs2)
+  # and TestLaunchdAgentLints' plutil run. HERDDASH_REQUIRE_TOOLS turns a
+  # missing plutil into a failure rather than a skip.
+  macos:
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: test
+        env:
+          HERDDASH_REQUIRE_TOOLS: plutil
+        run: go test -race ./...
+
+  # The spine's release toolchain, exercised on every pull request rather than
+  # first by a release: vet, test (systemd-analyze required, so the unit is
+  # verified on ubuntu), then the release build with its outputs checked.
+  # release_test.go holds go-version equal to the spine's row.
+  release-toolchain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # Never switch to a newer Go that go.mod names: this job is the release
+      # toolchain or nothing.
+      GOTOOLCHAIN: local
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.2'
+      - name: vet
+        run: go vet ./...
+      - name: test
+        env:
+          HERDDASH_REQUIRE_TOOLS: systemd-analyze
+        run: go test -race ./...
+      - name: release build
+        run: |
+          set -euo pipefail
+          go version
+          commit="$(git rev-parse --short=12 HEAD)"
+          scripts/release-build.sh 0.0.0-ci "$commit" "$RUNNER_TEMP/dist"
+          cd "$RUNNER_TEMP/dist"
+          sha256sum -c SHA256SUMS
+          [ "$(wc -l < SHA256SUMS)" -eq 4 ]
+          got="$(./herddash_0.0.0-ci_linux_amd64 version)"
+          want="herddash 0.0.0-ci ($commit)"
+          if [ "$got" != "$want" ]; then
+            echo "::error::version printed '$got', want '$want'"
+            exit 1
+          fi
+
   cross-compile:
     needs: check
     runs-on: ubuntu-latest

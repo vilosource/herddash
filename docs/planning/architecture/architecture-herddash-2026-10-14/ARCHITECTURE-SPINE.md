@@ -35,7 +35,7 @@ One **engine** goroutine is the only owner of current state and the only caller 
 | Core | `internal/core` | AgentKey, Agent, Transition and its constructor, Status, Attention Class, Waiting Time and exactness, sort key, history fold, Profile and Context Line rules, AgentView, ConnectionTruth |
 | Engine | `internal/engine` | the actor: pane set, current state, reconcile and Retention timers, resync decisions, publishing views |
 | Adapter | `internal/herdr` | socket mechanics: dial, ping, snapshot, subscribe, stream-health signals, generated wire types |
-| Adapter | `internal/procenv` | reading one process's environment, and its direct children with their arguments (linux: `/proc`; darwin: `kern.procargs2`, `kern.proc.all`; children added 2026-10-21 for Background); and Claude Code's session record for one process, exactly `<config dir>/sessions/<pid>.json`, decoding only `pid`, `status` and `statusUpdatedAt` (added 2026-10-21, ADR-0008: a second source of `blocked`, recorded as `observed_by = claude_session`), and `sessionId` and `cwd`, which name the session's transcript; and that transcript, exactly `<config dir>/projects/<cwd with every character but a letter or digit as "-", or with only "/" and "." as "-" when only that folder exists>/<sessionId>.jsonl`, tailed from an in-memory offset (the last 8 MiB at first sight, then at most 1 MiB of complete new lines per read), handing each line to `core.DecodeTranscriptLine` and keeping nothing of it (added 2026-10-21, ADR-0009: background tasks for the view only, never recorded); only with the operator's `claude_recaps` consent, the decoder also takes one more record, a non-sidechain `system` record of `subtype` `away_summary`, for its string `content` alone, the newest recap held in memory for the view, never recorded or logged (added 2026-10-22, ADR-0010) |
+| Adapter | `internal/procenv` | reading one process's environment, and its direct children with their arguments (linux: `/proc`; darwin: `kern.procargs2`, `kern.proc.all`; children added 2026-10-21 for Background); and Claude Code's session record for one process, exactly `<config dir>/sessions/<pid>.json`, decoding only `pid`, `status` and `statusUpdatedAt` (added 2026-10-21, ADR-0008: a second source of `blocked`, recorded as `observed_by = claude_session`), and `sessionId` and `cwd`, which name the session's transcript; and that transcript, exactly `<config dir>/projects/<cwd with every character but a letter or digit as "-", or with only "/" and "." as "-" when only that folder exists>/<sessionId>.jsonl`, tailed from an in-memory offset (the last 8 MiB at first sight, then at most 1 MiB of complete new lines per read), handing each line to `core.DecodeTranscriptLine` and keeping nothing of it (added 2026-10-21, ADR-0009: background tasks for the view only, never recorded); only with the operator's `claude_recaps` consent, the decoder also takes one more record, a non-sidechain `system` record of `subtype` `away_summary`, for its string `content` alone, the newest recap held in memory for the view, never recorded or logged (added 2026-10-22, ADR-0010); from 2026-10-23 (ADR-0010 amendment, Story 5.14), also a non-sidechain `system` record of `subtype` `local_command` whose `commandRun.command` is "recap", for the text inside its string content's `<local-command-stdout>` wrapper |
 | Adapter | `internal/store` | open with lock, migrations, append, history reads and fold input, Retention sweep |
 | Adapter | `internal/httpapi` | GET routes, SSE, embedded Board assets |
 | Adapter | `internal/importer` | parsing the plugin log into core Transitions |
@@ -78,6 +78,10 @@ Arrows are the only permitted import directions. `core` imports only the standar
   The sort key is `[zone, group, class_rank, start, agent_key]`, compared element by element:
   - **Top zone** (Needs you, Finished): `group` is 0, so the zone is flat across workspaces.
   - **Lower zone** (Working, Unknown): `group` is the workspace's position in herdr's snapshot.
+    A workspace herdr did not position gets its own group, 2^52 plus a hash of its workspace id,
+    after every positioned group and before the unknown sentinel, which only a pane with no
+    workspace id gets (Story 5.13). A hash collision, negligible at that width, would merge two
+    such groups.
 
   The Board does exactly three things beyond rendering. It advances the displayed Waiting Time from
   the view's start instant. It orders Boxes by the sort key. It draws a workspace header wherever
@@ -206,6 +210,11 @@ Arrows are the only permitted import directions. `core` imports only the standar
   - **Change events.** The engine publishes each view together with the change list that produced
     it. `httpapi` turns that list into `agent`, `removed`, `transition`, `resync` and `connection`
     events, in publish order. The client applies events in arrival order.
+  - **Keepalive** (added 2026-10-23, ADR-0012).
+    Every 15 s a stream also sends a `keepalive` event: a liveness event, not a change, with data
+    `{}` and no `id:`, so `id:` stays the view sequence of real changes. A client that hears
+    nothing at all, keepalive included, for its silence bound treats the stream as lost and opens
+    a new one.
   - **Reconnects and slow clients.** Each stream has a bounded buffer. On overflow the server closes
     that stream, and the client reconnects to a fresh `state`. The server keeps no event history.
   - **Non-streaming clients** use `/api/state`, which serves the same body.
@@ -319,7 +328,7 @@ Arrows are the only permitted import directions. `core` imports only the standar
 | Status and class values | herdr's strings verbatim: `working`, `blocked`, `done`, `idle`, `unknown`. Attention Class values are `needs_you`, `finished`, `working` and `unknown`. Provenance is one of `live`, `snapshot` or `backfill`. |
 | ConnectionTruth | `{connected, last_snapshot_at, herdr_version, herdr_minimum, gate: ok\|advisory\|refused, resync_guaranteed}`. |
 | JSON | `snake_case` fields. Errors are `{"error":{"code":"...","message":"..."}}` with a matching status. Absent values are omitted, except an empty Context Line, which is `""`. Each AgentView carries `heading`, `waiting_since` and `waiting_exact`. |
-| SSE | Event names `state`, `agent`, `removed`, `transition`, `resync` and `connection`. `id:` is the view sequence. `data:` is one JSON object. The write deadline is cleared per stream. |
+| SSE | Event names `state`, `agent`, `removed`, `transition`, `resync` and `connection`, plus `keepalive`, which is sent with no `id:` (ADR-0012). `id:` is the view sequence. `data:` is one JSON object. The write deadline is cleared per stream. |
 | Errors | Adapters wrap with `%w`. herdr error codes are an open set: an unknown code on a subscription is a resync, never a crash. |
 | Logging | `log/slog`, JSON, to `herddash.log` in the data directory. Never log environment values except a matched `CLAUDE_CONFIG_DIR`; Pane Titles only at debug. |
 | Clock | Time-dependent core functions take the clock as a parameter; `core` never calls `time.Now()`. |

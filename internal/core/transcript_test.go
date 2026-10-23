@@ -117,7 +117,7 @@ func TestTranscriptPrivacy(t *testing.T) {
 	// The marker type has only these fields, of these kinds.
 	want := map[string]reflect.Kind{"StartID": reflect.String, "StartCommand": reflect.Bool,
 		"EndID": reflect.String, "EndStatus": reflect.String, "TurnStarted": reflect.Bool, "TurnEnded": reflect.Bool,
-		"Recap": reflect.String}
+		"Recap": reflect.String, "CommandPending": reflect.Bool, "CommandResult": reflect.Bool}
 	rt := reflect.TypeOf(TranscriptLine{})
 	if rt.NumField() != len(want) {
 		t.Fatalf("TranscriptLine has %d fields, want %d", rt.NumField(), len(want))
@@ -144,6 +144,16 @@ func TestTranscriptPrivacy(t *testing.T) {
 		[]byte(`{"type":"system","subtype":"away_summary","content":["SECRET array"]}`),
 		[]byte(`{"type":"user","subtype":"away_summary","content":"SECRET user"}`),
 	)
+	// Local commands: their text never leaves, nor does a result that is not
+	// /recap's.
+	lines = append(lines, localFixtureLines(t)...)
+	lines = append(lines,
+		[]byte(caveat), []byte(`{"type":"user","message":{"content":"<command-name>SECRET</command-name>"}}`),
+		[]byte(`{"type":"system","subtype":"local_command","commandRun":{"command":"usage","args":"SECRET"},"content":"<local-command-stdout>SECRET</local-command-stdout>"}`),
+		[]byte(`{"type":"system","subtype":"local_command","commandRun":{"command":"recap"},"content":"SECRET unwrapped"}`),
+		[]byte(`{"type":"system","subtype":"local_command","content":"<local-command-stdout>SECRET no commandRun</local-command-stdout>"}`),
+		[]byte(`{"type":"user","message":{"content":"<local-command-stdout>SECRET old result</local-command-stdout>"}}`),
+	)
 	// The recap fixture last, so its newest recap is the state's; then
 	// non-recap system lines, which must leave it as it is.
 	lines = append(lines, recapFixtureLines(t)...)
@@ -158,7 +168,9 @@ func TestTranscriptPrivacy(t *testing.T) {
 		if !ok {
 			continue
 		}
-		if strings.Contains(m.Recap, "SECRET") || (m.Recap != "" && !strings.Contains(string(l), `"away_summary"`)) {
+		recapLine := strings.Contains(string(l), `"away_summary"`) ||
+			strings.Contains(string(l), `"local_command"`) && strings.Contains(string(l), `"commandRun":{"command":"recap"`)
+		if strings.Contains(m.Recap, "SECRET") || (m.Recap != "" && !recapLine) {
 			t.Errorf("a recap carries other text: %q", m.Recap)
 		}
 		b.Apply(m)
@@ -209,6 +221,8 @@ func TestTranscriptMatrix(t *testing.T) {
 		"bg command open, idle":            {[]string{prompt, bgStart, endTurn}, 1, true},
 		"bg command closes":                {[]string{prompt, bgStart, endTurn, notify("bx1", "completed")}, 0, true},
 		"failed and killed close too":      {[]string{bgStart, agentStart, notify("bx1", "failed"), notify("ag1", "killed")}, 0, false},
+		"stopped on resume closes":         {[]string{prompt, bgStart, endTurn, notify("bx1", "stopped")}, 0, true},
+		"stopped closes only its id":       {[]string{bgStart, agentStart, notify("bx1", "stopped")}, 1, false},
 		"main turn over, subagent running": {[]string{prompt, agentStart, endTurn}, 1, true},
 		"working with bg":                  {[]string{prompt, bgStart, toolUse}, 1, false},
 		"notification without status":      {[]string{bgStart, notify("bx1", "")}, 1, false},
@@ -238,6 +252,38 @@ func TestTranscriptMatrix(t *testing.T) {
 	for _, l := range []string{"garbage", "", `{"type":"user",`, `{"type":"summary","summary":"x"}`, toolUse} {
 		if m, ok := DecodeTranscriptLine([]byte(l), true); ok {
 			t.Errorf("%q decoded as %+v", l, m)
+		}
+	}
+}
+
+// resumeStopped is the notification a resumed session enqueues for a task
+// the previous process left with no completion record, shaped on Claude
+// Code 2.1.292 (observed 2026-10-23): <tool-use-id>, <summary> and <note>
+// around the id and status. Every text is invented and marked SECRET.
+const resumeStopped = `{"type":"queue-operation","operation":"enqueue","timestamp":"2026-10-23T09:00:01.000Z",` +
+	`"sessionId":"SECRET-session","content":"<task-notification>\n<task-id>bx1</task-id>\n` +
+	`<tool-use-id>toolu_SECRET</tool-use-id>\n<status>stopped</status>\n` +
+	`<summary>SECRET command didn't finish before the previous session ended</summary>\n` +
+	`<note>SECRET no completion record was found.</note>\n</task-notification>"}`
+
+// TestTranscriptResumeStoppedShape covers the matrix's "Observed shape" row:
+// the full 2.1.292 notification decodes to the id and stopped, nothing more,
+// and closes the task; with any status but a closing one it stays open.
+func TestTranscriptResumeStoppedShape(t *testing.T) {
+	m, ok := DecodeTranscriptLine([]byte(resumeStopped), true)
+	if want := (TranscriptLine{EndID: "bx1", EndStatus: "stopped"}); !ok || m != want {
+		t.Errorf("decoded %+v, %v; want %+v", m, ok, want)
+	}
+	if b := fold(prompt, bgStart, endTurn, resumeStopped); b.Count() != 0 || b.OpenCommand() {
+		t.Errorf("%d open after stopped", b.Count())
+	}
+	for _, s := range []string{"<status>running</status>", ""} {
+		l := strings.Replace(resumeStopped, "<status>stopped</status>", s, 1)
+		if m, _ := DecodeTranscriptLine([]byte(l), true); m.EndStatus != "" || m.EndID != "bx1" {
+			t.Errorf("status %q decoded as %+v", s, m)
+		}
+		if b := fold(bgStart, l); b.Count() != 1 {
+			t.Errorf("status %q: %d open, want 1", s, b.Count())
 		}
 	}
 }
@@ -392,7 +438,11 @@ func TestRecapClone(t *testing.T) {
 // marker at all with them off.
 func TestRecapOffChangesNothingElse(t *testing.T) {
 	lines := append(fixtureLines(t), recapFixtureLines(t)...)
-	for _, l := range []string{prompt, endTurn, sideEnd, toolUse, queuedCmd, bgStart, agentStart, notify("bx1", "completed"),
+	lines = append(lines, localFixtureLines(t)...)
+	for _, l := range []string{caveat, cmdName, oldResult, oldStderr, compactSummary, skillCmd, bashInput, bashStdout,
+		localResult("usage", "<local-command-stderr>E</local-command-stderr>"),
+		localResult("usage", "<local-command-stdout>O</local-command-stdout>"),
+		localResult("recap", "<local-command-stdout>R.</local-command-stdout>"), localResult("recap", "R."), prompt, endTurn, sideEnd, toolUse, queuedCmd, bgStart, agentStart, notify("bx1", "completed"),
 		notify("bx1", ""), taskStop("bx1"), recap("X. (disable recaps in /config)"), recap(""),
 		`{"type":"system","subtype":"away_summary","isSidechain":true,"content":"S."}`,
 		`{"type":"system","subtype":"turn_duration","content":"S."}`, "garbage", ""} {

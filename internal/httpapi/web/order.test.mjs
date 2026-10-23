@@ -14,6 +14,7 @@ import {
   RECONNECT_START_MS,
   LOST_GRACE_MS,
   LOST_TEXT,
+  STREAM_SILENCE_MS,
   applyEvent,
   boardStatus,
   boxLabel,
@@ -219,8 +220,14 @@ test("golden fixture views keep their heading and directory as sent", () => {
   assert.ok(fixture.input.some(({ view: v }) => v.directory.startsWith("~/")), "no fixture directory starts with ~/");
 });
 
-test("header label: the workspace, or (no workspace)", () => {
+test("header label: the workspace, (unlisted workspace), or (no workspace)", () => {
   assert.equal(headerLabel({ workspace: "ops" }), "ops");
+  // An unlabelled workspace herdr did not list has its own group below the
+  // sentinel; only the sentinel group (no workspace id) is (no workspace).
+  assert.equal(headerLabel({ workspace: "", sort_key: [1, 2 ** 52 + 7, 4, -1, "k"] }), "(unlisted workspace)");
+  assert.equal(headerLabel({ workspace: "", sort_key: [1, UNKNOWN - 1, 4, -1, "k"] }), "(unlisted workspace)");
+  assert.equal(headerLabel({ workspace: "", sort_key: [1, UNKNOWN, 4, -1, "k"] }), "(no workspace)");
+  assert.equal(headerLabel({ workspace: "ws", sort_key: [1, 2 ** 52 + 7, 4, -1, "k"] }), "ws");
   assert.equal(headerLabel({ workspace: "" }), "(no workspace)");
   assert.equal(headerLabel({}), "(no workspace)");
 });
@@ -352,6 +359,32 @@ test("golden fixture: needs you alone on top, then each group finished, idle, ba
   const one = groups.find((g) => g.label === "herddash");
   assert.deepEqual(one.views.map(boxKind), ["finished", "idle", "background", "working", "unknown"]);
   assert.equal(one.counts, "1 finished · 1 idle · 1 background · 1 working");
+});
+
+test("golden fixture: each unpositioned workspace has its own header and label, after the positioned ones", () => {
+  // Story 5.13: a workspace herdr did not position gets its own group, above
+  // every real position and below the unknown sentinel (no workspace id).
+  const { groups } = layout(fixture.input.map((i) => i.view).reverse());
+  const panesOf = (g) => g.views.map((v) => v.key.pane_id);
+  const w7 = groups.findIndex((g) => panesOf(g).includes("w7:p1"));
+  const w8 = groups.findIndex((g) => panesOf(g).includes("w8:p1"));
+  const w9 = groups.findIndex((g) => panesOf(g).includes("w9:p1"));
+  assert.ok(w7 >= 0 && w8 >= 0 && w9 >= 0);
+  assert.notEqual(w7, w8);
+  assert.deepEqual(panesOf(groups[w7]), ["w7:p1"]);
+  assert.deepEqual(panesOf(groups[w8]), ["w8:p1"]);
+  assert.equal(groups[w7].label, "scratch");
+  assert.equal(groups[w8].label, "(unlisted workspace)");
+  assert.equal(groups[w9].label, "(no workspace)");
+  const positioned = groups.filter((g) => g.views[0].sort_key[1] < 2 ** 52);
+  assert.ok(positioned.length > 0);
+  for (const i of [w7, w8]) {
+    const g = groups[i].views[0].sort_key[1];
+    assert.ok(g >= 2 ** 52 && g < UNKNOWN, String(g));
+    assert.ok(i >= positioned.length, "after every positioned group");
+  }
+  assert.equal(w9, groups.length - 1);
+  assert.equal(groups[w9].views[0].sort_key[1], UNKNOWN);
 });
 
 test("layout: golden fixture's top zone and groups", () => {
@@ -594,7 +627,7 @@ test("reconnect backoff doubles from the start to the cap", () => {
 });
 
 test("EVENT_NAMES are exactly the Daemon's names and cover every name applyEvent handles", () => {
-  assert.deepEqual([...EVENT_NAMES].sort(), ["agent", "connection", "removed", "resync", "state", "transition"]);
+  assert.deepEqual([...EVENT_NAMES].sort(), ["agent", "connection", "keepalive", "removed", "resync", "state", "transition"]);
   for (const name of HANDLED_EVENTS) assert.ok(EVENT_NAMES.includes(name), name);
   // A name is handled exactly when applyEvent looks at its payload.
   for (const name of EVENT_NAMES) {
@@ -606,10 +639,11 @@ test("EVENT_NAMES are exactly the Daemon's names and cover every name applyEvent
 const stateData = () =>
   JSON.stringify({ agents: fixture.input.map((i) => i.view), connection: fixtureConnection, headers: fixture.headers });
 
-// opened returns the stream state with source current and its state applied.
-function opened(source) {
-  let { st } = streamDecision(streamState(), { kind: "open", source });
-  ({ st } = streamDecision(st, { kind: "event", source, name: "state", data: stateData() }));
+// opened returns the stream state with source opened at now, and its state
+// (view id, when given) applied at now.
+function opened(source, now = 0, id) {
+  let { st } = streamDecision(streamState(), { kind: "open", source, now });
+  ({ st } = streamDecision(st, { kind: "event", source, name: "state", data: stateData(), id, now }));
   assert.equal(st.awaitingState, false);
   return st;
 }
@@ -623,6 +657,7 @@ test("stream: error reopens only for the current, closed source with no reopen p
   assert.equal(streamDecision(st, { kind: "error", source: {}, closed: true, now: 1 }).reopenAfter, undefined);
   const d = streamDecision(st, { kind: "error", source: a, closed: true, now: 1 });
   assert.equal(d.reopenAfter, RECONNECT_START_MS);
+  assert.equal(d.close, a);
   assert.equal(d.st.delay, RECONNECT_START_MS * 2);
   assert.equal(d.st.pending, true);
   // A second error while the reopen is pending does nothing.
@@ -650,16 +685,18 @@ test("stream: the delay doubles to the cap across failed reopens, and a valid st
   assert.equal(st.delay, RECONNECT_START_MS);
 });
 
-test("stream: a malformed state neither resets the delay nor replaces the model", () => {
+test("stream: a malformed state does not reset the delay or replace the model; it backs off", () => {
   let st = opened({});
   const s = {};
   ({ st } = streamDecision(st, { kind: "open", source: s }));
   st = streamDecision(st, { kind: "error", source: s, closed: true, now: 1 }).st;
   const b = {};
   ({ st } = streamDecision(st, { kind: "open", source: b }));
-  const d = streamDecision(st, { kind: "event", source: b, name: "state", data: "{bad" });
+  const d = streamDecision(st, { kind: "event", source: b, name: "state", data: "{bad", now: 2 });
   assert.equal(typeof d.warning, "string");
-  assert.equal(d.st.delay, RECONNECT_START_MS * 2);
+  assert.equal(d.reopenAfter, RECONNECT_START_MS * 2);
+  assert.equal(d.close, b);
+  assert.equal(d.st.delay, RECONNECT_START_MS * 4);
   assert.equal(d.st.model, st.model);
   assert.equal(d.st.awaitingState, true);
 });
@@ -693,13 +730,259 @@ test("stream: events on the current source go through applyEvent", () => {
   const st = opened(a);
   assert.equal(st.model.agents.size, fixture.input.length);
   const bad = streamDecision(st, { kind: "event", source: a, name: "agent", data: "{bad" });
-  assert.equal(bad.st, st);
+  assert.equal(bad.st.model, st.model);
   assert.equal(typeof bad.warning, "string");
   const resync = streamDecision(st, { kind: "event", source: a, name: "resync", data: '{"reason":"x"}' });
-  assert.equal(resync.st, st);
+  assert.equal(resync.st.model, st.model);
+  assert.equal(resync.warning, undefined);
+  assert.equal(resync.reopenAfter, undefined);
   const conn = { ...fixtureConnection, connected: false };
   const c = streamDecision(st, { kind: "event", source: a, name: "connection", data: JSON.stringify(conn) });
   assert.deepEqual(c.st.model.connection, conn);
+});
+
+// ---- A hung Daemon, a rejected event, a skipped publication (Story 5.11) ----
+
+// ticks feeds a tick every second from `from` to `to` ms, failing on a
+// reopen, and returns the state.
+function ticks(st, from, to) {
+  for (let now = from; now <= to; now += 1000) {
+    const d = streamDecision(st, { kind: "tick", now });
+    assert.equal(d.reopenAfter, undefined, "tick at " + now);
+    st = d.st;
+  }
+  return st;
+}
+
+const agentData = (pane) => JSON.stringify(fixtureView(pane));
+
+test("stream: keepalives every 15 s keep the stream alive", () => {
+  const a = {};
+  let st = opened(a, 0, "7");
+  for (let now = 15000; now <= 180000; now += 15000) {
+    st = ticks(st, now - 14000, now - 1000);
+    const d = streamDecision(st, { kind: "event", source: a, name: "keepalive", data: "{}", id: "7", now });
+    assert.equal(d.reopenAfter, undefined);
+    assert.equal(d.warning, undefined);
+    assert.equal(d.st.model, st.model);
+    st = d.st;
+  }
+  assert.equal(st.lastEventAt, 180000);
+  assert.equal(streamLost(st, 180000), false);
+  assert.equal(streamDecision(st, { kind: "tick", now: 180000 + STREAM_SILENCE_MS }).reopenAfter, undefined);
+});
+
+test("stream: a Daemon silent past the bound is lost at once and reopened, backing off", () => {
+  const a = {};
+  let st = opened(a, 0, "7");
+  assert.equal(streamDecision(st, { kind: "tick", now: STREAM_SILENCE_MS }).reopenAfter, undefined);
+  let d = streamDecision(st, { kind: "tick", now: STREAM_SILENCE_MS + 1 });
+  assert.equal(d.reopenAfter, RECONNECT_START_MS);
+  assert.equal(d.close, a);
+  assert.equal(d.warning, undefined);
+  assert.equal(d.st.lostSince, 0, "lost since the last sign of life");
+  assert.equal(streamLost(d.st, STREAM_SILENCE_MS + 1), true, "the lost strip shows at once");
+  assert.equal(boardStatus(d.st.model.connection, streamLost(d.st, STREAM_SILENCE_MS + 1), STREAM_SILENCE_MS + 1).dimmed, true);
+  assert.equal(d.st.model, st.model, "the Boxes stay, dimmed");
+  st = d.st;
+  // The reopened source is silent too (the Daemon still stopped): each
+  // reopen waits twice as long, up to the cap.
+  const delays = [d.reopenAfter];
+  let now = STREAM_SILENCE_MS + 1;
+  for (let i = 0; i < 7; i++) {
+    now += delays.at(-1);
+    const s = {};
+    ({ st } = streamDecision(st, { kind: "open", source: s, now }));
+    assert.equal(streamLost(st, now), true);
+    now += STREAM_SILENCE_MS + 1;
+    d = streamDecision(st, { kind: "tick", now });
+    assert.equal(d.close, s);
+    delays.push(d.reopenAfter);
+    st = d.st;
+  }
+  assert.deepEqual(delays, [1000, 2000, 4000, 8000, 16000, 30000, 30000, 30000]);
+  assert.equal(st.lostSince, 0);
+});
+
+test("stream: silence while a reopen is pending decides nothing more", () => {
+  const a = {};
+  const st = streamDecision(opened(a), { kind: "tick", now: STREAM_SILENCE_MS + 1 }).st;
+  assert.equal(st.pending, true);
+  for (const now of [STREAM_SILENCE_MS + 2, 10 * STREAM_SILENCE_MS]) {
+    const d = streamDecision(st, { kind: "tick", now });
+    assert.equal(d.st, st);
+    assert.equal(d.reopenAfter, undefined);
+  }
+});
+
+test("stream: recovery, a reopened source's valid state clears the loss and resets the delay", () => {
+  const a = {};
+  let { st } = streamDecision(opened(a), { kind: "tick", now: STREAM_SILENCE_MS + 1 });
+  const b = {};
+  ({ st } = streamDecision(st, { kind: "open", source: b, now: STREAM_SILENCE_MS + 1001 }));
+  ({ st } = streamDecision(st, { kind: "connected", source: b, now: STREAM_SILENCE_MS + 1002 }));
+  ({ st } = streamDecision(st, { kind: "event", source: b, name: "state", data: stateData(), id: "9", now: STREAM_SILENCE_MS + 1003 }));
+  assert.equal(st.lostSince, null);
+  assert.equal(st.delay, RECONNECT_START_MS);
+  assert.equal(st.pending, false);
+  assert.equal(streamLost(st, STREAM_SILENCE_MS + 1003), false);
+  assert.deepEqual(boardStatus(st.model.connection, false, NOW).strips, []);
+});
+
+test("stream: a rejected state is lost from now and reopened", () => {
+  const a = {};
+  let { st } = streamDecision(streamState(), { kind: "open", source: a, now: 0 });
+  const d = streamDecision(st, { kind: "event", source: a, name: "state", data: JSON.stringify({ agents: null }), id: "7", now: 10 });
+  assert.equal(typeof d.warning, "string");
+  assert.ok(d.warning.startsWith("state event"), d.warning);
+  assert.equal(d.st.lostSince, 10);
+  assert.equal(d.close, a);
+  assert.equal(d.reopenAfter, RECONNECT_START_MS);
+  assert.equal(d.st.delay, RECONNECT_START_MS * 2);
+  // A reopen that heals within the grace period never shows the strip.
+  assert.equal(streamLost(d.st, 10 + LOST_GRACE_MS - 1), false);
+  assert.equal(streamLost(d.st, 10 + LOST_GRACE_MS), true);
+  // It repeats: backoff.
+  const b = {};
+  ({ st } = streamDecision(d.st, { kind: "open", source: b, now: 1010 }));
+  const again = streamDecision(st, { kind: "event", source: b, name: "state", data: "{bad", id: "7", now: 1020 });
+  assert.equal(again.reopenAfter, RECONNECT_START_MS * 2);
+  assert.equal(again.st.lostSince, 10, "trouble kept from its start");
+});
+
+test("stream: a rejected delta is lost from now and reopened", () => {
+  const view = fixtureView("w2:p1");
+  const cases = [
+    ["agent", JSON.stringify({ ...view, attention_class: "bored" })],
+    ["transition", JSON.stringify({ key: { ...view.key, pane_id: "other" }, transition: {}, agent: view })],
+    ["removed", JSON.stringify({ key: null })],
+    ["connection", "[not json"],
+  ];
+  for (const [name, data] of cases) {
+    const a = {};
+    const st = opened(a, 0, "7");
+    const d = streamDecision(st, { kind: "event", source: a, name, data, id: "8", now: 50 });
+    assert.equal(typeof d.warning, "string", name);
+    assert.ok(d.warning.startsWith(name + " event"), d.warning);
+    assert.equal(d.st.model, st.model, name);
+    assert.equal(d.st.lostSince, 50, name);
+    assert.equal(d.close, a, name);
+    assert.equal(d.reopenAfter, RECONNECT_START_MS, name);
+    assert.equal(d.st.delay, RECONNECT_START_MS * 2, name);
+  }
+});
+
+test("stream: a skipped publication is lost from now and reopened", () => {
+  for (const id of ["9", "6", "100"]) {
+    const a = {};
+    const st = opened(a, 0, "7");
+    const d = streamDecision(st, { kind: "event", source: a, name: "agent", data: agentData("w2:p1"), id, now: 70 });
+    assert.equal(typeof d.warning, "string", id);
+    assert.match(d.warning, new RegExp("from view 7 to " + id), id);
+    assert.equal(d.st.model, st.model, id);
+    assert.equal(d.st.lostSince, 70, id);
+    assert.equal(d.close, a, id);
+    assert.equal(d.reopenAfter, RECONNECT_START_MS, id);
+  }
+});
+
+test("stream: one publication's events share a sequence; ids 8, 8, 9 after state 7 apply in order", () => {
+  const a = {};
+  let st = opened(a, 0, "7");
+  const v1 = fixtureView("w2:p1");
+  const v2 = fixtureView("w1:p1");
+  const steps = [
+    ["removed", JSON.stringify({ key: v1.key }), "8"],
+    ["removed", JSON.stringify({ key: v2.key }), "8"],
+    ["agent", JSON.stringify(v1), "9"],
+  ];
+  for (const [name, data, id] of steps) {
+    const d = streamDecision(st, { kind: "event", source: a, name, data, id, now: 1 });
+    assert.equal(d.reopenAfter, undefined, name + " " + id);
+    assert.equal(d.warning, undefined, name + " " + id);
+    st = d.st;
+  }
+  assert.equal(st.lastSeq, 9);
+  assert.ok(st.model.agents.has(keyId(v1.key)));
+  assert.ok(!st.model.agents.has(keyId(v2.key)));
+});
+
+test("stream: keepalive, resync and an event with no id are not sequence-checked", () => {
+  const a = {};
+  let st = opened(a, 0, "7");
+  for (const [name, data, id] of [
+    ["keepalive", "{}", "3"],
+    ["keepalive", "{}", ""],
+    ["agent", agentData("w2:p1"), ""],
+    ["agent", agentData("w2:p1"), undefined],
+    ["agent", agentData("w2:p1"), "not-a-number"],
+  ]) {
+    const d = streamDecision(st, { kind: "event", source: a, name, data, id, now: 1 });
+    assert.equal(d.reopenAfter, undefined, name + " " + id);
+    assert.equal(d.warning, undefined, name + " " + id);
+    st = d.st;
+  }
+  assert.equal(st.lastSeq, 7);
+  // A publication holding only a resync still advances the sequence.
+  ({ st } = streamDecision(st, { kind: "event", source: a, name: "resync", data: '{"reason":"closed"}', id: "8", now: 2 }));
+  assert.equal(st.lastSeq, 8);
+  const d = streamDecision(st, { kind: "event", source: a, name: "agent", data: agentData("w2:p1"), id: "9", now: 3 });
+  assert.equal(d.reopenAfter, undefined);
+  assert.equal(d.st.lastSeq, 9);
+});
+
+test("stream: EventSource's own open re-arms awaitingState and the silence clock", () => {
+  const a = {};
+  let st = opened(a, 0, "7");
+  const old = st.model;
+  // Another source's open changes nothing.
+  assert.equal(streamDecision(st, { kind: "connected", source: {}, now: 5 }).st, st);
+  ({ st } = streamDecision(st, { kind: "connected", source: a, now: 20000 }));
+  assert.equal(st.awaitingState, true);
+  assert.equal(st.lastEventAt, 20000);
+  assert.equal(st.lastSeq, null);
+  // Until the reconnected stream's state, its events change nothing.
+  const removed = JSON.stringify({ key: fixtureView("w2:p1").key });
+  let d = streamDecision(st, { kind: "event", source: a, name: "removed", data: removed, id: "3", now: 20001 });
+  assert.equal(d.st.model, old);
+  assert.equal(d.reopenAfter, undefined);
+  // Silence is measured from the reconnect and the ignored event.
+  assert.equal(streamDecision(d.st, { kind: "tick", now: 20001 + STREAM_SILENCE_MS }).reopenAfter, undefined);
+  // The state on the reconnected stream sets the sequence afresh.
+  d = streamDecision(d.st, { kind: "event", source: a, name: "state", data: stateData(), id: "3", now: 20002 });
+  assert.equal(d.st.lastSeq, 3);
+  assert.equal(d.st.awaitingState, false);
+});
+
+test("stream: events from a source that is not current never move the silence clock", () => {
+  const a = {};
+  let st = opened(a, 0, "7");
+  const b = {};
+  ({ st } = streamDecision(st, { kind: "open", source: b, now: 1000 }));
+  for (let now = 2000; now < 40000; now += 5000) {
+    st = streamDecision(st, { kind: "event", source: a, name: "keepalive", data: "{}", now }).st;
+  }
+  assert.equal(st.lastEventAt, 1000);
+  const d = streamDecision(st, { kind: "tick", now: 1001 + STREAM_SILENCE_MS });
+  assert.equal(d.close, b);
+  assert.equal(d.reopenAfter, RECONNECT_START_MS);
+});
+
+test("stream: a gap or a rejected delta before the first valid state on a source is not checked", () => {
+  const a = {};
+  let { st } = streamDecision(streamState(), { kind: "open", source: a, now: 0 });
+  for (const [name, data, id] of [
+    ["agent", "{bad", "99"],
+    ["removed", "{bad", "1"],
+    ["connection", "[", ""],
+  ]) {
+    const d = streamDecision(st, { kind: "event", source: a, name, data, id, now: 1 });
+    assert.equal(d.warning, undefined, name);
+    assert.equal(d.reopenAfter, undefined, name);
+    assert.equal(d.st.model, st.model, name);
+    st = d.st;
+  }
+  assert.equal(st.awaitingState, true);
 });
 
 // ---- Strips (Story 3.9) ----
@@ -928,16 +1211,38 @@ test("strips: lost and refused show the lost strip, then red, with no Boxes", ()
   assert.equal(st.hideBoxes, true);
 });
 
-test("strips: an unknown herdr version reads as such", () => {
-  const c = { ...okConn, gate: "advisory" };
-  delete c.herdr_version;
-  assert.match(stripText(boardStatus(c, false, NOW).strips[0]), /^herdr \(version unknown\) is below the supported minimum 0\.9\.5;/);
-  const r = { ...okConn, gate: "refused", herdr_minimum: "" };
-  delete r.herdr_version;
-  assert.equal(
-    stripText(boardStatus(r, false, NOW).strips[0]),
-    "herdr (version unknown) is not supported. herddash needs (version unknown) or newer and is recording nothing.",
-  );
+test("strips: an unreadable herdr version, refused, says herddash could not read it", () => {
+  for (const version of [undefined, ""]) {
+    const r = { ...okConn, gate: "refused", herdr_version: version };
+    if (version === undefined) delete r.herdr_version;
+    const st = boardStatus(r, false, NOW);
+    assert.deepEqual(st.strips.map((s) => s.kind), ["refused"]);
+    assert.equal(
+      stripText(st.strips[0]),
+      "herddash could not read herdr's version. It needs 0.9.5 or newer and is recording nothing.",
+      String(version),
+    );
+    assert.equal(st.hideBoxes, true);
+  }
+});
+
+test("strips: an unreadable herdr version, advisory, says herddash could not read it", () => {
+  for (const version of [undefined, ""]) {
+    const c = { ...okConn, gate: "advisory", herdr_version: version };
+    if (version === undefined) delete c.herdr_version;
+    assert.equal(
+      stripText(boardStatus(c, false, NOW).strips[0]),
+      "herddash could not read herdr's version; recording under the dogfooding flag.",
+      String(version),
+    );
+    for (const rg of [false, undefined]) {
+      assert.equal(
+        stripText(boardStatus({ ...c, resync_guaranteed: rg }, false, NOW).strips[0]),
+        "herddash could not read herdr's version; recording under the dogfooding flag. Resync is not guaranteed with this herdr version.",
+        String(version) + " " + String(rg),
+      );
+    }
+  }
 });
 
 test("strips: a state event showing herdr connected clears the disconnected strip", () => {

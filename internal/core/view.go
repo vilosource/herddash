@@ -2,11 +2,11 @@ package core
 
 import (
 	"encoding/json"
+	"hash/fnv"
 	"slices"
 	"strconv"
 	"strings"
 	"unicode"
-	"unicode/utf8"
 )
 
 // contextLineRules is the Context Line rule table (FR-2a), keyed by Agent
@@ -24,14 +24,20 @@ var contextLineRules = map[AgentProgram]func(title string) string{
 	//
 	// herdr's stripped pane title is what the client maps (internal/herdr/map.go);
 	// on 2026-10-19 all 12 Claude Code agents on the live server had a session
-	// name there. The raw terminal title starts with a status glyph and a space
-	// ("✳ " idle, "◐ " working), so as a fallback for when only the raw title is
-	// available, one leading rune that is neither a letter nor a digit, followed
-	// by a space, is dropped.
+	// name there. The raw terminal title starts with Claude Code's status glyph
+	// and a space ("✳ " idle, "◐ " working), so as a fallback for when only the
+	// raw title is available, exactly those glyphs are dropped as a prefix, and
+	// a title that is only a glyph says nothing. Any other leading rune, such as
+	// a session name's "-", "#" or emoji, is kept.
 	"claude": func(title string) string {
-		if r, size := utf8.DecodeRuneInString(title); size > 0 && !unicode.IsLetter(r) && !unicode.IsDigit(r) &&
-			strings.HasPrefix(title[size:], " ") {
-			title = strings.TrimSpace(title[size:])
+		for _, glyph := range claudeGlyphs {
+			if title == glyph {
+				return ""
+			}
+			if rest, ok := strings.CutPrefix(title, glyph+" "); ok {
+				title = strings.TrimSpace(rest)
+				break
+			}
 		}
 		if title == "Claude Code" {
 			return ""
@@ -40,11 +46,18 @@ var contextLineRules = map[AgentProgram]func(title string) string{
 	},
 }
 
+// claudeGlyphs are the status glyphs Claude Code puts before its raw terminal
+// title: "✳" idle, "◐" working.
+var claudeGlyphs = []string{"✳", "◐"}
+
 // ContextLine is the one line a Box shows about what the Agent is doing,
 // derived from its Pane Title by its Agent Program's rule. The title is first
-// made one line: control characters other than whitespace are dropped and
-// every whitespace run becomes one space, trimmed at both ends. It is "" for a
-// program with no rule.
+// made one line: control characters other than whitespace, and Unicode
+// Bidi_Control characters (U+202E and the rest, which would let a pane's
+// process reorder the Box's text), are dropped, and every whitespace run
+// becomes one space, trimmed at both ends. Other format characters, such as
+// the zero-width joiner in emoji sequences, are kept. It is "" for a program
+// with no rule.
 func ContextLine(program AgentProgram, paneTitle string) string {
 	rule, ok := contextLineRules[program]
 	if !ok {
@@ -55,7 +68,7 @@ func ContextLine(program AgentProgram, paneTitle string) string {
 
 func oneLine(s string) string {
 	s = strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) && !unicode.IsSpace(r) {
+		if unicode.IsControl(r) && !unicode.IsSpace(r) || unicode.Is(unicode.Bidi_Control, r) {
 			return -1
 		}
 		return r
@@ -190,7 +203,7 @@ func NewAgentView(in AgentViewInput) AgentView {
 
 		BackgroundTasks: tasks,
 	}
-	v.SortKey = newSortKey(class, in.Status, background, in.Context.WorkspacePosition, since, in.Key)
+	v.SortKey = newSortKey(class, in.Status, background, in.Context.WorkspacePosition, in.Context.WorkspaceID, since, in.Key)
 	return v
 }
 
@@ -240,7 +253,11 @@ func shownRecap(in AgentViewInput, class AttentionClass, background bool) string
 //   - Zone 0 holds only needs_you, flat across workspaces; zone 1 holds every
 //     other class, grouped by workspace (operator decision 2026-10-21).
 //   - Group is 0 in zone 0. In zone 1 it is the workspace's position in
-//     herdr's order, with an unknown position (0) sorting last as
+//     herdr's order. A workspace herdr did not position (position 0) gets its
+//     own group, UnpositionedGroup of its workspace id, above every real
+//     position and below SortUnknown, so different unpositioned workspaces
+//     practically never share a header (only a hash collision, negligible,
+//     would merge two); a pane with no workspace id at all sorts last as
 //     SortUnknown.
 //   - ClassRank is needs_you 0; then, inside a workspace group, finished 1,
 //     Idle (class working with a Status other than working) 2, Background
@@ -268,7 +285,23 @@ type SortKey struct {
 // JavaScript's Number.MAX_SAFE_INTEGER, so the Board compares it exactly.
 const SortUnknown int64 = 1<<53 - 1
 
-func newSortKey(class AttentionClass, status Status, background bool, workspacePosition int, since int64, key AgentKey) SortKey {
+// unpositionedBase is the first group number of a workspace herdr did not
+// position: 2^52, far above any real position.
+const unpositionedBase int64 = 1 << 52
+
+// UnpositionedGroup is the zone-1 group of a workspace herdr did not
+// position: 2^52 plus the workspace id's 64-bit FNV-1a hash modulo 2^52-1, so
+// it lies in [2^52, 2^53-2], above every real position and below SortUnknown,
+// and stays exact as a JavaScript number. It is hashed, not ranked, so one
+// Agent's group never depends on other workspaces; unpositioned groups order
+// among themselves by hash, stable and arbitrary.
+func UnpositionedGroup(workspaceID string) int64 {
+	h := fnv.New64a()
+	h.Write([]byte(workspaceID))
+	return unpositionedBase + int64(h.Sum64()%uint64(unpositionedBase-1))
+}
+
+func newSortKey(class AttentionClass, status Status, background bool, workspacePosition int, workspaceID string, since int64, key AgentKey) SortKey {
 	k := SortKey{Key: key, Start: since}
 	switch {
 	case class == ClassNeedsYou:
@@ -286,8 +319,12 @@ func newSortKey(class AttentionClass, status Status, background bool, workspaceP
 	}
 	if k.ClassRank > 0 {
 		k.Zone = 1
-		k.Group = int64(workspacePosition)
-		if k.Group <= 0 {
+		switch {
+		case workspacePosition > 0:
+			k.Group = int64(workspacePosition)
+		case workspaceID != "":
+			k.Group = UnpositionedGroup(workspaceID)
+		default:
 			k.Group = SortUnknown
 		}
 		k.Start = -since // the most recent first

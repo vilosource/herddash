@@ -184,6 +184,27 @@ go test ./...
 gofmt -l .      # must print nothing
 ```
 
+Beside them, CI's `board-browser` job builds `./cmd/herddash` and runs
+`internal/httpapi/web/check/board-browser.mjs` against the runner's preinstalled Google Chrome with
+the runner's Node (22 or newer, no npm), so breaking the Board's drawing, such as removing the
+`.board--recaps` rule, turns CI red. To run it locally (on Linux, prefix the second command with
+`CHROME=$(command -v google-chrome)`):
+
+```bash
+go build -o /tmp/herddash ./cmd/herddash
+node internal/httpapi/web/check/board-browser.mjs /tmp/herddash
+```
+
+Two more CI jobs run beside those. `macos` runs `go test -race ./...` on macos-latest with go.mod's
+Go, so procenv's darwin reader and `TestLaunchdAgentLints` (`plutil -lint`) run in CI.
+`release-toolchain` runs on ubuntu-latest with the spine's release Go (1.27.2, which
+`release_test.go` holds equal to the spine's row): `go vet ./...`, `go test -race ./...`, then
+`scripts/release-build.sh 0.0.0-ci <commit> "$RUNNER_TEMP/dist"` with `sha256sum -c`, four
+checksum lines and the linux/amd64 binary's `version` output checked. Tests that need a tool
+(`plutil`, `systemd-analyze`) skip when it is missing, unless `HERDDASH_REQUIRE_TOOLS`, a
+space-separated list, names it; then they fail. The `macos` job sets it to `plutil` and
+`release-toolchain` to `systemd-analyze`; locally, leave it unset.
+
 `arch_test.go` at the module root enforces the spine's import graph over every non-test Go file in
 the module: it fails, naming the edge, on any import between internal packages that the spine's
 diagram does not draw, on any package outside the spine, on any non-standard import in
@@ -198,7 +219,12 @@ structural change and needs an ADR.
 <commit> <outdir>` does, so a release binary prints e.g. `herddash 0.1.0 (<commit>)`. Unstamped
 builds take the commit from Go's embedded VCS info (`go run` embeds none, so it prints `unknown`).
 `release_test.go` runs that script (only the host's target under `-short`) and checks the release
-workflows' triggers, concurrency, permissions, pinned actions and Go version.
+workflows' triggers, concurrency, permissions, pinned actions and Go version, and CI's job set.
+`TestReleaseBuild` also checks every binary's `vcs.revision` equals `git rev-parse HEAD` and
+`vcs.modified` matches the tree (`git status --porcelain`), so a dirty local tree still passes;
+with `CI` true, as GitHub sets it, it requires git and a clean tree and fails otherwise. Outside
+CI it skips both checks in a linked git worktree (`.git` is a file, as under `.claude/worktrees/`):
+Go 1.26 stamps such a worktree's binaries with the enclosing checkout's commit and state.
 
 No npm, no build step for assets. Web assets are embedded in the binary.
 
@@ -223,8 +249,8 @@ is the authority on which story is next; each story's spec, with its review tria
 
 - The Board at `/`, with its files under `internal/httpapi/web/` embedded in the binary: the
   ordering and event logic is `order.mjs`, tested with `node --test` in CI, and
-  `internal/httpapi/web/check/board-browser.mjs` is a hand-run headless-Chrome check of its
-  drawing. Its approved design is `docs/design/board-design.md`.
+  `internal/httpapi/web/check/board-browser.mjs` is a headless-Chrome check of its drawing,
+  run by CI's `board-browser` job. Its approved design is `docs/design/board-design.md`.
 - `deploy/`: a launchd agent and a systemd user unit, installed by hand as `docs/install.md`
   describes.
 

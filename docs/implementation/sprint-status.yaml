@@ -76,18 +76,21 @@ development_status:
 
   epic-5: in-progress
   5-1-retrospectives-for-epics-1-to-4: done
-  5-2-a-resumed-session-does-not-keep-finished-background-tasks: in-progress
-  5-3-clear-drops-the-previous-session-s-background-tasks: backlog
-  5-4-retry-a-profile-lookup-that-failed-transiently: backlog
+  5-2-a-resumed-session-does-not-keep-finished-background-tasks: done
+  5-3-clear-drops-the-previous-session-s-background-tasks: done
+  5-4-retry-a-profile-lookup-that-failed-transiently: in-progress
   5-5-tighter-import-rules-and-transition-invariants-adr-0011: done
-  5-6-ci-runs-the-board-s-browser-check: backlog
-  5-7-ci-tests-on-macos: backlog
+  5-6-ci-runs-the-board-s-browser-check: done
+  5-7-ci-tests-on-macos: done
   5-8-documents-agents-read-match-the-code: backlog
   5-9-decide-whether-acknowledgement-is-needed: backlog
   5-10-a-new-agent-in-a-reused-pane-starts-fresh: in-progress
-  5-11-the-board-notices-a-hung-daemon: backlog
-  5-12-the-engine-treats-repeated-failures-as-a-lost-connection: backlog
-  5-13-board-text-and-grouping-are-exact: in-progress
+  5-11-the-board-notices-a-hung-daemon: done
+  5-12-the-engine-treats-repeated-failures-as-a-lost-connection: done
+  5-13-board-text-and-grouping-are-exact: done
+  5-14-a-manual-recap-reaches-the-board: done
+  5-15-bash-mode-commands-are-not-turns-either: done
+  5-16-a-resumed-subagent-counts-as-background-work: in-progress
   epic-5-retrospective: optional
 
 # Operator checkpoints and story-size notes carried from epics validation

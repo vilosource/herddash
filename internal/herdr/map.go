@@ -52,6 +52,7 @@ func mapSnapshot(s gen.SessionSnapshot) core.Snapshot {
 			ProjectDir:        projectDir,
 			WorkspaceLabel:    w.label,
 			TabLabel:          tabs[tabID],
+			WorkspaceID:       workspaceID,
 			WorkspacePosition: w.position,
 			PaneTitle:         paneTitle,
 			PanePosition:      positions[tabID][paneID],
@@ -128,7 +129,11 @@ func mapForegroundProcess(pi gen.PaneProcessInfo) (core.ForegroundProcess, error
 }
 
 // errUnexpectedEvent is wrapped by the event decoders for a line that decodes as
-// JSON but is not an event this subscription can deliver.
+// JSON but is not an event this subscription can deliver. The split is
+// deliberate: JSON that decodes but carries nothing the subscription can
+// deliver (an unknown kind, no data, no pane id) is unexpected, and on the
+// lifecycle subscription the stream goes on; JSON that fails to decode into
+// its kind's type is undecodable and ends the stream.
 var errUnexpectedEvent = errors.New("unexpected event")
 
 // decodeLifecycle decodes one line of the lifecycle subscription, whose envelope

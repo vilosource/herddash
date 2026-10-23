@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -470,8 +471,32 @@ func TestEventsKeepalive(t *testing.T) {
 	srv, _ := eventsServer(t, h)
 	s := openStream(t, srv, nil)
 	s.next(t)
-	if e := s.next(t); e != (sseEvent{comment: "keepalive"}) {
-		t.Errorf("event %+v, want the keepalive comment", e)
+	// A named event the page can observe, with no id (ADR-0012).
+	for range 2 {
+		if e := s.next(t); e != (sseEvent{event: "keepalive", data: "{}"}) {
+			t.Errorf("event %+v, want the keepalive event with no id", e)
+		}
+	}
+}
+
+// TestStreamSilenceBound reads STREAM_SILENCE_MS from the embedded order.mjs:
+// the Board must not take a quiet stream for lost before it has missed at
+// least two keepalives.
+func TestStreamSilenceBound(t *testing.T) {
+	b, err := web.ReadFile("web/order.mjs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`(?m)^export const STREAM_SILENCE_MS = ([0-9_]+);`).FindSubmatch(b)
+	if m == nil {
+		t.Fatal("order.mjs declares no STREAM_SILENCE_MS")
+	}
+	ms, err := strconv.Atoi(strings.ReplaceAll(string(m[1]), "_", ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if silence := time.Duration(ms) * time.Millisecond; silence <= 2*keepaliveInterval {
+		t.Errorf("STREAM_SILENCE_MS is %v, want more than twice keepaliveInterval (%v)", silence, keepaliveInterval)
 	}
 }
 
