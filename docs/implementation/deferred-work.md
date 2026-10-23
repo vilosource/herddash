@@ -71,6 +71,7 @@
 - source_spec: `docs/implementation/spec-transcript-background.md`
   summary: Whether `sessions/<pid>.json` updates `sessionId` when `/clear` starts a new session in the same process is not known; if it does not, the old transcript's open tasks stay on the Box.
   evidence: Unverified (would be medium). Settle it by running `/clear` in a session with a background task open and reading the record's sessionId before and after.
+  resolved: 2026-10-23, Story 5.3 (`docs/implementation/spec-5-3-clear-drops-the-previous-session-s-background-tasks.md`). On Claude Code 2.1.292 `/clear` changes the same process's record to a new `sessionId` at once, and a new transcript begins with the `/clear` record; a background command started before it keeps running and its completion goes to the new transcript (`docs/research/claude-code-clear-background-tasks-2026-10-23.md`). The new id names another path, so the engine's tail restarts there and open tasks and the recap start afresh; `TestTranscriptCleared`, `TestTranscriptClearedRecap` and `TestTranscriptClearedNotWritten` prove it. No code change was needed (ADR-0009 amended).
 - source_spec: `docs/implementation/spec-claude-recap.md`
   summary: The recap row's layout (the board--recaps toggle, the taller grid, the two-line clamp) is verified only by the hand-run board-browser.mjs; run it in CI.
   evidence: Removing the toggle or the .board--recaps rule leaves every CI check green; same root as the Story 3.9 deferral to run the browser check in CI.
@@ -80,3 +81,6 @@
 - source_spec: `docs/implementation/spec-5-2-a-resumed-session-does-not-keep-finished-background-tasks.md`
   summary: What a resume writes for a background subagent left open, and whether `--continue` behaves like `--resume`, were not observed; a status other than stopped would leave the subagent open.
   evidence: Unverified (would be medium). Only shell commands and `--resume` were tested on 2.1.292. Settle it by repeating the SIGKILL-and-resume experiment with a background Agent task and with `--continue`.
+- source_spec: `docs/implementation/spec-5-3-clear-drops-the-previous-session-s-background-tasks.md`
+  summary: Whether a background subagent started before `/clear` keeps running after it is not known; if it does, it leaves the Box while still working, since it has no tool shell for the process check to find.
+  evidence: Unverified (would be medium). The 2026-10-23 `/clear` experiment on 2.1.292 used shell commands only. Settle it by repeating it with a background Agent task and watching whether its completion reaches the new transcript.
