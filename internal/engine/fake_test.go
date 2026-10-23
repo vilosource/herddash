@@ -204,6 +204,8 @@ type fakeEnviron struct {
 	errs map[int]error
 	// block, while set, holds every read until it closes.
 	block chan struct{}
+	// started counts the reads begun; running, those not yet returned.
+	started, running int
 }
 
 func newFakeEnviron(t *testing.T) *fakeEnviron {
@@ -215,7 +217,14 @@ func newFakeEnviron(t *testing.T) *fakeEnviron {
 func (f *fakeEnviron) lookup(pid int, name string) (string, bool, error) {
 	f.mu.Lock()
 	block := f.block
+	f.started++
+	f.running++
 	f.mu.Unlock()
+	defer func() {
+		f.mu.Lock()
+		f.running--
+		f.mu.Unlock()
+	}()
 	if block != nil {
 		<-block
 	}
@@ -226,6 +235,13 @@ func (f *fakeEnviron) lookup(pid int, name string) (string, bool, error) {
 	}
 	v, ok := f.vars[pid][name]
 	return v, ok, nil
+}
+
+// reads says how many reads began and how many have not returned.
+func (f *fakeEnviron) reads() (started, running int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.started, f.running
 }
 
 // set sets name in pid's environment; unset removes it.

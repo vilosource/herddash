@@ -167,7 +167,7 @@ func TestProfileRedetectTransient(t *testing.T) {
 	})
 	t.Run("only the first settle ends the hold", func(t *testing.T) {
 		setProfileTimeout(t, 500*time.Millisecond)
-		h, env, _ := startedProfiled(t)
+		h, env, logs := startedProfiled(t)
 		env.hold()
 		h.lifecycle(core.LifecycleEvent{Kind: core.LifecycleAgentDetected, PaneID: "w1:p1", AgentProgram: "claude"})
 		h.awaitProcessCalls(2)
@@ -180,13 +180,14 @@ func TestProfileRedetectTransient(t *testing.T) {
 		}
 		// The lookup times out, keeping cldw: the held row is released.
 		h.rec.expect(t, "agent w1:p1 claude working profile=cldw", "transition w1:p1 claude working->idle live profile=cldw")
-		// The retry, held too, does not hold rows.
-		h.awaitProcessCalls(3)
+		// The retry, waiting for the hung read's slot, does not hold rows.
+		awaitLog(t, logs, "INFO", "profile lookup failed; retrying", 1)
+		time.Sleep(2 * profileRetryWait(1))
 		begin := time.Now()
 		sub.event(core.StatusEvent{PaneID: "w1:p1", Status: core.StatusBlocked, AgentProgram: "claude"})
 		h.rec.expect(t, "agent w1:p1 claude working profile=cldw", "transition w1:p1 claude working->idle live profile=cldw",
 			"transition w1:p1 claude idle->blocked live profile=cldw")
-		if d := time.Since(begin); d >= profileTimeout {
+		if d := time.Since(begin); d >= profileTimeout/2 {
 			t.Errorf("a row during a retry waited %v", d)
 		}
 	})
@@ -257,7 +258,7 @@ func TestProfileProgramChangeHeldRows(t *testing.T) {
 		h.rec.expect(t, "agent w1:p1 codex working profile=codex",
 			"transition w1:p1 claude working->blocked live profile=unresolved",
 			"transition w1:p1 claude blocked->idle live profile=unresolved",
-			"removed w1:p1 profile=codex")
+			"removed w1:p1 profile=unresolved")
 		env.unblock()
 		h.settle()
 		if got := h.rec.all(); len(got) != 4 {
@@ -468,6 +469,152 @@ func TestProfileRetryReset(t *testing.T) {
 		}
 		if n := len(logs.entries(t, "INFO", "profile lookup failed; retrying")); n != 1 {
 			t.Errorf("%d retries logged, want 1", n)
+		}
+	})
+}
+
+// A Profile hold always ends (Story 5.18).
+
+// redetectUntilReleased sends agent_detected for w1:p1 every 50ms until the
+// recorder holds more than n lines, and returns how long that took from
+// start. It fails the test after 4 × profileHoldLimit().
+func redetectUntilReleased(t *testing.T, h *harness, n int, start time.Time) time.Duration {
+	t.Helper()
+	redetect := core.LifecycleEvent{Kind: core.LifecycleAgentDetected, PaneID: "w1:p1", AgentProgram: "claude"}
+	for len(h.rec.all()) <= n {
+		if d := time.Since(start); d > 4*profileHoldLimit() {
+			t.Fatalf("rows still held after %v (hold limit %v): %v; %d lookups", d, profileHoldLimit(), h.rec.all(), h.fake.processCalls())
+		}
+		h.lifecycle(redetect)
+		time.Sleep(50 * time.Millisecond)
+	}
+	return time.Since(start)
+}
+
+// TestProfileHoldDeadline: a hold ends at its deadline, profileHoldLimit()
+// from its start, however many triggers supersede the lookup meanwhile; the
+// pane then records further rows at once until a lookup settles. A hung
+// environment read keeps the pane's slot, so no lookup after it reads.
+func TestProfileHoldDeadline(t *testing.T) {
+	redetect := core.LifecycleEvent{Kind: core.LifecycleAgentDetected, PaneID: "w1:p1", AgentProgram: "claude"}
+	t.Run("repeated redetection, hung read", func(t *testing.T) {
+		h, env, logs := startedProfiled(t)
+		h.fake.setGated(true) // only live events change the Status
+		before, _ := env.reads()
+		env.hold()
+		start := time.Now()
+		h.lifecycle(redetect)
+		h.awaitProcessCalls(2)
+		sub := h.fake.statusSub("w1:p1")
+		sub.event(core.StatusEvent{PaneID: "w1:p1", Status: core.StatusIdle, AgentProgram: "claude"})
+		sub.awaitDelivered(t, 1)
+		d := redetectUntilReleased(t, h, 1, start)
+		if d < profileHoldLimit() || d > 2*profileHoldLimit() {
+			t.Errorf("released after %v, want about %v", d, profileHoldLimit())
+		}
+		h.rec.expect(t, "agent w1:p1 claude working profile=cldw", "transition w1:p1 claude working->idle live profile=cldw")
+		// Further rows, the lookup still unsettled: recorded at once.
+		h.lifecycle(redetect)
+		begin := time.Now()
+		sub.event(core.StatusEvent{PaneID: "w1:p1", Status: core.StatusBlocked, AgentProgram: "claude"})
+		h.lifecycle(redetect)
+		h.rec.expect(t, "agent w1:p1 claude working profile=cldw", "transition w1:p1 claude working->idle live profile=cldw",
+			"transition w1:p1 claude idle->blocked live profile=cldw")
+		if d := time.Since(begin); d >= profileTimeout {
+			t.Errorf("a row after the deadline waited %v", d)
+		}
+		h.settle()
+		if n := len(logs.entries(t, "WARN", "profile hold ran out")); n != 1 {
+			t.Errorf("%d hold warnings, want 1", n)
+		}
+		// The first redetection's read hangs; no lookup since has read.
+		if started, running := env.reads(); started-before != 1 || running != 1 {
+			t.Errorf("environment reads since the hold: %d started, %d running; want 1 and 1", started-before, running)
+		}
+		if n := h.fake.processCalls(); n != 2 {
+			t.Errorf("%d foreground process reads, want 2", n)
+		}
+	})
+	t.Run("program change, lookup hangs", func(t *testing.T) {
+		setProfileTimeout(t, time.Second)
+		h, _, _ := startProfiled(t, oneAgent("codex", core.StatusWorking), holdCldw)
+		start := time.Now()
+		heldProgramChange(t, h)
+		redetectUntilReleased(t, h, 1, start)
+		h.rec.expect(t, "agent w1:p1 codex working profile=codex",
+			"transition w1:p1 claude working->blocked live profile=unresolved",
+			"transition w1:p1 claude blocked->idle live profile=unresolved")
+		h.settle()
+		if v := viewOfP1(t, h); v.AgentProgram != "claude" || v.Status != core.StatusIdle || v.Profile != core.ProfileUnresolved {
+			t.Errorf("view after the deadline %+v", v)
+		}
+		h.fake.statusSub("w1:p1").event(core.StatusEvent{PaneID: "w1:p1", Status: core.StatusBlocked, AgentProgram: "claude"})
+		h.rec.expect(t, "agent w1:p1 codex working profile=codex",
+			"transition w1:p1 claude working->blocked live profile=unresolved",
+			"transition w1:p1 claude blocked->idle live profile=unresolved",
+			"transition w1:p1 claude idle->blocked live profile=unresolved")
+	})
+	t.Run("transient failure after the deadline", func(t *testing.T) {
+		h, env, logs := startedProfiled(t)
+		h.fake.setGated(true) // only live events change the Status
+		env.hold()
+		start := time.Now()
+		h.lifecycle(redetect)
+		h.awaitProcessCalls(2)
+		sub := h.fake.statusSub("w1:p1")
+		sub.event(core.StatusEvent{PaneID: "w1:p1", Status: core.StatusIdle, AgentProgram: "claude"})
+		sub.awaitDelivered(t, 1)
+		redetectUntilReleased(t, h, 1, start)
+		// The latest lookup, waiting for the hung read's slot, fails
+		// transiently: a lookup settled, so the pane may hold again.
+		retries := len(logs.entries(t, "INFO", "profile lookup failed; retrying"))
+		awaitLog(t, logs, "INFO", "profile lookup failed; retrying", retries+1)
+		lc := h.fake.lifecycleSub()
+		n := lc.delivered.Load()
+		h.lifecycle(redetect)
+		lc.awaitDelivered(t, n+1)
+		h.agents() // the redetection is handled before the Status event
+		sub.event(core.StatusEvent{PaneID: "w1:p1", Status: core.StatusBlocked, AgentProgram: "claude"})
+		sub.awaitDelivered(t, 2)
+		h.agents()
+		if got := h.rec.all(); len(got) != 2 {
+			t.Fatalf("a row was not held: %v", got)
+		}
+		// That lookup times out too, keeping cldw: the row is released.
+		h.rec.expect(t, "agent w1:p1 claude working profile=cldw", "transition w1:p1 claude working->idle live profile=cldw",
+			"transition w1:p1 claude idle->blocked live profile=cldw")
+	})
+	t.Run("lookup settles after the deadline", func(t *testing.T) {
+		setProfileTimeout(t, time.Second)
+		h, env, _ := startedProfiled(t)
+		h.fake.setGated(true) // only live events change the Status
+		env.set(p1PID, claudeVar, "/h/.claude-cldp")
+		env.hold()
+		start := time.Now()
+		h.lifecycle(redetect)
+		h.awaitProcessCalls(2)
+		sub := h.fake.statusSub("w1:p1")
+		sub.event(core.StatusEvent{PaneID: "w1:p1", Status: core.StatusIdle, AgentProgram: "claude"})
+		sub.awaitDelivered(t, 1)
+		redetectUntilReleased(t, h, 1, start)
+		// The latest lookup still waits for the slot; the hung read ends.
+		env.unblock()
+		h.rec.expect(t, "agent w1:p1 claude working profile=cldw", "transition w1:p1 claude working->idle live profile=cldw",
+			"profile w1:p1 cldp previous cldw")
+		sub.event(core.StatusEvent{PaneID: "w1:p1", Status: core.StatusBlocked, AgentProgram: "claude"})
+		h.rec.expect(t, "agent w1:p1 claude working profile=cldw", "transition w1:p1 claude working->idle live profile=cldw",
+			"profile w1:p1 cldp previous cldw", "transition w1:p1 claude idle->blocked live profile=cldp")
+		// Holding works again.
+		h.settle()
+		calls := h.fake.processCalls()
+		env.hold()
+		h.lifecycle(redetect)
+		h.awaitProcessCalls(calls + 1)
+		sub.event(core.StatusEvent{PaneID: "w1:p1", Status: core.StatusIdle, AgentProgram: "claude"})
+		sub.awaitDelivered(t, 3)
+		h.agents()
+		if got := h.rec.all(); len(got) != 4 {
+			t.Errorf("a row was reported while held: %v", got)
 		}
 	})
 }
