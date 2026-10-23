@@ -12,6 +12,8 @@ import (
 	"crypto/sha256"
 	"debug/buildinfo"
 	"encoding/hex"
+	"errors"
+	"fmt"
 	"maps"
 	"os"
 	"os/exec"
@@ -19,6 +21,7 @@ import (
 	"regexp"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -44,6 +47,99 @@ func scriptEnv(extra ...string) []string {
 	return append(env, extra...)
 }
 
+// releaseTreeState returns the repository's HEAD commit and whether its tree
+// has modified or untracked files, as Go's vcs.revision and vcs.modified
+// record them, and whether to check them at all; judgeTree decides.
+func releaseTreeState(t *testing.T) (head string, dirty, check bool) {
+	t.Helper()
+	var status string
+	_, err := exec.LookPath("git")
+	if err == nil {
+		git := func(args ...string) (string, error) {
+			b, err := exec.Command("git", args...).Output()
+			if err != nil {
+				err = fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
+			}
+			return strings.TrimRight(string(b), "\n"), err
+		}
+		if head, err = git("rev-parse", "HEAD"); err == nil {
+			status, err = git("status", "--porcelain")
+		}
+	}
+	ci, _ := strconv.ParseBool(os.Getenv("CI"))
+	// A linked worktree's .git is a file, not a directory.
+	fi, statErr := os.Lstat(".git")
+	linked := statErr == nil && fi.Mode().IsRegular()
+	dirty, check, fatal, msg := judgeTree(ci, linked, status, err)
+	switch {
+	case fatal:
+		t.Fatal(msg)
+	case !check:
+		t.Log(msg)
+	}
+	return head, dirty, check
+}
+
+// judgeTree decides what TestReleaseBuild expects of the binaries' vcs
+// settings from `git status --porcelain` output, or the error that stopped git
+// (no git, no repository). Without git the checks are skipped with a log
+// message, unless ci is set (as GitHub sets CI); under ci a modified tree fails
+// too, since CI must prove clean-tree builds. In a linked git worktree (linked:
+// .git is a file) the checks are skipped outside CI: Go 1.26 does not take a
+// .git file as a repository root, so a worktree nested inside another checkout
+// (as .claude/worktrees/ are) gets the enclosing checkout's commit and state
+// stamped in. CI checks out a plain clone, where the checks always run.
+func judgeTree(ci, linked bool, status string, gitErr error) (dirty, check, fatal bool, msg string) {
+	if gitErr != nil {
+		if ci {
+			return false, false, true, fmt.Sprintf("CI is set but the build's commit cannot be checked: %v", gitErr)
+		}
+		return false, false, false, fmt.Sprintf("skipping the vcs.revision and vcs.modified checks: %v", gitErr)
+	}
+	if linked && !ci {
+		return false, false, false, "skipping the vcs.revision and vcs.modified checks: a linked git worktree, whose .git file Go 1.26 does not recognise"
+	}
+	dirty = status != ""
+	if dirty && ci {
+		return true, true, true, "CI is set but the tree is modified, so the binaries would not be clean-tree builds:\n" + status
+	}
+	return dirty, true, false, ""
+}
+
+func TestJudgeTree(t *testing.T) {
+	noGit := errors.New(`exec: "git": executable file not found in $PATH`)
+	notRepo := fmt.Errorf("git rev-parse HEAD: %w", errors.New("exit status 128"))
+	for _, c := range []struct {
+		name                string
+		ci, linked          bool
+		status              string
+		err                 error
+		dirty, check, fatal bool
+	}{
+		{"clean", false, false, "", nil, false, true, false},
+		{"clean under CI", true, false, "", nil, false, true, false},
+		{"dirty locally", false, false, " M release_test.go", nil, true, true, false},
+		{"untracked locally", false, false, "?? new.go", nil, true, true, false},
+		{"dirty under CI", true, false, "?? new.go", nil, true, true, true},
+		{"no git locally", false, false, "", noGit, false, false, false},
+		{"no git under CI", true, false, "", noGit, false, false, true},
+		{"tracked modification under CI", true, false, " M release_test.go", nil, true, true, true},
+		{"not a repository locally", false, false, "", notRepo, false, false, false},
+		{"not a repository under CI", true, false, "", notRepo, false, false, true},
+		{"linked worktree locally", false, true, " M release_test.go", nil, false, false, false},
+		{"linked worktree under CI", true, true, "", nil, false, true, false},
+		{"dirty linked worktree under CI", true, true, "?? new.go", nil, true, true, true},
+	} {
+		dirty, check, fatal, msg := judgeTree(c.ci, c.linked, c.status, c.err)
+		if dirty != c.dirty || check != c.check || fatal != c.fatal {
+			t.Errorf("%s: dirty %v check %v fatal %v, want %v %v %v", c.name, dirty, check, fatal, c.dirty, c.check, c.fatal)
+		}
+		if (fatal || !check) && msg == "" {
+			t.Errorf("%s: no message", c.name)
+		}
+	}
+}
+
 func TestReleaseBuild(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not found")
@@ -58,6 +154,10 @@ func TestReleaseBuild(t *testing.T) {
 		targets = []string{host}
 		extra = append(extra, "HERDDASH_TARGETS="+host)
 	}
+
+	// The commit and tree state Go should stamp into every binary, read
+	// before building.
+	head, dirty, checkVCS := releaseTreeState(t)
 
 	// A nested directory that does not exist yet: the script creates it.
 	out := filepath.Join(t.TempDir(), "dist", "nested")
@@ -149,6 +249,16 @@ func TestReleaseBuild(t *testing.T) {
 		}
 		if info.Path != "github.com/vilosource/herddash/cmd/herddash" {
 			t.Errorf("%s: built from %s, not cmd/herddash", want[i], info.Path)
+		}
+		// The commit it was built from, and whether the tree was modified:
+		// Go keeps both under -trimpath, and release.yml checks them.
+		if checkVCS {
+			if got := settings["vcs.revision"]; got != head {
+				t.Errorf("%s: vcs.revision = %q, want HEAD %s", want[i], got, head)
+			}
+			if got, wantMod := settings["vcs.modified"], strconv.FormatBool(dirty); got != wantMod {
+				t.Errorf("%s: vcs.modified = %q, want %s (the tree's state)", want[i], got, wantMod)
+			}
 		}
 	}
 
@@ -580,12 +690,8 @@ func TestReleaseWorkflow(t *testing.T) {
 	}
 
 	// The Go version is the spine's release toolchain.
-	m := regexp.MustCompile(`\| Go toolchain for releases[^|]*\| (\S+) \|`).FindStringSubmatch(readText(t, spinePath))
-	if m == nil {
-		t.Fatalf("%s has no release toolchain row", spinePath)
-	}
-	if !strings.Contains(code, "go-version: '"+m[1]+"'") {
-		t.Errorf("%s does not set go-version: '%s' (the spine's release toolchain)", releaseWorkflow, m[1])
+	if goVer := spineReleaseGo(t); !strings.Contains(code, "go-version: '"+goVer+"'") {
+		t.Errorf("%s does not set go-version: '%s' (the spine's release toolchain)", releaseWorkflow, goVer)
 	}
 	if strings.Contains(code, "go-version-file") {
 		t.Error("the release toolchain is pinned, not read from go.mod")
@@ -661,5 +767,133 @@ func TestReleasePleaseNeverPublishes(t *testing.T) {
 	}
 	if !strings.Contains(text, "name: release-please\n") {
 		t.Errorf("%s is not named release-please, which release.yml's workflow_run names", rpWorkflow)
+	}
+}
+
+// spineReleaseGo returns the spine's "Go toolchain for releases" version.
+func spineReleaseGo(t *testing.T) string {
+	t.Helper()
+	m := regexp.MustCompile(`\| Go toolchain for releases[^|]*\| (\S+) \|`).FindStringSubmatch(readText(t, spinePath))
+	if m == nil {
+		t.Fatalf("%s has no release toolchain row", spinePath)
+	}
+	return m[1]
+}
+
+// workflowJobs splits a workflow's jobs: block into job name -> its lines
+// (comments and blank lines removed, indentation trimmed), and the job names
+// in file order.
+func workflowJobs(text string) (map[string][]string, []string) {
+	jobs := map[string][]string{}
+	var order []string
+	jobRE := regexp.MustCompile(`^  ([A-Za-z0-9_-]+):\s*$`)
+	in, cur := false, ""
+	for _, l := range strings.Split(text, "\n") {
+		if l != "" && l[0] != ' ' && l[0] != '#' {
+			in, cur = strings.HasPrefix(l, "jobs:"), ""
+			continue
+		}
+		if !in {
+			continue
+		}
+		if m := jobRE.FindStringSubmatch(l); m != nil {
+			cur = m[1]
+			order = append(order, cur)
+			continue
+		}
+		if s := strings.TrimSpace(l); cur != "" && s != "" && !strings.HasPrefix(s, "#") {
+			jobs[cur] = append(jobs[cur], s)
+		}
+	}
+	return jobs, order
+}
+
+// TestCIWorkflow checks Story 5.7's CI jobs: the suite runs on macOS with
+// plutil required, and the spine's release toolchain vets, tests (with
+// systemd-analyze required) and runs the release build on every pull request,
+// while the existing jobs keep go.mod's minimum Go.
+func TestCIWorkflow(t *testing.T) {
+	text := readText(t, ciWorkflow)
+	jobs, order := workflowJobs(text)
+	want := []string{"check", "board-browser", "macos", "release-toolchain", "cross-compile"}
+	if !slices.Equal(order, want) {
+		t.Errorf("%s jobs = %q, want %q", ciWorkflow, order, want)
+	}
+
+	has := func(job, line string) bool { return slices.Contains(jobs[job], line) }
+	contains := func(job, s string) bool {
+		return slices.ContainsFunc(jobs[job], func(l string) bool { return strings.Contains(l, s) })
+	}
+
+	for _, job := range []string{"check", "board-browser", "cross-compile"} {
+		if !has(job, "go-version-file: go.mod") {
+			t.Errorf("job %s does not use go.mod's Go (go-version-file: go.mod)", job)
+		}
+	}
+
+	const testRun = "run: go test -race ./..."
+	macosEnv := requireToolsEnv + ": plutil"
+	for _, w := range []string{
+		"runs-on: macos-latest", "timeout-minutes: 15", "go-version-file: go.mod",
+		macosEnv, testRun,
+	} {
+		if !has("macos", w) {
+			t.Errorf("job macos has no %q line", w)
+		}
+	}
+
+	goVer := spineReleaseGo(t)
+	releaseEnv := requireToolsEnv + ": systemd-analyze"
+	for _, w := range []string{
+		"runs-on: ubuntu-latest", "timeout-minutes: 15", "go-version: '" + goVer + "'",
+		"GOTOOLCHAIN: local", "run: go vet ./...", releaseEnv, testRun,
+	} {
+		if !has("release-toolchain", w) {
+			t.Errorf("job release-toolchain has no %q line", w)
+		}
+	}
+	if contains("release-toolchain", "go-version-file") {
+		t.Error("job release-toolchain reads go.mod's Go; it must pin the spine's release toolchain")
+	}
+	// The required-tools variable belongs to the test step itself.
+	for job, env := range map[string]string{"macos": macosEnv, "release-toolchain": releaseEnv} {
+		lines := jobs[job]
+		if i := slices.Index(lines, env); i >= 0 && (i+1 >= len(lines) || lines[i+1] != testRun) {
+			t.Errorf("job %s: %q is not immediately followed by %q", job, env, testRun)
+		}
+	}
+	// Vet, then the tests, then the release build, then its outputs checked.
+	last := -1
+	for _, w := range []string{
+		"run: go vet ./...",
+		testRun,
+		`scripts/release-build.sh 0.0.0-ci "$commit" "$RUNNER_TEMP/dist"`,
+		"sha256sum -c SHA256SUMS",
+		`[ "$(wc -l < SHA256SUMS)" -eq ` + strconv.Itoa(len(releaseTargets)) + ` ]`,
+		"./herddash_0.0.0-ci_linux_amd64 version",
+	} {
+		i := slices.IndexFunc(jobs["release-toolchain"], func(l string) bool { return strings.Contains(l, w) })
+		if i < 0 {
+			t.Errorf("job release-toolchain does not run %q", w)
+			continue
+		}
+		if i < last {
+			t.Errorf("job release-toolchain runs %q out of order", w)
+		}
+		last = i
+	}
+
+	// Neither new job waits on another, and the workflow uses only checkout
+	// and setup-go, one pin each (TestReleaseWorkflow holds those equal to
+	// release.yml's).
+	for _, job := range []string{"macos", "release-toolchain"} {
+		if contains(job, "needs:") {
+			t.Errorf("job %s has needs:; it runs beside the others", job)
+		}
+	}
+	for a := range pinnedActions(t, ciWorkflow, strings.Join(codeLines(text), "\n")) {
+		if a != "actions/checkout" && a != "actions/setup-go" {
+			t.Errorf("%s uses %s; no third-party action is allowed", ciWorkflow, a)
+		}
 	}
 }
