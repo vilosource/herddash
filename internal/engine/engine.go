@@ -344,9 +344,11 @@ type pane struct {
 	// Transition since.
 	fold core.FoldResult
 	// seedHistory is set for a pane first tracked by the first snapshot of a
-	// connection whose epoch was loaded or kept: only its first sight reads the
-	// record. A pane tracked later, or after a terminal replacement, is a new
-	// Agent even when it reuses a pane id.
+	// connection whose epoch was loaded or kept, unless the terminal_id held
+	// for it before that snapshot differs from the one it shows: only its
+	// first sight reads the record. A pane tracked later, after a terminal
+	// replacement, or on a changed terminal is a new Agent even when it reuses
+	// a pane id, and its first row has no previous Status (AD-3).
 	seedHistory bool
 	// unrecorded is set once the record may not hold this Agent's fold: a
 	// History read for its first sight or an Append of one of its Transitions
@@ -1140,6 +1142,9 @@ func (e *Engine) onSnapshot(m snapshotMsg) {
 	if reconcile {
 		e.reconcileFrom = 0
 	}
+	// before is the evidence this snapshot replaces: apply compares it so
+	// that a pane whose terminal changed is not seeded from the record.
+	before := e.terminals
 	e.terminals = make(map[string]string, len(m.snap.Panes))
 	for _, obs := range m.snap.Panes {
 		e.terminals[obs.PaneID] = obs.TerminalID
@@ -1162,7 +1167,7 @@ func (e *Engine) onSnapshot(m snapshotMsg) {
 	t := e.truth
 	t.Connected, t.LastSnapshotAt = true, e.now()
 	e.setTruth(t)
-	unsubscribed, changed := e.apply(m.seq, m.snap, first)
+	unsubscribed, changed := e.apply(m.seq, m.snap, first, before)
 	if reconcile && changed {
 		e.mark(store.ReasonReconcile, "")
 	}
@@ -1236,8 +1241,12 @@ func (e *Engine) decideEpoch(s core.Snapshot) bool {
 // no live or pending subscription is left to a resync: apply returns that
 // pane's cause, or the zero cause when there is none. changed reports whether
 // the snapshot disagreed with what the engine held: a snapshot Transition, an
-// Agent seen first in it, or an Agent removed.
-func (e *Engine) apply(seq uint64, s core.Snapshot, resubscribe bool) (unsubscribed cause, changed bool) {
+// Agent seen first in it, or an Agent removed. before is every pane's
+// terminal_id as the engine held it before this snapshot (saved or last
+// applied): a pane it shows on another non-empty terminal than the one now
+// seen holds another Agent than the record's last one, so its first sight is
+// not seeded from the record.
+func (e *Engine) apply(seq uint64, s core.Snapshot, resubscribe bool, before map[string]string) (unsubscribed cause, changed bool) {
 	present := map[string]bool{}
 	for _, obs := range s.Panes {
 		a := obs.Agent
@@ -1266,7 +1275,16 @@ func (e *Engine) apply(seq uint64, s core.Snapshot, resubscribe bool) (unsubscri
 			}
 			p = e.track(obs.PaneID)
 			p.removableFrom = seq + 1
-			p.seedHistory = resubscribe && e.historic && !replaced
+			seed := resubscribe && e.historic && !replaced
+			if was := before[obs.PaneID]; seed && was != "" && obs.TerminalID != "" && was != obs.TerminalID {
+				// The pane id came back on another terminal while the
+				// engine was not watching: a new Agent, never joined to
+				// the record's.
+				e.log.Info("terminal changed since the record; not seeding from it", "pane", obs.PaneID,
+					"terminal_id", obs.TerminalID, "recorded_terminal_id", was)
+				seed = false
+			}
+			p.seedHistory = seed
 			fresh = true
 		}
 		if p.context.PaneTitle != obs.Context.PaneTitle {
@@ -2230,8 +2248,14 @@ func (e *Engine) transitionAt(p *pane, next core.Status, prov core.Provenance, o
 		Provenance:   prov,
 		ObservedBy:   by,
 	}
+	// A row with no previous Status is an Agent's first (AD-3): the fold
+	// starts over there. When the Status is not known but the fold is, this
+	// Agent already has rows, so the fold's last Status is the previous one.
 	if p.status.Valid() {
 		prev := p.status
+		in.Previous = &prev
+	} else if p.fold.Known {
+		prev := p.fold.Status
 		in.Previous = &prev
 	}
 	t, err := core.NewTransition(in)
@@ -2269,12 +2293,15 @@ func (e *Engine) seen(p *pane, status core.Status, prov core.Provenance, order *
 // history: if the Status and Agent Program seen are the ones last recorded,
 // nothing is written and the class keeps its start, exact if it began live;
 // otherwise the change is recorded with the last stored Status as previous.
-// Otherwise the first sight is a Transition with no previous Status, so the
-// record holds every Agent's current Status (FR-7): snapshot provenance when a
-// snapshot showed it, live when a status event did, at the time it was
-// observed. reportedAt is the fallback when that is unknown. Without a Store
-// nothing is recorded, but the fold is seeded the same way. It reports whether
-// it deliberately recorded nothing: the record matched, or the run is ending.
+// Otherwise (a new Agent, a terminal replaced or changed, or an unseeded first
+// snapshot) the first sight is a Transition with no previous Status, the
+// boundary where the fold and Retention start over for a reused AgentKey
+// (AD-3). Either way the record holds every Agent's current Status (FR-7):
+// snapshot provenance when a snapshot showed it, live when a status event did,
+// at the time it was observed. reportedAt is the fallback when that is
+// unknown. Without a Store nothing is recorded, but the fold is seeded the
+// same way. It reports whether it deliberately recorded nothing: the record
+// matched, or the run is ending.
 func (e *Engine) firstSight(p *pane, reportedAt int64) (skipped bool) {
 	prov, observedAt := p.seenBy, p.seenAt
 	if prov == "" {

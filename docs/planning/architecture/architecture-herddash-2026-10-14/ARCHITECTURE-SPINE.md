@@ -147,15 +147,31 @@ Arrows are the only permitted import directions. `core` imports only the standar
     Milestone 2 persists both. `server.live_handoff`'s effect on `terminal_id` is untested; if it
     reissues them, a handoff increments the epoch, which splits Agents but never joins them.
 
+  **Successive Agents on one AgentKey (Story 5.10).** A pane id that keeps its epoch can hold one
+  Agent after another: an Agent quits and a new one starts in the same pane, or the pane id comes
+  back on a new `terminal_id`. The AgentKey and the stored schema stay as they are; a Transition
+  with **no previous Status** is an Agent's first row, and it is the boundary between them. Such a
+  row is written only as an Agent's first sight when it is not seeded from the record: a new
+  Agent, a terminal replaced, or a pane in the first snapshot of a connection whose saved
+  `terminal_id` (non-empty) differs from the non-empty one it now shows, so a pane that changed
+  terminal while the Daemon was down is never seeded from its predecessor's history. Every later
+  row of the Agent names a previous Status, the fold's last one when the engine holds no Status.
+  The fold (`core.Fold`, `FoldResult.Add`) starts over at each such row, so Class, Since and
+  EverWorking describe only the current Agent; Retention keeps only the current Agent's latest
+  `working` row (AD-4). One case stays undetectable and joins: an Agent that quits and another
+  that starts in the same terminal while the Daemon is down leave no row between them, so the new
+  one is read as the old one continued.
+
 ### AD-4 — The record is append-only — ADR-0005
 
 - **Binds:** FR-6, FR-7, FR-8, FR-9, FR-9a, FR-11, FR-14
 - **Prevents:** history rewritten by a Profile Map edit, a resync or an import.
 - **Rule:** Transitions and resync markers are inserted and never updated. The only delete is the
   Retention sweep. For each Agent still present, it keeps every Transition from the one that began
-  the current Attention Class onward, plus the latest `working` Transition. Agents no longer present
-  are swept purely by age. Each Daemon start is recorded as a resync marker with reason
-  `daemon_start`.
+  the current Attention Class onward, plus the latest `working` Transition of the current Agent:
+  none from before the key's last Transition with no previous Status, which began it (AD-3).
+  Agents no longer present are swept purely by age. Each Daemon start is recorded as a resync
+  marker with reason `daemon_start`.
 
 ### AD-5 — herdr is reached only through `internal/herdr` — ADR-0006
 

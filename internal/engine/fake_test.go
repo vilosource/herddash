@@ -966,8 +966,11 @@ type sweepCall struct {
 
 // Sweep notes the call and applies Retention to the rows and markers in
 // memory, as the store does: rows observed before cutoff go, except, for a
-// present key, those at or after its Since (all of them for Since 0) and its
-// latest working row; markers go by age. sweepErr fails it, deleting nothing.
+// present key, those at or after its Since (all of them for Since 0) and the
+// current Agent's latest working row: the highest append index among working
+// rows at or after the key's last row with no previous Status in History order
+// (observed time, then append order; AD-3). Markers go by age. sweepErr fails
+// it, deleting nothing.
 func (f *fakeStore) Sweep(ctx context.Context, cutoff int64, present []store.Present) (store.SweepResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -981,18 +984,35 @@ func (f *fakeStore) Sweep(ctx context.Context, cutoff int64, present []store.Pre
 	for _, p := range present {
 		since[p.Key] = p.Since
 	}
+	// after reports whether row i comes after row j in History order.
+	after := func(i, j int) bool {
+		a, b := f.rows[i].ObservedAt(), f.rows[j].ObservedAt()
+		return a > b || a == b && i > j
+	}
+	boundary := map[core.AgentKey]int{}
+	for i, t := range f.rows {
+		if _, ok := t.Previous(); !ok {
+			if j, seen := boundary[t.Key()]; !seen || after(i, j) {
+				boundary[t.Key()] = i
+			}
+		}
+	}
 	latestWorking := map[core.AgentKey]int{}
 	for i, t := range f.rows {
-		if t.New() == core.StatusWorking {
-			latestWorking[t.Key()] = i
+		if t.New() != core.StatusWorking {
+			continue
 		}
+		if j, ok := boundary[t.Key()]; ok && after(j, i) {
+			continue // an earlier Agent's
+		}
+		latestWorking[t.Key()] = i
 	}
 	var r store.SweepResult
 	var kept []core.Transition
 	for i, t := range f.rows {
 		s, ok := since[t.Key()]
 		keep := t.ObservedAt() >= cutoff ||
-			ok && (s == 0 || t.ObservedAt() >= s || latestWorking[t.Key()] == i && t.New() == core.StatusWorking)
+			ok && (s == 0 || t.ObservedAt() >= s || keptWorking(latestWorking, t.Key(), i))
 		if keep {
 			kept = append(kept, t)
 		} else {
@@ -1010,6 +1030,12 @@ func (f *fakeStore) Sweep(ctx context.Context, cutoff int64, present []store.Pre
 	}
 	f.markers = markers
 	return r, nil
+}
+
+// keptWorking reports whether row i is key's latest working row in latest.
+func keptWorking(latest map[core.AgentKey]int, key core.AgentKey, i int) bool {
+	j, ok := latest[key]
+	return ok && j == i
 }
 
 func (f *fakeStore) sweepList() []sweepCall {

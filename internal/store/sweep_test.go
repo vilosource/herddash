@@ -259,3 +259,62 @@ func TestSweepRollsBackOnError(t *testing.T) {
 		t.Errorf("%d markers left, want the old one kept", n)
 	}
 }
+
+func TestSweepTwoAgentsOnOneKey(t *testing.T) {
+	// Agent A worked and finished; B began on the same key with a row with no
+	// previous Status (AD-3) and never worked. A's working row is not B's, so
+	// it goes: only B's class start remains.
+	s, _ := openTemp(t)
+	k := keyOf("w1:p1")
+	appendAt(t, s, k, "", core.StatusWorking, 200)
+	appendAt(t, s, k, core.StatusWorking, core.StatusDone, 199)
+	appendAt(t, s, k, "", core.StatusIdle, 150)
+	appendAt(t, s, k, core.StatusIdle, core.StatusBlocked, 120)
+	before := folded(t, s, k)
+	if before.Class != core.ClassNeedsYou || before.Since != sweepNow-120*day || before.EverWorking {
+		t.Fatalf("fold %+v, want needs_you since 120 days ago, never working", before)
+	}
+	sweep(t, s, Present{Key: k, Since: before.Since})
+	expectDays(t, s, k, "blocked@120")
+	if after := folded(t, s, k); after != before {
+		t.Errorf("fold after the sweep %+v, want %+v", after, before)
+	}
+}
+
+func TestSweepTwoAgentsCurrentWorked(t *testing.T) {
+	// As above, but B worked: B's latest working row stays, A's goes.
+	s, _ := openTemp(t)
+	k := keyOf("w1:p1")
+	appendAt(t, s, k, "", core.StatusWorking, 200)
+	appendAt(t, s, k, core.StatusWorking, core.StatusDone, 199)
+	appendAt(t, s, k, "", core.StatusIdle, 150)
+	appendAt(t, s, k, core.StatusIdle, core.StatusWorking, 140)
+	appendAt(t, s, k, core.StatusWorking, core.StatusBlocked, 120)
+	before := folded(t, s, k)
+	if before.Class != core.ClassNeedsYou || !before.EverWorking {
+		t.Fatalf("fold %+v, want needs_you, ever working", before)
+	}
+	sweep(t, s, Present{Key: k, Since: before.Since})
+	expectDays(t, s, k, "working@140", "blocked@120")
+	if after := folded(t, s, k); after != before {
+		t.Errorf("fold after the sweep %+v, want %+v", after, before)
+	}
+}
+
+func TestSweepBoundaryInHistoryOrder(t *testing.T) {
+	// The boundary is the last row with no previous Status in History order
+	// (observed_at, id), not by id: a row with no previous Status inserted
+	// last but observed before B's first row does not end B.
+	s, _ := openTemp(t)
+	k := keyOf("w1:p1")
+	appendAt(t, s, k, "", core.StatusIdle, 150)
+	appendAt(t, s, k, core.StatusIdle, core.StatusWorking, 140)
+	appendAt(t, s, k, core.StatusWorking, core.StatusBlocked, 120)
+	appendAt(t, s, k, "", core.StatusDone, 160)
+	before := folded(t, s, k)
+	if before.Class != core.ClassNeedsYou || !before.EverWorking {
+		t.Fatalf("fold %+v, want needs_you, ever working", before)
+	}
+	sweep(t, s, Present{Key: k, Since: before.Since})
+	expectDays(t, s, k, "working@140", "blocked@120")
+}

@@ -1560,6 +1560,108 @@ func TestServeHistory(t *testing.T) {
 	}
 }
 
+// TestServeHistoryAfterSweepReusedPane seeds a record for w1:p1 under epoch
+// 1, with the fake herdr's terminals saved: Agent A worked and finished 200
+// days ago; B began there 150 days ago with a row with no previous Status and
+// has been blocked since 120 days ago. serve restarts on it with the pane
+// blocked, and its first sweep runs: the history API then holds B's class
+// start, and none of A's rows.
+func TestServeHistoryAfterSweepReusedPane(t *testing.T) {
+	hermeticEnv(t)
+	f := startFakeHerdr(t)
+	f.blocked.Store(true)
+	dataDir := filepath.Join(t.TempDir(), "data")
+	if err := os.Mkdir(dataDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Open(filepath.Join(dataDir, "herddash.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SaveServerState("testhost", "test", store.ServerState{Epoch: 1,
+		Terminals: map[string]string{"w1:p1": "i0-t1", "w1:p2": "i0-t2"}}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UnixMilli()
+	const day = 24 * 3600 * 1000
+	for _, r := range []struct {
+		prev, next core.Status
+		days       int64
+	}{
+		{"", core.StatusWorking, 200},
+		{core.StatusWorking, core.StatusDone, 199},
+		{"", core.StatusIdle, 150},
+		{core.StatusIdle, core.StatusBlocked, 120},
+	} {
+		in := core.TransitionInput{Key: core.AgentKey{Host: "testhost", Server: "test", Epoch: 1, PaneID: "w1:p1"},
+			AgentProgram: "claude", Profile: "claude", New: r.next, HerdrVersion: "0.9.5",
+			ObservedAt: now - r.days*day, Provenance: core.ProvenanceLive}
+		if r.prev != "" {
+			prev := r.prev
+			in.Previous = &prev
+		}
+		tr, err := core.NewTransition(in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := st.Append(tr); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var stdout, stderr syncBuffer
+	done := make(chan int, 1)
+	go func() { done <- run(ctx, serveArgs(f, dataDir), &stdout, &stderr) }()
+	addr := listenAddr(t, dataDir)
+	logPath := filepath.Join(dataDir, logFileName)
+	waitFor(t, "the sweep logged", func() bool {
+		b, _ := os.ReadFile(logPath)
+		return strings.Contains(string(b), `"msg":"retention sweep","cutoff"`)
+	})
+
+	tr := &http.Transport{DisableKeepAlives: true}
+	defer tr.CloseIdleConnections()
+	client := &http.Client{Transport: tr, Timeout: 5 * time.Second}
+	resp, err := client.Get("http://" + addr + "/api/agents/testhost/test/1/w1%3Ap1/history")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d, body %s", resp.StatusCode, body)
+	}
+	var got struct {
+		Transitions []struct {
+			Previous string `json:"previous"`
+			New      string `json:"new"`
+		} `json:"transitions"`
+	}
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("body %s: %v", body, err)
+	}
+	var rows []string
+	for _, r := range got.Transitions {
+		rows = append(rows, r.Previous+"->"+r.New)
+	}
+	if g, w := strings.Join(rows, "; "), "idle->blocked"; g != w {
+		t.Errorf("history %q, want only B's class start %q", g, w)
+	}
+
+	cancel()
+	if code := <-done; code != 0 {
+		t.Fatalf("exit code %d, stderr %q", code, stderr.String())
+	}
+}
+
 // TestServeRecap runs serve with and without claude_recaps = true in its
 // config file (ADR-0010). The Agent's foreground process is a child this
 // test starts with CLAUDE_CONFIG_DIR set to a directory holding its session
