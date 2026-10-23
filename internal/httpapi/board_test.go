@@ -165,7 +165,7 @@ func TestBoardBadHost(t *testing.T) {
 
 // TestBoardServesEveryFile walks web/: every file but the node tests is
 // served (index.html at /, the rest under /assets/), and no test file is,
-// nor anything in web/check/ (hand-run checks).
+// nor anything in web/check/ (the browser check).
 func TestBoardServesEveryFile(t *testing.T) {
 	h, _ := newHandler(t)
 	entries, err := os.ReadDir("web")

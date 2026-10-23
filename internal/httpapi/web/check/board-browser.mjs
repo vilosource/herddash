@@ -1,10 +1,13 @@
-// Hand-run headless-Chrome check of the Board's Boxes and workspace groups
-// (layout v4), the State label's background task count (ADR-0009), Claude
-// Code's recap in the Context Line's row (ADR-0010) and its connection and
-// version strips (Story 3.9). Not embedded, not run in CI.
+// Headless-Chrome check of the Board's Boxes and workspace groups (layout
+// v4), the State label's background task count (ADR-0009), Claude Code's
+// recap in the Context Line's row (ADR-0010) and its connection and version
+// strips (Story 3.9). Not embedded. CI's board-browser job runs it on ubuntu
+// against the runner's Google Chrome (Story 5.6); it also runs by hand:
 //
 //   go build -o /tmp/herddash ./cmd/herddash
 //   node internal/httpapi/web/check/board-browser.mjs /tmp/herddash
+//
+// On Linux, point it at the browser with CHROME=$(command -v google-chrome).
 //
 // Node 22 or newer with built-ins only (its global WebSocket speaks Chrome's
 // DevTools protocol over --remote-debugging-port; no npm). It runs the given
@@ -160,7 +163,13 @@ async function chrome() {
   });
   let err = "";
   c.stderr.on("data", (d) => (err += d));
-  const browserWs = await until("DevTools endpoint", () => (err.match(/ws:\/\/\S+/) || [])[0]);
+  let browserWs;
+  try {
+    browserWs = await until("DevTools endpoint", () => (err.match(/ws:\/\/\S+/) || [])[0]);
+  } catch (e) {
+    const exited = c.exitCode !== null || c.signalCode !== null ? `; Chrome exited (code ${c.exitCode}, signal ${c.signalCode})` : "";
+    throw new Error(`${e.message}${exited}; Chrome's stderr:\n${err || "(empty)"}`);
+  }
   const ws = new WebSocket(browserWs);
   await new Promise((r, j) => (ws.addEventListener("open", r), ws.addEventListener("error", j)));
   let id = 0;

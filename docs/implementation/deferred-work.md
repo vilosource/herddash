@@ -58,6 +58,7 @@
 - source_spec: `docs/implementation/spec-3-9-connection-and-version-strips.md`
   summary: Run the Board's headless-browser check (board.mjs drawing: strips, dimming, refused hiding, live updates, reconnect) in CI, not only by hand.
   evidence: Stories 3.7-3.9 each verified board.mjs only in a manual headless-Chrome run; node --test covers order.mjs alone. ubuntu runners ship Chrome, and Node 22's built-in WebSocket can drive it over CDP without npm, but wiring it into CI is work no story plans.
+  resolved: 2026-10-23, Story 5.6 (`docs/implementation/spec-5-6-ci-runs-the-board-s-browser-check.md`). CI's `board-browser` job (`.github/workflows/ci.yml`) builds `./cmd/herddash` and runs `board-browser.mjs` on ubuntu-latest with the runner's Node and its `google-chrome`, no npm and no extra action, and fails when Node is older than 22 or no Chrome is found. The job's step was run locally (macOS Chrome 156, Node 22): 23 `ok`, exit 0; the first pull-request run proves it on ubuntu-latest.
 - source_spec: `docs/implementation/spec-4-1-clean-shutdown.md`
   summary: CLAUDE.md's operator-checkpoint list still says Story 1.3 must avoid "the live 0.8.2 server"; the live herdr has run 0.9.5 since 2026-10-20.
   evidence: The checkpoint is closed and the server was restarted on 0.9.5 (PID 56666, loaded binary checked via lsof); the line now misleads a reader about the dogfooding flag. Agent-context file, so deferred.
@@ -75,6 +76,7 @@
 - source_spec: `docs/implementation/spec-claude-recap.md`
   summary: The recap row's layout (the board--recaps toggle, the taller grid, the two-line clamp) is verified only by the hand-run board-browser.mjs; run it in CI.
   evidence: Removing the toggle or the .board--recaps rule leaves every CI check green; same root as the Story 3.9 deferral to run the browser check in CI.
+  resolved: 2026-10-23, Story 5.6 (`docs/implementation/spec-5-6-ci-runs-the-board-s-browser-check.md`). CI's `board-browser` job runs `board-browser.mjs` on every pull request. Its step, run locally (macOS Chrome 156, Node 22), passed with 23 `ok`; with the `.board--recaps .box` rule deleted from `board.css` and the binary rebuilt, "while a Box has a recap, every Box is one line taller" printed FAIL and it exited 1. The first pull-request run proves it on ubuntu-latest.
 - source_spec: `docs/implementation/spec-5-2-a-resumed-session-does-not-keep-finished-background-tasks.md`
   summary: Between a Claude Code crash and a resume inside herdr, whether herddash's session watch for the dead process ends, so its open start stops showing, is untested.
   evidence: Unverified (would be medium). The 2026-10-23 experiment ran outside herdr. Settle it by crashing a Claude Code Agent in an isolated herdr and watching its Box.

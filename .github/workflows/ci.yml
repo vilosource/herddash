@@ -52,6 +52,41 @@ jobs:
             exit 1
           fi
 
+  # The Board's drawing check (strips, dimming, recap rows, live updates,
+  # reconnect): board-browser.mjs drives the runner's preinstalled Google
+  # Chrome over the DevTools protocol with Node's built-in WebSocket, against
+  # a fake herdr with its own HOME. No npm packages, no extra action.
+  # Removing the .board--recaps rule from board.css fails it.
+  board-browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: board browser check
+        run: |
+          set -eu
+          node --version
+          major="$(node -p 'process.versions.node.split(".")[0]')"
+          if [ "$major" -lt 22 ]; then
+            echo "node $major is older than 22; the check needs Node 22's global WebSocket"
+            exit 1
+          fi
+          if [ "$(node -p 'typeof WebSocket')" != "function" ]; then
+            echo "node $(node --version) has no global WebSocket; the check needs it"
+            exit 1
+          fi
+          chrome="${CHROME:-$(command -v google-chrome || true)}"
+          if [ -z "$chrome" ]; then
+            echo "no Chrome found: google-chrome is not on PATH and CHROME is unset"
+            exit 1
+          fi
+          "$chrome" --version
+          go build -o "$RUNNER_TEMP/herddash" ./cmd/herddash
+          CHROME="$chrome" node internal/httpapi/web/check/board-browser.mjs "$RUNNER_TEMP/herddash"
+
   cross-compile:
     needs: check
     runs-on: ubuntu-latest

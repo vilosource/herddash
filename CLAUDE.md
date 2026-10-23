@@ -184,6 +184,17 @@ go test ./...
 gofmt -l .      # must print nothing
 ```
 
+Beside them, CI's `board-browser` job builds `./cmd/herddash` and runs
+`internal/httpapi/web/check/board-browser.mjs` against the runner's preinstalled Google Chrome with
+the runner's Node (22 or newer, no npm), so breaking the Board's drawing, such as removing the
+`.board--recaps` rule, turns CI red. To run it locally (on Linux, prefix the second command with
+`CHROME=$(command -v google-chrome)`):
+
+```bash
+go build -o /tmp/herddash ./cmd/herddash
+node internal/httpapi/web/check/board-browser.mjs /tmp/herddash
+```
+
 `arch_test.go` at the module root enforces the spine's import graph over every non-test Go file in
 the module: it fails, naming the edge, on any import between internal packages that the spine's
 diagram does not draw, on any package outside the spine, on any non-standard import in
@@ -223,8 +234,8 @@ is the authority on which story is next; each story's spec, with its review tria
 
 - The Board at `/`, with its files under `internal/httpapi/web/` embedded in the binary: the
   ordering and event logic is `order.mjs`, tested with `node --test` in CI, and
-  `internal/httpapi/web/check/board-browser.mjs` is a hand-run headless-Chrome check of its
-  drawing. Its approved design is `docs/design/board-design.md`.
+  `internal/httpapi/web/check/board-browser.mjs` is a headless-Chrome check of its drawing,
+  run by CI's `board-browser` job. Its approved design is `docs/design/board-design.md`.
 - `deploy/`: a launchd agent and a systemd user unit, installed by hand as `docs/install.md`
   describes.
 
