@@ -148,12 +148,22 @@ type TranscriptFunc = func(t procenv.Tail, path string, line func([]byte)) (proc
 // that Profile: a failure is no evidence it changed. While a reported Agent's
 // Profile is resolved again for one of the triggers above, its new
 // Transitions are held, not recorded or reported, until the first resolution
-// after the trigger settles (at most profileTimeout), so each row carries the
-// Profile resolved for its program. A held row keeps its Status, previous
-// Status, provenance and observed_at; only its Profile is decided when it is
-// released. Removal and the run's end release held rows first, with the
-// Profile held then for a row of the program it was resolved for and
-// core.ProfileUnresolved for any other.
+// after the trigger settles, so each row carries the Profile resolved for its
+// program. A held row keeps its Status, previous Status, provenance and
+// observed_at; only its Profile is decided when it is released. Removal and
+// the run's end release held rows first, with the Profile held then for a row
+// of the program it was resolved for and core.ProfileUnresolved for any other.
+//
+// A hold always ends (Story 5.18): its deadline, profileHoldLimit() from its
+// start, is set when it starts and never moved by a later trigger, so a stream
+// of triggers each superseding the lookup in flight cannot hold rows forever.
+// At the deadline a timer goroutine sends a message and the held rows are
+// released as at removal; the pane then holds nothing more, and a row of a
+// program whose lookup has not settled is recorded at once with
+// core.ProfileUnresolved, until one of its lookups settles. At most one
+// lookup's reads run per pane, guarded by a one-slot semaphore: a lookup that
+// cannot take it within profileTimeout, because an earlier read hangs, fails as
+// a timeout, so a hung environment read never gains company.
 //
 // Background (FR-2, operator request 2026-10-21): the foreground process a
 // Profile resolution read is remembered as the Agent's process. While an
@@ -417,6 +427,22 @@ type pane struct {
 	// shows it, but the published view keeps what was last released.
 	holdRows bool
 	held     []core.TransitionInput
+	// holdGen tags the deadline timer of the hold under way, 0 when none; the
+	// deadline is set when a hold starts and never moved. holdExpired is set
+	// when a hold ran out, and stops the pane holding again until one of its
+	// lookups settles.
+	holdGen     uint64
+	holdExpired bool
+	// profileSlot lets at most one Profile lookup's reads run for the pane
+	// at a time: a lookup holds it while its reads run, past its timeout if
+	// a read hangs. profileLatest is the generation of the pane's latest
+	// lookup, stored by startResolve on the engine goroutine: a lookup that
+	// takes the slot after a later one started gives it back at once without
+	// reading, since its result would be ignored, so a superseded lookup
+	// never delays or starves the current one. Both are created by the first
+	// lookup.
+	profileSlot   chan struct{}
+	profileLatest *atomic.Uint64
 	// pid is the Agent's process: the foreground process its latest Profile
 	// resolution read, 0 when not known. It is cleared when the Agent Program
 	// changes.
@@ -569,6 +595,11 @@ type (
 	// profileRetryMsg says the wait before retrying a pane's Profile lookup
 	// is over.
 	profileRetryMsg struct {
+		paneID string
+		gen    uint64
+	}
+	// profileHoldMsg says a pane's hold of its rows reached its deadline.
+	profileHoldMsg struct {
 		paneID string
 		gen    uint64
 	}
@@ -986,6 +1017,8 @@ func (e *Engine) handle(m any) {
 		e.onProfile(m)
 	case profileRetryMsg:
 		e.onProfileRetry(m)
+	case profileHoldMsg:
+		e.onProfileHold(m)
 	case backgroundMsg:
 		e.onBackground(m)
 	case sessionMsg:
@@ -1805,9 +1838,50 @@ func (e *Engine) resolve(p *pane) {
 		return
 	}
 	if p.known {
-		p.holdRows = true
+		e.hold(p)
 	}
 	e.startResolve(p, rule)
+}
+
+// hold starts holding p's new rows, unless a hold is under way or p's last
+// hold ran out and none of its lookups has settled since. A new hold arms its
+// deadline: a timer goroutine sends a profileHoldMsg after
+// profileHoldLimit(), and a later trigger never moves it.
+func (e *Engine) hold(p *pane) {
+	if p.holdRows || p.holdExpired {
+		return
+	}
+	p.holdRows = true
+	e.nextGen++
+	p.holdGen = e.nextGen
+	id, gen, limit := p.id, p.holdGen, profileHoldLimit()
+	e.wg.Add(1)
+	go func() {
+		defer e.wg.Done()
+		t := time.NewTimer(limit)
+		defer t.Stop()
+		select {
+		case <-t.C:
+			e.send(profileHoldMsg{paneID: id, gen: gen})
+		case <-e.runCtx.Done():
+		}
+	}()
+}
+
+// onProfileHold ends a hold that reached its deadline: the held rows are
+// released with the best Profile known, the one held for a row of the program
+// it was resolved for and core.ProfileUnresolved for any other, and the pane
+// holds nothing more until one of its lookups settles.
+func (e *Engine) onProfileHold(m profileHoldMsg) {
+	p, ok := e.panes[m.paneID]
+	if !ok || m.gen == 0 || p.holdGen != m.gen || !p.holdRows {
+		return // for a pane gone since, or a hold already ended
+	}
+	e.log.Warn("profile hold ran out", "pane", p.id, "agent_program", p.program,
+		"held", len(p.held), "limit", profileHoldLimit().String())
+	p.holdExpired = true
+	e.release(p, "", "")
+	e.noteView(p)
 }
 
 // startResolve starts the reads of one Profile lookup for p under rule, in a
@@ -1815,11 +1889,16 @@ func (e *Engine) resolve(p *pane) {
 func (e *Engine) startResolve(p *pane, rule core.ProfileRule) {
 	e.nextGen++
 	p.resolving = e.nextGen
-	id, gen, program := p.id, p.resolving, p.program
+	if p.profileSlot == nil {
+		p.profileSlot = make(chan struct{}, 1)
+		p.profileLatest = new(atomic.Uint64)
+	}
+	p.profileLatest.Store(p.resolving)
+	id, gen, program, slot, latest := p.id, p.resolving, p.program, p.profileSlot, p.profileLatest
 	e.wg.Add(1)
 	go func() {
 		defer e.wg.Done()
-		m := e.readProfile(id, program, rule)
+		m := e.readProfile(id, program, rule, slot, latest, gen)
 		m.paneID, m.gen = id, gen
 		e.send(m)
 	}()
@@ -1829,14 +1908,31 @@ func (e *Engine) startResolve(p *pane, rule core.ProfileRule) {
 // from that process's environment, and applies the rule, within
 // profileTimeout. Every failure gives core.ProfileUnresolved, with the reason;
 // running out of time and a failed foreground process call are transient.
-func (e *Engine) readProfile(paneID string, program core.AgentProgram, rule core.ProfileRule) profileMsg {
+// The reads run only while holding the pane's slot, so a hung read never has
+// company: a lookup that cannot take the slot within profileTimeout runs out
+// of time. A lookup that takes the slot after a later lookup (latest) started
+// frees it at once and reads nothing: its result is stale.
+func (e *Engine) readProfile(paneID string, program core.AgentProgram, rule core.ProfileRule,
+	slot chan struct{}, latest *atomic.Uint64, gen uint64) profileMsg {
 	ctx, cancel := context.WithTimeout(e.runCtx, profileTimeout)
 	defer cancel()
+	select {
+	case slot <- struct{}{}:
+	case <-ctx.Done():
+		return profileMsg{profile: core.ProfileUnresolved, transient: true,
+			err: fmt.Errorf("engine: profile not resolved within %s, an earlier lookup's read still running: %w", profileTimeout, ctx.Err())}
+	}
+	if latest.Load() != gen {
+		<-slot
+		return profileMsg{profile: core.ProfileUnresolved, err: errors.New("engine: profile lookup superseded")}
+	}
 	// The environment read cannot be cancelled, so the reads run apart and
-	// a read that outlives the timeout is abandoned; done is buffered so it
-	// never blocks.
+	// a read that outlives the timeout is abandoned, keeping the slot until
+	// it returns; done is buffered so it never blocks. The reading goroutine
+	// is not tracked in e.wg: a hung read must not hang Run's end.
 	done := make(chan profileMsg, 1)
 	go func() {
+		defer func() { <-slot }()
 		fp, err := e.client.ForegroundProcess(ctx, paneID)
 		if err != nil {
 			done <- profileMsg{err: fmt.Errorf("engine: foreground process: %w", err), transient: true}
@@ -1871,6 +1967,7 @@ func (e *Engine) onProfile(m profileMsg) {
 		return // for a pane gone since, or a resolution superseded
 	}
 	p.resolving = 0
+	p.holdExpired = false // a lookup settled: the pane may hold again
 	if !m.transient {
 		p.profileTries = 0
 		e.settleProfile(p, m)
@@ -1947,6 +2044,7 @@ func (e *Engine) settleProfile(p *pane, m profileMsg) {
 		attrs = append(attrs, "error", m.err.Error())
 	}
 	e.log.Debug("profile resolved", attrs...)
+	p.holdExpired = false
 	previous, had := p.profile, p.resolved
 	var previousProgram core.AgentProgram
 	if had {
@@ -1986,7 +2084,7 @@ func (e *Engine) release(p *pane, oldProfile string, oldProgram core.AgentProgra
 		return
 	}
 	rows := p.held
-	p.holdRows, p.held = false, nil
+	p.holdRows, p.held, p.holdGen = false, nil, 0
 	final := p.status
 	for _, in := range rows {
 		switch {
@@ -2518,6 +2616,12 @@ func (e *Engine) transitionAt(p *pane, next core.Status, prov core.Provenance, o
 		prev := p.fold.Status
 		in.Previous = &prev
 	}
+	mismatch := p.known && p.resolved && p.profileProgram != p.program
+	if mismatch && p.holdExpired {
+		// The pane's hold ran out before its program's lookup settled: the
+		// row is recorded now, with no Profile resolved for its program.
+		in.Profile = core.ProfileUnresolved
+	}
 	t, err := core.NewTransition(in)
 	if err != nil {
 		e.log.Warn("transition not recorded", "pane", p.id, "error", err)
@@ -2526,11 +2630,11 @@ func (e *Engine) transitionAt(p *pane, next core.Status, prov core.Provenance, o
 	p.status = next
 	p.lastAt = t.ObservedAt()
 	e.followBackground(p)
-	if p.known && p.resolved && p.profileProgram != p.program {
+	if mismatch {
 		// A program change whose resolution has not started yet (a session
-		// verdict it ends is recorded first): the row waits for it too, so
-		// it never carries the old program's Profile.
-		p.holdRows = true
+		// verdict it ends is recorded first), or has not settled: the row
+		// waits for it too, so it never carries the old program's Profile.
+		e.hold(p)
 	}
 	if p.holdRows {
 		// Its Profile is being resolved again: the row waits for it.
@@ -2645,7 +2749,7 @@ func (e *Engine) key(paneID string) core.AgentKey {
 }
 
 func (e *Engine) agent(p *pane) Agent {
-	a := Agent{Key: e.key(p.id), AgentProgram: p.program, Profile: p.profile, Status: p.status, Context: p.context,
+	a := Agent{Key: e.key(p.id), AgentProgram: p.program, Profile: shownProfile(p), Status: p.status, Context: p.context,
 		Class: core.ClassUnknown}
 	if p.fold.Known {
 		a.Class = p.fold.Class

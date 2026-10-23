@@ -152,12 +152,22 @@ func (e *Engine) setTruth(t core.ConnectionTruth) {
 	e.change(Change{Kind: ChangeConnection, Connection: t})
 }
 
-// viewOf builds the view of a reported Agent.
+// shownProfile is the Profile shown for p's Agent: core.ProfileUnresolved
+// while the one held was resolved for another program, as after a hold ran
+// out before the new program's lookup settled (Story 5.18).
+func shownProfile(p *pane) string {
+	if p.resolved && p.profileProgram != p.program {
+		return core.ProfileUnresolved
+	}
+	return p.profile
+}
+
+// viewOf builds the view of a reported Agent, with shownProfile.
 func (e *Engine) viewOf(p *pane) core.AgentView {
 	return core.NewAgentView(core.AgentViewInput{
 		Key:          e.key(p.id),
 		AgentProgram: p.program,
-		Profile:      p.profile,
+		Profile:      shownProfile(p),
 		Status:       p.status,
 		Fold:         p.fold,
 		Context:      p.context,

@@ -57,6 +57,14 @@ const (
 	// defaultProfileRetryDelay is the wait before the first retry of a
 	// transiently failed Profile lookup; each further retry doubles it.
 	defaultProfileRetryDelay = 2 * time.Second
+	// defaultProfileHoldFactor sets how long a reported Agent's rows may be
+	// held while its Profile is resolved again: profileHoldFactor times
+	// profileTimeout from the hold's start, never moved by a later trigger.
+	// One trigger superseding a lookup just before it ends still settles
+	// inside it; only an unending stream of triggers or a lookup that cannot
+	// run reaches it, and the rows are then released with the best Profile
+	// known.
+	defaultProfileHoldFactor = 2
 	// defaultBackgroundCheckDelay is how long after a background-capable
 	// Agent's Status changes to done or idle, or its process becomes known,
 	// the engine first reads that process's children for background work: a
@@ -107,6 +115,7 @@ var (
 	profileTimeout         = defaultProfileTimeout
 	profileRetries         = defaultProfileRetries
 	profileRetryDelay      = defaultProfileRetryDelay
+	profileHoldFactor      = defaultProfileHoldFactor
 	retentionSweepInterval = defaultRetentionSweepInterval
 	backgroundCheckDelay   = defaultBackgroundCheckDelay
 	backgroundInterval     = defaultBackgroundInterval
@@ -138,4 +147,10 @@ func profileRetryWait(n int) time.Duration {
 		d *= 2
 	}
 	return d
+}
+
+// profileHoldLimit is the longest a hold of a reported Agent's rows lasts:
+// profileHoldFactor times profileTimeout.
+func profileHoldLimit() time.Duration {
+	return time.Duration(profileHoldFactor) * profileTimeout
 }

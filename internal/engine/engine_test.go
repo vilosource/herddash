@@ -1790,7 +1790,7 @@ func TestProfileFailures(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			begin := time.Now()
-			h, _, logs := startProfiled(t, oneAgent("claude", core.StatusWorking), c.prepare)
+			h, env, logs := startProfiled(t, oneAgent("claude", core.StatusWorking), c.prepare)
 			h.rec.expect(t, "agent w1:p1 claude working profile=unresolved")
 			if c.name == "timeout" {
 				if d := time.Since(begin); d < profileTimeout {
@@ -1805,11 +1805,23 @@ func TestProfileFailures(t *testing.T) {
 			// Past the whole retry window, nothing more is tried.
 			time.Sleep(4 * profileRetryWait(profileRetries))
 			h.settle()
-			if n := h.fake.processCalls(); n != lookups {
-				t.Errorf("%d lookups, want %d", n, lookups)
+			// A hung read keeps the pane's slot (Story 5.18): its retries run
+			// out of time waiting for it, reading nothing.
+			calls := lookups
+			if c.name == "timeout" {
+				calls = 1
+				if started, _ := env.reads(); started != 1 {
+					t.Errorf("%d environment reads, want 1", started)
+				}
+			}
+			if n := h.fake.processCalls(); n != calls {
+				t.Errorf("%d foreground process reads, want %d", n, calls)
 			}
 			if n := len(logs.entries(t, "WARN", "profile lookup failed")); c.transient && n != 1 {
 				t.Errorf("%d warnings on giving up, want 1", n)
+			}
+			if n := len(logs.entries(t, "INFO", "profile lookup failed; retrying")); c.transient && n != profileRetries {
+				t.Errorf("%d retries logged, want %d", n, profileRetries)
 			}
 			entries := logs.entries(t, "DEBUG", "profile resolved")
 			if len(entries) != lookups {
