@@ -2,10 +2,10 @@
 title: 'Story 5.4: Retry a Profile lookup that failed transiently'
 type: 'bugfix'
 created: '2026-10-23'
-status: 'in-review'
+status: 'done'
 baseline_revision: 'fc4573c12bd4713e580e10c93fc4921e1d2c160c'
 review_loop_iteration: 0
-followup_review_recommended: false
+followup_review_recommended: true
 context:
   - '{project-root}/docs/implementation/epic-5-context.md'
   - '{project-root}/docs/implementation/epic-1-retro-2026-10-23.md'
@@ -153,3 +153,70 @@ ends within `profileTimeout` because every lookup ends with a message.
 - `go build ./... && go vet ./... && go test ./...` -- expected: pass
 - `gofmt -l .` -- expected: no output
 - `go test -race -count=20 -run 'Profile|Detected' ./internal/engine` -- expected: pass
+
+## Auto Run Result
+
+Status: done
+
+**Summary.** Transient Profile lookup failures are now retried: a timeout or a failed herdr
+foreground-process call gets up to 3 retries, waiting 2s, then 4s, then 8s (`tunables.go`). A timer
+goroutine sends a message for each retry, so nothing waits on the engine goroutine. Rule outcomes
+and an unreadable environment are never retried. If an Agent already holds a Profile resolved for
+its program, a transient failure leaves that Profile in place.
+
+While a reported Agent's Profile is being resolved again, its new rows are held until the lookup
+settles, so every row carries the Profile resolved for its own program. This covers a program
+change, a redetection and an epoch-keeping reconnect. The four Epic 1 retro items are done:
+- #1: rows are held as described above.
+- #4: `agent_detected` stores the new pane's program. The test was written first and reproduced
+  the fault (`agent w1:p4  blocked`).
+- #5: a reconnect that keeps the epoch re-resolves every Agent that has no lookup in flight.
+- #6: every Profile Map value is cleaned before the duplicate check.
+
+**Operator log sizing** (read-only, 2026-10-21 to 2026-10-23): 0 `profile resolved` entries with
+an error. The service logs at Info, so debug entries are never written. As an Info-level proxy:
+of 334 `agent seen` lines, 0 had Profile `unresolved`, and there were 0 `profile changed` lines.
+
+**Files**
+- `internal/engine/engine.go`: the retry and its message, keeping the Profile on a transient
+  failure, holding and releasing rows, the detected program, and re-resolving on reconnect.
+- `internal/engine/tunables.go`: `profileRetries`, `profileRetryDelay`, `profileRetryWait`.
+- `internal/engine/view.go`: the published view is not updated while rows are held.
+- `internal/config/config.go`: every Profile Map value is cleaned before the duplicate check, and
+  the error message now says so.
+- `internal/engine/profile_test.go`: new tests for every row of the matrix, plus the review gaps.
+- `internal/engine/engine_test.go`: `TestProfileFailures` covers retries;
+  `TestProfileReconnectDuringRedetect` asserts the reconnect starts no extra lookup.
+- `internal/engine/fake_test.go`: `TestMain` shortens the retry delay for tests.
+- `internal/config/config_test.go`: a case for a relative duplicate.
+
+**Review.** 28 findings:
+- 3 medium: patched.
+- 15 low: 10 patched, 5 rejected with reasons in the triage log.
+- 10 false.
+- 1 low deferred: user-facing documentation, which belongs to Story 5.8.
+
+What the patches did:
+- An epoch-keeping reconnect no longer supersedes a lookup already in flight, so it cannot restart
+  a hold.
+- Comments now say what `release` and the hold actually report.
+- The config error message mentions cleaning.
+- New tests: `TestProfileRetryWait`, `TestProfileHeldView`, `TestProfileHeldOldProgramRow`,
+  `TestProfileRetryReset`.
+
+**Follow-up review recommended: true.** Patched entries by verdict: high 0, medium 3, low 10. The
+unverified risk is how holds and retries interact under repeated `agent_detected` triggers. Each
+one supersedes the lookup in flight, so a hold can outlast `profileTimeout` while they keep
+arriving.
+
+**Verification.** Run after merging `feat/epic-5-after-0.5.0` (a58b1e3, which includes 5.12):
+- `go build ./...`, `go vet ./...`, `go test ./...` and `go test -race ./...` all pass.
+- `gofmt -l .` prints nothing.
+- `go test -race -count=20 -run 'Profile|Detected' ./internal/engine` passes (240s).
+
+**Residual risks**
+- While rows are held, the Board shows an Agent's last released state for up to `profileTimeout`
+  (2s). After a reconnect this applies to every Agent with a rule.
+- `Agents()` shows the held Status before the view does.
+- If a redetection is followed by a program change within `profileTimeout`, the Profile-change
+  line is printed before the old program's held row.
