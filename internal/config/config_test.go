@@ -232,6 +232,7 @@ func TestValidationErrors(t *testing.T) {
 		{name: "variable with NUL", file: "[profiles.claude]\nrule = \"env\"\nvariable = \"A\\u0000B\"\nabsent = \"a\"", key: "profiles.claude.variable"},
 		{name: "explicit empty config path", flags: Flags{Config: new("")}, key: "config"},
 		{name: "duplicate after expansion", file: "[profiles.claude]\nrule = \"env\"\nvariable = \"X\"\nabsent = \"a\"\nvalues = {\"~/x\" = \"p\", \"HOME/x\" = \"q\"}", key: `profiles.claude.values."~/x"`},
+		{name: "duplicate relative after cleaning", file: "[profiles.claude]\nrule = \"env\"\nvariable = \"X\"\nabsent = \"a\"\nvalues = {\"x\" = \"p\", \"x/\" = \"q\"}", key: `profiles.claude.values."x/"`},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

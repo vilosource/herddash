@@ -1770,19 +1770,21 @@ func TestProfileFailures(t *testing.T) {
 	cases := []struct {
 		name    string
 		prepare func(*fakeClient, *fakeEnviron)
+		// transient failures are retried profileRetries times.
+		transient bool
 	}{
 		{"timeout", func(_ *fakeClient, env *fakeEnviron) {
 			env.set(p1PID, claudeVar, "/h/.claude-cldw")
 			env.hold()
-		}},
+		}, true},
 		{"no foreground process", func(f *fakeClient, _ *fakeEnviron) {
 			f.mu.Lock()
 			delete(f.procs, "w1:p1")
 			f.mu.Unlock()
-		}},
+		}, true},
 		{"environment unreadable", func(_ *fakeClient, env *fakeEnviron) {
 			env.fail(p1PID, errors.New("operation not permitted"))
-		}},
+		}, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -1794,10 +1796,30 @@ func TestProfileFailures(t *testing.T) {
 					t.Errorf("reported after %v, before the timeout %v", d, profileTimeout)
 				}
 			}
-			entries := logs.entries(t, "DEBUG", "profile resolved")
-			if len(entries) != 1 || entries[0]["error"] == nil || entries[0]["value"] != nil {
-				t.Errorf("want one debug entry naming the error and no value: %v", entries)
+			lookups := 1
+			if c.transient {
+				lookups += profileRetries
+				awaitLog(t, logs, "WARN", "profile lookup failed", 1)
 			}
+			// Past the whole retry window, nothing more is tried.
+			time.Sleep(4 * profileRetryWait(profileRetries))
+			h.settle()
+			if n := h.fake.processCalls(); n != lookups {
+				t.Errorf("%d lookups, want %d", n, lookups)
+			}
+			if n := len(logs.entries(t, "WARN", "profile lookup failed")); c.transient && n != 1 {
+				t.Errorf("%d warnings on giving up, want 1", n)
+			}
+			entries := logs.entries(t, "DEBUG", "profile resolved")
+			if len(entries) != lookups {
+				t.Fatalf("%d debug entries, want %d: %v", len(entries), lookups, entries)
+			}
+			for _, e := range entries {
+				if e["error"] == nil || e["value"] != nil {
+					t.Errorf("want each debug entry naming the error and no value: %v", e)
+				}
+			}
+			h.rec.expect(t, "agent w1:p1 claude working profile=unresolved")
 		})
 	}
 }
@@ -2024,7 +2046,8 @@ func TestProfileSnapshotDuringResolve(t *testing.T) {
 }
 
 // TestProfileReconnectDuringRedetect: a reconnect that keeps the epoch while
-// a reported Agent's Profile is resolved again leaves that resolution intact.
+// a reported Agent's Profile is resolved again leaves that resolution intact:
+// the reconnect starts no lookup of its own for it (Story 5.4).
 func TestProfileReconnectDuringRedetect(t *testing.T) {
 	setProfileTimeout(t, wait)
 	h, env, _ := startedProfiled(t)
@@ -2042,6 +2065,9 @@ func TestProfileReconnectDuringRedetect(t *testing.T) {
 	h.rec.expect(t, "agent w1:p1 claude working profile=cldw", "reconnected 0.9.5 epoch 1 kept")
 	h.fake.awaitSubscribe("w1:p1")
 	h.settle()
+	if n := h.fake.processCalls(); n != 2 {
+		t.Errorf("%d lookups, want 2: the reconnect superseded the lookup in flight", n)
+	}
 	env.unblock()
 	h.rec.expect(t, "agent w1:p1 claude working profile=cldw", "reconnected 0.9.5 epoch 1 kept", "profile w1:p1 cldp previous cldw")
 	h.settle()

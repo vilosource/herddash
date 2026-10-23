@@ -170,7 +170,8 @@ func (e *Engine) viewOf(p *pane) core.AgentView {
 // noteView notes an agent change when a reported Agent's view differs from
 // the one last noted for it.
 func (e *Engine) noteView(p *pane) {
-	if !p.known {
+	// While its rows are held, the view keeps what was last released.
+	if !p.known || p.holdRows {
 		return
 	}
 	v := e.viewOf(p)

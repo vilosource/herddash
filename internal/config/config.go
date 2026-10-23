@@ -573,12 +573,11 @@ func buildProfiles(in map[string]fileProfile, source, home string) (map[core.Age
 			if name == ProfileUnresolved {
 				return nil, &Error{Key: vkey, Source: source, Msg: fmt.Sprintf("Profile name %q is reserved", ProfileUnresolved)}
 			}
-			expanded := expandHome(v, home)
-			if filepath.IsAbs(expanded) {
-				expanded = filepath.Clean(expanded)
-			}
+			// Cleaned whatever its form, as core.ResolveProfile compares
+			// them, so two values it cannot tell apart never both load.
+			expanded := filepath.Clean(expandHome(v, home))
 			if _, dup := values[expanded]; dup {
-				return nil, &Error{Key: vkey, Source: source, Msg: fmt.Sprintf("duplicates another value once expanded to %q", expanded)}
+				return nil, &Error{Key: vkey, Source: source, Msg: fmt.Sprintf("duplicates another value once expanded and cleaned to %q", expanded)}
 			}
 			values[expanded] = name
 		}
