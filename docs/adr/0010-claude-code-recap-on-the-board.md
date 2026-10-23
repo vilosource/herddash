@@ -6,6 +6,27 @@ consent, two lines, recaps should be up to date as often as possible". It amends
 [ADR-0009](0009-background-work-from-claude-code-transcripts.md): that no transcript text is ever
 kept, sent or shown.
 
+**Amended 2026-10-23** (Story 5.14): a second source, and local commands are not turns. Running
+`/recap` by hand writes no `away_summary`: Claude Code writes the command as a local command,
+three records observed in 2.1.292: an `isMeta` user record whose string content starts
+`<local-command-caveat>`, a user record whose string content starts `<command-name>`, and the
+result, a `system` record with `subtype: "local_command"`, a `commandRun` object
+(`{command, args}`, from 2.1.273) and a string `content` wrapped in
+`<local-command-stdout>`…`</local-command-stdout>` (older releases and some commands write the
+result as a user record whose content starts `<local-command-stdout>`). With recaps on, a
+non-sidechain `local_command` record whose `commandRun.command` is `"recap"` carries the recap:
+the text inside the wrapper, trimmed and capped exactly as an `away_summary`. Older Claude Code
+without `commandRun` gets no manual recap. Only structure is read to tell these records apart (the
+type, subtype, `isSidechain`, `isMeta`, `isCompactSummary` and which tag a string content starts
+with); `commandRun.command` is compared with "recap" only and never kept; the `<command-name>`
+record's name and arguments, and any other command's output, are never looked at; and with recaps
+off neither is a `local_command`'s content or `commandRun`. None of a local command's records is a
+turn start any more, nor is the summary record `/compact` writes before them (a user record with
+`isCompactSummary` true), so `/usage`, `/compact`, `/model` and the rest no longer clear a recap or
+reset the turn: the `<command-name>` record is *pending*, and is confirmed as a turn start only
+when a turn start or end comes before that command's result. A skill command (a user record starting
+`<command-message>`) still starts a turn at once.
+
 ## Context
 
 The operator asked whether Claude Code's recap could be shown in the Boxes: "the idea is to have

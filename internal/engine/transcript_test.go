@@ -425,3 +425,57 @@ func TestTranscriptRecapDropped(t *testing.T) {
 	}
 	r.recapNoLeak(t)
 }
+
+// A local command's records as Claude Code 2.1.292 writes them (Story
+// 5.14): the caveat, the <command-name> record and the local_command result.
+// Every text is invented; /usage's output is marked SECRET, the manual
+// recap RECAP-TEXT.
+const (
+	trCaveat  = `{"type":"user","isSidechain":false,"isMeta":true,"message":{"role":"user","content":"<local-command-caveat>CAVEAT-SECRET</local-command-caveat>"}}`
+	trCmdName = `{"type":"user","isSidechain":false,"message":{"role":"user","content":"<command-name>/cmd</command-name>\n<command-args>ARGS-SECRET</command-args>"}}`
+	trUsage   = `{"type":"system","subtype":"local_command","isSidechain":false,"isMeta":false,"level":"info",` +
+		`"commandRun":{"command":"usage","args":"ARGS-SECRET"},"content":"<local-command-stdout>USAGE-SECRET</local-command-stdout>"}`
+	trManualRecap = `{"type":"system","subtype":"local_command","isSidechain":false,"isMeta":false,"level":"info",` +
+		`"commandRun":{"command":"recap","args":""},"content":"<local-command-stdout>I did RECAP-TEXT by hand. Next I'll ship it.</local-command-stdout>"}`
+	trManualRecapWant = "I did RECAP-TEXT by hand. Next I'll ship it."
+)
+
+// TestTranscriptManualRecap covers Story 5.14's acceptance at the engine:
+// with recaps on, a Finished Agent's recap survives a /usage and is replaced
+// by a manual /recap within the usual read; a Working Agent whose main turn
+// ended keeps it ended through local commands; the log carries no text.
+func TestTranscriptManualRecap(t *testing.T) {
+	t.Run("finished", func(t *testing.T) {
+		r := startTranscript(t, core.StatusDone, []string{trPrompt, trEndTurn, trRecap}, recapsOn)
+		r.awaitRecap(trRecapWant)
+		writeTranscript(t, r.path, trCaveat, trCmdName, trUsage)
+		r.sess.moreReads(t, r.h)
+		if v := r.view(); v.Recap != trRecapWant || v.Class != core.ClassFinished {
+			t.Errorf("after /usage: recap %q, class %v", v.Recap, v.Class)
+		}
+		writeTranscript(t, r.path, trCaveat, trCmdName, trManualRecap)
+		v := r.awaitRecap(trManualRecapWant)
+		if v.Class != core.ClassFinished || v.SortKey.ClassRank != 1 {
+			t.Errorf("view %+v", v)
+		}
+		r.expectSessionRows(t)
+		r.recapNoLeak(t)
+	})
+	t.Run("turn stays ended", func(t *testing.T) {
+		r := startTranscript(t, core.StatusWorking, []string{trPrompt, trSubStart, trEndTurn}, recapsOn)
+		r.awaitTasks(1, true)
+		writeTranscript(t, r.path, trCaveat, trCmdName, trUsage)
+		r.sess.moreReads(t, r.h)
+		if v := r.view(); !v.Background || v.BackgroundTasks != 1 {
+			t.Errorf("after /usage: background %v, %d tasks", v.Background, v.BackgroundTasks)
+		}
+		writeTranscript(t, r.path, trCaveat, trCmdName, trManualRecap)
+		if v := r.awaitRecap(trManualRecapWant); !v.Background {
+			t.Errorf("after /recap: background %v", v.Background)
+		}
+		writeTranscript(t, r.path, trPrompt)
+		r.awaitTasks(1, false)
+		r.awaitRecap("")
+		r.recapNoLeak(t)
+	})
+}
