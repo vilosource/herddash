@@ -43,6 +43,14 @@ const (
 	// Agent's first report waits for it, and running out gives
 	// core.ProfileUnresolved.
 	defaultProfileTimeout = 2 * time.Second
+	// defaultProfileRetries is how many times a Profile lookup that failed
+	// transiently (it ran out of profileTimeout, or herdr's foreground process
+	// call failed) is tried again before the engine gives up until the next
+	// trigger. A rule outcome or an unreadable environment is never retried.
+	defaultProfileRetries = 3
+	// defaultProfileRetryDelay is the wait before the first retry of a
+	// transiently failed Profile lookup; each further retry doubles it.
+	defaultProfileRetryDelay = 2 * time.Second
 	// defaultBackgroundCheckDelay is how long after a background-capable
 	// Agent's Status changes to done or idle, or its process becomes known,
 	// the engine first reads that process's children for background work: a
@@ -91,6 +99,8 @@ var (
 	reconcileInterval      = defaultReconcileInterval
 	refusedRecheckInterval = defaultRefusedRecheckInterval
 	profileTimeout         = defaultProfileTimeout
+	profileRetries         = defaultProfileRetries
+	profileRetryDelay      = defaultProfileRetryDelay
 	retentionSweepInterval = defaultRetentionSweepInterval
 	backgroundCheckDelay   = defaultBackgroundCheckDelay
 	backgroundInterval     = defaultBackgroundInterval
@@ -108,4 +118,14 @@ func reconnectDelay(n int) time.Duration {
 		d *= 2
 	}
 	return min(d, reconnectMaxDelay)
+}
+
+// profileRetryWait is the wait before the nth retry of a Profile lookup
+// (n >= 1): profileRetryDelay, doubled for each retry before it.
+func profileRetryWait(n int) time.Duration {
+	d := profileRetryDelay
+	for i := 1; i < n; i++ {
+		d *= 2
+	}
+	return d
 }

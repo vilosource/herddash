@@ -870,6 +870,7 @@ func TestMain(m *testing.M) {
 	resyncMinInterval = 10 * time.Millisecond
 	refusedRecheckInterval = 10 * time.Millisecond
 	profileTimeout = 200 * time.Millisecond
+	profileRetryDelay = 10 * time.Millisecond
 	os.Exit(m.Run())
 }
 
