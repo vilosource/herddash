@@ -222,7 +222,9 @@ builds take the commit from Go's embedded VCS info (`go run` embeds none, so it 
 workflows' triggers, concurrency, permissions, pinned actions and Go version, and CI's job set.
 `TestReleaseBuild` also checks every binary's `vcs.revision` equals `git rev-parse HEAD` and
 `vcs.modified` matches the tree (`git status --porcelain`), so a dirty local tree still passes;
-with `CI` true, as GitHub sets it, it requires git and a clean tree and fails otherwise.
+with `CI` true, as GitHub sets it, it requires git and a clean tree and fails otherwise. Outside
+CI it skips both checks in a linked git worktree (`.git` is a file, as under `.claude/worktrees/`):
+Go 1.26 stamps such a worktree's binaries with the enclosing checkout's commit and state.
 
 No npm, no build step for assets. Web assets are embedded in the binary.
 

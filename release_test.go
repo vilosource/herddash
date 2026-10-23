@@ -67,7 +67,10 @@ func releaseTreeState(t *testing.T) (head string, dirty, check bool) {
 		}
 	}
 	ci, _ := strconv.ParseBool(os.Getenv("CI"))
-	dirty, check, fatal, msg := judgeTree(ci, status, err)
+	// A linked worktree's .git is a file, not a directory.
+	fi, statErr := os.Lstat(".git")
+	linked := statErr == nil && fi.Mode().IsRegular()
+	dirty, check, fatal, msg := judgeTree(ci, linked, status, err)
 	switch {
 	case fatal:
 		t.Fatal(msg)
@@ -81,13 +84,20 @@ func releaseTreeState(t *testing.T) (head string, dirty, check bool) {
 // settings from `git status --porcelain` output, or the error that stopped git
 // (no git, no repository). Without git the checks are skipped with a log
 // message, unless ci is set (as GitHub sets CI); under ci a modified tree fails
-// too, since CI must prove clean-tree builds.
-func judgeTree(ci bool, status string, gitErr error) (dirty, check, fatal bool, msg string) {
+// too, since CI must prove clean-tree builds. In a linked git worktree (linked:
+// .git is a file) the checks are skipped outside CI: Go 1.26 does not take a
+// .git file as a repository root, so a worktree nested inside another checkout
+// (as .claude/worktrees/ are) gets the enclosing checkout's commit and state
+// stamped in. CI checks out a plain clone, where the checks always run.
+func judgeTree(ci, linked bool, status string, gitErr error) (dirty, check, fatal bool, msg string) {
 	if gitErr != nil {
 		if ci {
 			return false, false, true, fmt.Sprintf("CI is set but the build's commit cannot be checked: %v", gitErr)
 		}
 		return false, false, false, fmt.Sprintf("skipping the vcs.revision and vcs.modified checks: %v", gitErr)
+	}
+	if linked && !ci {
+		return false, false, false, "skipping the vcs.revision and vcs.modified checks: a linked git worktree, whose .git file Go 1.26 does not recognise"
 	}
 	dirty = status != ""
 	if dirty && ci {
@@ -101,23 +111,26 @@ func TestJudgeTree(t *testing.T) {
 	notRepo := fmt.Errorf("git rev-parse HEAD: %w", errors.New("exit status 128"))
 	for _, c := range []struct {
 		name                string
-		ci                  bool
+		ci, linked          bool
 		status              string
 		err                 error
 		dirty, check, fatal bool
 	}{
-		{"clean", false, "", nil, false, true, false},
-		{"clean under CI", true, "", nil, false, true, false},
-		{"dirty locally", false, " M release_test.go", nil, true, true, false},
-		{"untracked locally", false, "?? new.go", nil, true, true, false},
-		{"dirty under CI", true, "?? new.go", nil, true, true, true},
-		{"no git locally", false, "", noGit, false, false, false},
-		{"no git under CI", true, "", noGit, false, false, true},
-		{"tracked modification under CI", true, " M release_test.go", nil, true, true, true},
-		{"not a repository locally", false, "", notRepo, false, false, false},
-		{"not a repository under CI", true, "", notRepo, false, false, true},
+		{"clean", false, false, "", nil, false, true, false},
+		{"clean under CI", true, false, "", nil, false, true, false},
+		{"dirty locally", false, false, " M release_test.go", nil, true, true, false},
+		{"untracked locally", false, false, "?? new.go", nil, true, true, false},
+		{"dirty under CI", true, false, "?? new.go", nil, true, true, true},
+		{"no git locally", false, false, "", noGit, false, false, false},
+		{"no git under CI", true, false, "", noGit, false, false, true},
+		{"tracked modification under CI", true, false, " M release_test.go", nil, true, true, true},
+		{"not a repository locally", false, false, "", notRepo, false, false, false},
+		{"not a repository under CI", true, false, "", notRepo, false, false, true},
+		{"linked worktree locally", false, true, " M release_test.go", nil, false, false, false},
+		{"linked worktree under CI", true, true, "", nil, false, true, false},
+		{"dirty linked worktree under CI", true, true, "?? new.go", nil, true, true, true},
 	} {
-		dirty, check, fatal, msg := judgeTree(c.ci, c.status, c.err)
+		dirty, check, fatal, msg := judgeTree(c.ci, c.linked, c.status, c.err)
 		if dirty != c.dirty || check != c.check || fatal != c.fatal {
 			t.Errorf("%s: dirty %v check %v fatal %v, want %v %v %v", c.name, dirty, check, fatal, c.dirty, c.check, c.fatal)
 		}
