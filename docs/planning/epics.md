@@ -890,6 +890,8 @@ So that an Agent does not stay `unresolved` until its next agent detection.
 **Then** it retries with a bounded number of attempts and a backoff from `tunables.go`, never on the engine goroutine's critical path
 **And** a rule outcome (`unresolved` from an unmatched variable, the absent case) is never retried
 **And** `TestProfileFailures` and a new test prove both
+**And** when an Agent's Agent Program changes, its Profile is resolved again before the next row is written, so no row pairs the new program with the old Profile (Epic 1 retro #1), and `agent_detected` for a new pane records its program (#4, test first)
+**And** a reconnect that keeps the epoch re-resolves Profiles, or a test documents why it need not (#5), and every Profile Map value is cleaned before the duplicate check (#6)
 
 ### Story 5.5: Tighter import rules and Transition invariants (ADR-0011)
 
@@ -930,6 +932,9 @@ So that procenv's darwin reader and the launchd plist lint are exercised automat
 **When** CI runs
 **Then** a `macos-latest` job runs `go test ./...` and `TestLaunchdAgentLints` does not skip there
 **And** the existing ubuntu jobs are unchanged
+**And** CI vets, tests and runs `scripts/release-build.sh` under the release toolchain (Go 1.27.2) as well as go.mod's minimum (Epic 4 retro #1)
+**And** `TestReleaseBuild` asserts each binary carries the commit and a clean-tree build setting (#2)
+**And** on ubuntu, `TestSystemdUnitVerifies` fails rather than skips when `systemd-analyze` is missing (#3)
 
 ### Story 5.8: Documents agents read match the code
 
@@ -945,6 +950,8 @@ So that a fresh session is not misled.
 **And** the engine tunables are documented beside the configuration, and the spine's Deferred list no longer names them
 **And** the spine's AD-3 notes that a moved pane is a removal plus a new Agent, and `TestPaneMoved`'s comment agrees
 **And** every closed entry in `deferred-work.md` is marked resolved with where
+**And** the retrospectives' documentation items are applied: the spine's AD-3 says the epoch and terminal map are persisted (`server_state`) as engine state outside the append-only record (and ADR-0005 agrees), the Deferred list drops the milestone-2 column seed, "OS hostname" becomes the short hostname, the PRD glossary and spine describe the v4 layout instead of a flat Finished top zone, the spine's JSON omission rule matches the empty strings the API sends and names the packages owning wire shapes, and `docs/install.md`'s shell blocks stop on a failed checksum, an empty database path and wait for launchd to stop
+**And** the retrospectives' low-severity items are added to `deferred-work.md` with their reasons, and the process lessons (copy a deferral into its target story's criteria; give every spine Open item an owner; run new concurrency tests with `-race -count=50`; test record-derived state across a Daemon restart; force rollback tests to fail mid-transaction) are recorded where agents read them
 
 ### Story 5.9: Decide whether acknowledgement is needed (PRD §8 Q1)
 
@@ -959,4 +966,66 @@ So that the Board gets an acknowledgement feature only if it needs one.
 **Then** if there are none, PRD §8 Q1 is closed as "not needed" with the query and its result
 **And** if there are some, the evidence is prepared for the operator and the story stops for their decision
 **And** before that date the story is skipped, not failed
+
+### Story 5.10: A new Agent in a reused pane starts fresh
+
+As the operator,
+I want a Claude session started again in the same pane to start with its own Waiting Time,
+So that it never shows as Finished with the previous session's wait after a Daemon restart.
+
+Source: Epic 2 retrospective F-1 and Epic 1 retrospective #19. Decided by the orchestrator under the
+operator's delegation (no schema change, no ADR): the record's key stays host, server, epoch and
+pane id; the Waiting Time fold starts over at an Agent's first row (a row with no previous Status)
+and when the saved `terminal_id` for the pane changes; AD-3 documents that one AgentKey can hold
+successive Agents separated by such a row.
+
+**Acceptance Criteria:**
+
+**Given** an Agent is quit and a new one starts in the same pane, and the Daemon then restarts keeping the epoch
+**When** the Daemon rebuilds Waiting Times from the record
+**Then** the new Agent's Attention Class and Waiting Time come only from rows since its first row
+**And** the same holds when a pane id comes back on a new terminal while the Daemon was down
+**And** restart and Retention-sweep tests cover both, with the test fake matching the store's behaviour
+**And** history for the Agent includes the Transition that began its current class (Epic 3 retro)
+
+### Story 5.11: The Board notices a hung Daemon
+
+As the operator,
+I want the Board to dim and say so when the Daemon stops sending, even if the connection stays open,
+So that I never act on stale Boxes that look live.
+
+**Acceptance Criteria:**
+
+**Given** the Daemon's event stream stays open but sends nothing, not even its keepalive, for longer than the keepalive interval allows
+**When** the Board checks the stream
+**Then** it treats the Daemon as lost (strip and dimming as for a dropped stream) and reconnects
+**And** the keepalive is something the page can observe, a skipped sequence number or a rejected `state` event triggers a fresh `/api/state` load, covered by `node --test`
+**And** the version strip says the version could not be read, rather than "below the supported minimum", when herdr's version is unknown
+**And** a Go test drives the SSE handler from the real engine and replays its publications through `applyEvent`, asserting the Board model equals the published view
+
+### Story 5.12: The engine treats repeated failures as a lost connection
+
+As the operator,
+I want the connection strip to say so when the Daemon can no longer get snapshots from herdr,
+So that a herdr that answers but cannot snapshot does not leave the Board looking current.
+
+**Acceptance Criteria:**
+
+**Given** snapshots keep failing after startup
+**When** the failures pass a bound set in `tunables.go`
+**Then** ConnectionTruth reports the connection lost and the Board shows it, and recovery clears it
+**And** a well-formed but unexpected lifecycle event leads to a resnapshot, not a full reconnect, covered by a test
+
+### Story 5.13: Board text and grouping are exact
+
+As the operator,
+I want each Box's text and workspace group to show exactly what herdr and Claude Code report,
+So that names are not mangled and groups are not merged.
+
+**Acceptance Criteria:**
+
+**Given** a Context Line or session name containing bidi control characters, or starting with `-`, `#` or an emoji
+**When** it is shown on the Board
+**Then** bidi controls are neutralised and the text is isolated, and only Claude Code's own glyph prefix is stripped
+**And** workspaces with no known position each get their own group with their own name, ordered after positioned ones
 
