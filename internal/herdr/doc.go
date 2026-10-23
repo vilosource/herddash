@@ -11,7 +11,10 @@
 //
 // When a subscription stream can no longer be trusted (events_lost, any other
 // herdr error code, a closed or failed connection, an undecodable line) the
-// Subscription delivers one Health signal last and closes its channel. Retrying,
+// Subscription delivers one Health signal last and closes its channel. A line on
+// the lifecycle subscription that decodes as JSON but is not an event it can
+// deliver is not one of those: it arrives as a non-final delivery flagged
+// Unexpected, and the stream goes on. Retrying,
 // reconnecting, resyncing, gating on version and tracking the pane set are the
 // engine's.
 //
