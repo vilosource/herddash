@@ -28,6 +28,7 @@ var listen = net.Listen
 
 // readHeaderTimeout bounds how long a client may take to send its request
 // headers; shutdownTimeout bounds the graceful HTTP shutdown when serve ends.
+// Both are listed under "Fixed timings" in docs/config.example.toml.
 const (
 	readHeaderTimeout = 10 * time.Second
 	shutdownTimeout   = 5 * time.Second

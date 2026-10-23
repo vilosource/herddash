@@ -1,6 +1,6 @@
 # ADR-0005: The stored record is append-only, keyed by Host, Server, server epoch and pane
 
-**Status: Accepted (amended 2026-10-16).** Written 2026-10-15 during the architecture run, under the operator's
+**Status: Accepted (amended 2026-10-16 and 2026-10-23).** Written 2026-10-15 during the architecture run, under the operator's
 delegation, from decisions the operator confirmed in the PRD (FR-6 to FR-9a, FR-11). This record
 fixes the invariants of the stored record. Its exact columns and indexes are architecture seed,
 owned by the migrations once milestone 2 writes them.
@@ -80,3 +80,17 @@ against herdr 0.9.5". The decision stands. Two parts of it are now precise:
   is stored when a Transition comes from a snapshot, is NULL for a `live` Transition, and is
   compared only between Transitions of one server instance. Order within an Agent is `observed_at`
   and then the engine's recording order.
+
+## Amendment, 2026-10-23: the engine's saved state is not the record (Story 5.8)
+
+Story 2.2 added a `server_state` table (migration 0002): one row per Host and Server holding the
+epoch in force and the pane-to-`terminal_id` map of the latest applied snapshot, so a Daemon
+restart applies the epoch rule (architecture spine AD-3) against what the previous run last saw
+instead of starting again at epoch 1. That row is upserted in place, which this record's
+append-only rule would forbid, and it is allowed because it is **engine state kept in the same
+database, not part of the record**. It touches neither the transitions table nor resync markers,
+no history is derived from it, and Retention does not sweep it, so a row for a Host or Server
+that is no longer observed stays until removed by hand (harmless: a renamed Host is a new
+identity and starts at epoch 1, as it should). The decision above holds for Transitions and resync
+markers unchanged. This amendment is recorded after the fact: migration 0002 shipped with Story
+2.2 on 2026-10-19, and the epics' retrospectives found that this record had not caught up.
