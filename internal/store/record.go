@@ -123,7 +123,7 @@ func (s *Store) Append(t core.Transition) error {
 func (s *Store) AppendBackfill(ctx context.Context, ts []core.Transition) (added, flagged int, err error) {
 	for _, t := range ts {
 		_, hasPrev := t.Previous()
-		_, hasOrder := t.HerdrOrder()
+		_, hasOrder := t.HerdrOrder() // core already refuses this (ADR-0011, Story 5.5); kept as defence in depth
 		if t.Provenance() != core.ProvenanceBackfill || t.Key().Epoch != core.BackfillEpoch || t.ImportKey() == "" ||
 			hasPrev || hasOrder || t.HerdrVersion() != "" || t.ObservedBy() != core.ObservedByHerdr {
 			return 0, 0, fmt.Errorf("store: append backfill: %s at %d is not a backfill row (provenance %s)",

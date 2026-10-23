@@ -13,12 +13,15 @@
 - source_spec: `docs/implementation/spec-1-3-milestone-1-findings-against-a-herdr-0-9-5-binary.md`
   summary: Nothing enforces that internal/herdr and its gen/genwire use only the standard library.
   evidence: arch_test.go's stdlibOnly holds only core; widening it changes the arch test's permitted set, which CLAUDE.md says needs an ADR.
+  resolved: Story 5.5, by ADR-0011; arch_test.go's stdlibOnly now holds herdr, which covers gen and genwire, and the fixture breaks it in internal/herdr and genwire.
 - source_spec: `docs/implementation/spec-1-3-milestone-1-findings-against-a-herdr-0-9-5-binary.md`
   summary: internal/engine may import internal/herdr/gen directly, so wire types can leak past the herdr package edge (AD-5, ADR-0006).
   evidence: arch_test.go maps internal/herdr/** to one node; confining gen to internal/herdr is an arch-test change needing an ADR.
+  resolved: Story 5.5, by ADR-0011; arch_test.go's checkTree reports any non-test import of internal/herdr/gen or a package under it from outside internal/herdr, and the fixture's internal/engine/leak.go proves it.
 - source_spec: `docs/implementation/spec-1-3-milestone-1-findings-against-a-herdr-0-9-5-binary.md`
   summary: Story 1.5 should decide whether core.NewTransition rejects a HerdrOrder on a live or backfill Transition.
   evidence: Finding Q3 makes state_change_seq snapshot-only and per server instance; the field comment says nil for live but nothing enforces it, and enforcing adds a public sentinel to core.
+  resolved: Story 5.5; core.NewTransition rejects a HerdrOrder unless provenance is snapshot, with the sentinel core.ErrInvalidHerdrOrder (internal/core/types.go), matching migration 0001's CHECK.
 - source_spec: `docs/implementation/spec-1-5-watch-every-agent-s-status-live.md`
   summary: Bound the snapshot → subscribe → reject loop when herdr keeps listing a pane it refuses to subscribe (Story 1.7's minimum resync interval).
   evidence: onSubscribed on a known pane requests a snapshot and apply resubscribes at once; nothing limits the rate if the rejection persists.

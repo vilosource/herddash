@@ -11,6 +11,7 @@ func TestNewTransition(t *testing.T) {
 	live := AgentKey{Host: "h", Server: "default", Epoch: 1, PaneID: "w1:p1"}
 	backfill := AgentKey{Host: "h", Server: "default", Epoch: BackfillEpoch, PaneID: "w1:p1"}
 	const at int64 = 1_760_000_000_000
+	order := uint64(5)
 
 	tests := []struct {
 		name    string
@@ -135,6 +136,22 @@ func TestNewTransition(t *testing.T) {
 			field:   "import key",
 		},
 		{
+			name: "snapshot with herdr order",
+			in:   TransitionInput{Key: live, New: StatusDone, HerdrOrder: &order, Provenance: ProvenanceSnapshot, ObservedAt: at},
+		},
+		{
+			name:    "live with herdr order",
+			in:      TransitionInput{Key: live, New: StatusDone, HerdrOrder: &order, Provenance: ProvenanceLive, ObservedAt: at},
+			wantErr: ErrInvalidHerdrOrder,
+			field:   "herdr order",
+		},
+		{
+			name:    "backfill with herdr order",
+			in:      TransitionInput{Key: backfill, New: StatusDone, HerdrOrder: &order, Provenance: ProvenanceBackfill, ImportKey: "k", ObservedAt: at},
+			wantErr: ErrInvalidHerdrOrder,
+			field:   "herdr order",
+		},
+		{
 			name:    "snapshot with import key",
 			in:      TransitionInput{Key: live, New: StatusIdle, Provenance: ProvenanceSnapshot, ImportKey: "k", ObservedAt: at},
 			wantErr: ErrInvalidImportKey,
@@ -151,6 +168,9 @@ func TestNewTransition(t *testing.T) {
 				}
 				if got.New() != tc.in.New || got.Provenance() != tc.in.Provenance || got.Key() != tc.in.Key {
 					t.Fatalf("NewTransition returned %+v, want fields from %+v", got, tc.in)
+				}
+				if o, ok := got.HerdrOrder(); ok != (tc.in.HerdrOrder != nil) || (ok && o != *tc.in.HerdrOrder) {
+					t.Fatalf("HerdrOrder() = %d, %v; want it to match %v", o, ok, tc.in.HerdrOrder)
 				}
 				return
 			}
@@ -169,14 +189,12 @@ func TestNewTransition(t *testing.T) {
 }
 
 func TestTransitionRoundTrip(t *testing.T) {
-	order := uint64(42)
 	in := TransitionInput{
 		Key:          AgentKey{Host: "mac", Server: "work", Epoch: BackfillEpoch, PaneID: "w2:p3"},
 		AgentProgram: "claude",
 		Profile:      "cldw",
 		Previous:     statusPtr(StatusWorking),
 		New:          StatusBlocked,
-		HerdrOrder:   &order,
 		HerdrVersion: "0.9.5",
 		ObservedAt:   1_760_000_000_123,
 		Provenance:   ProvenanceBackfill,
@@ -203,8 +221,8 @@ func TestTransitionRoundTrip(t *testing.T) {
 	if got := tr.New(); got != in.New {
 		t.Errorf("New() = %q, want %q", got, in.New)
 	}
-	if got, ok := tr.HerdrOrder(); !ok || got != 42 {
-		t.Errorf("HerdrOrder() = %d, %v; want 42, true", got, ok)
+	if _, ok := tr.HerdrOrder(); ok {
+		t.Error("HerdrOrder() present on a backfill Transition, want absent")
 	}
 	if got := tr.HerdrVersion(); got != in.HerdrVersion {
 		t.Errorf("HerdrVersion() = %q, want %q", got, in.HerdrVersion)
@@ -220,6 +238,25 @@ func TestTransitionRoundTrip(t *testing.T) {
 	}
 	if !tr.PossiblySpurious() {
 		t.Error("PossiblySpurious() = false, want true")
+	}
+}
+
+// TestTransitionHerdrOrderRoundTrip checks herdr's order on the one provenance
+// that may carry it.
+func TestTransitionHerdrOrderRoundTrip(t *testing.T) {
+	order := uint64(42)
+	tr, err := NewTransition(TransitionInput{
+		Key:        AgentKey{Host: "mac", Server: "work", Epoch: 3, PaneID: "w2:p3"},
+		New:        StatusDone,
+		HerdrOrder: &order,
+		ObservedAt: 1_760_000_000_123,
+		Provenance: ProvenanceSnapshot,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := tr.HerdrOrder(); !ok || got != 42 {
+		t.Errorf("HerdrOrder() = %d, %v; want 42, true", got, ok)
 	}
 }
 
@@ -249,7 +286,7 @@ func TestTransitionCopiesPointers(t *testing.T) {
 		Previous:   &prev,
 		New:        StatusDone,
 		HerdrOrder: &order,
-		Provenance: ProvenanceLive,
+		Provenance: ProvenanceSnapshot,
 		ObservedAt: 1,
 	})
 	if err != nil {

@@ -185,8 +185,6 @@ func TestAppendBackfillRefusesOtherRows(t *testing.T) {
 			Provenance: core.ProvenanceLive}),
 		"previous": mustTransition(t, core.TransitionInput{Key: key, Previous: status(core.StatusWorking), New: core.StatusDone,
 			ObservedAt: 1000, Provenance: core.ProvenanceBackfill, ImportKey: "p"}),
-		"order": mustTransition(t, core.TransitionInput{Key: key, HerdrOrder: order(1), New: core.StatusDone,
-			ObservedAt: 1000, Provenance: core.ProvenanceBackfill, ImportKey: "o"}),
 		"version": mustTransition(t, core.TransitionInput{Key: key, HerdrVersion: "0.9.2", New: core.StatusDone,
 			ObservedAt: 1000, Provenance: core.ProvenanceBackfill, ImportKey: "v"}),
 	} {

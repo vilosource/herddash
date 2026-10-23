@@ -34,8 +34,19 @@ var permitted = map[string][]string{
 	"procenv":  {},
 }
 
-// stdlibOnly lists nodes that may import nothing outside the standard library.
-var stdlibOnly = map[string]bool{"core": true}
+// stdlibOnly lists nodes that may import nothing outside the standard library,
+// apart from the module's own packages, which the edge rules govern. "herdr"
+// covers internal/herdr/gen and genwire too (ADR-0011).
+var stdlibOnly = map[string]bool{"core": true, "herdr": true}
+
+// genPath is herdr's generated wire types. It and every package under it may be
+// imported only from internal/herdr or a package under it (ADR-0011).
+const genPath = modulePath + "/internal/herdr/gen"
+
+// inHerdr reports whether a module-relative directory is internal/herdr or under it.
+func inHerdr(dir string) bool {
+	return dir == "internal/herdr" || strings.HasPrefix(dir, "internal/herdr/")
+}
 
 // noClock lists nodes whose non-test code must never read or wait on the clock.
 var noClock = map[string]bool{"core": true}
@@ -146,6 +157,9 @@ func checkTree(root string) ([]string, error) {
 			}
 
 			if ipath == modulePath || strings.HasPrefix(ipath, modulePath+"/") {
+				if (ipath == genPath || strings.HasPrefix(ipath, genPath+"/")) && !inHerdr(dir) {
+					violations = append(violations, relPath+": imports "+ipath+", which only internal/herdr may import")
+				}
 				rel := strings.TrimPrefix(strings.TrimPrefix(ipath, modulePath), "/")
 				to := nodeOf(rel)
 				switch {
@@ -213,7 +227,11 @@ func TestCheckTreeCatchesViolations(t *testing.T) {
 		"internal/core/bad.go: core may import only the standard library, imports example.com/notstd",
 		"internal/core/bad.go:11: core must not call time.Since; take the clock as a parameter",
 		"internal/core/dot.go: core must not dot-import time",
+		"internal/engine/leak.go: imports github.com/vilosource/herddash/internal/herdr/gen, which only internal/herdr may import",
+		"internal/engine/leak.go: imports github.com/vilosource/herddash/internal/herdr/gen/genwire, which only internal/herdr may import",
 		"internal/foo: package is not part of the architecture spine",
+		"internal/herdr/bad.go: herdr may import only the standard library, imports example.com/notstd",
+		"internal/herdr/gen/genwire/bad.go: herdr may import only the standard library, imports example.com/notstd",
 		"offspine: package is not part of the architecture spine",
 	}
 	got := map[string]bool{}
@@ -225,9 +243,14 @@ func TestCheckTreeCatchesViolations(t *testing.T) {
 			t.Errorf("missing violation %q\ngot:\n  %s", w, strings.Join(violations, "\n  "))
 		}
 	}
-	// The permitted edge (cmd -> store) and the exempt _test.go file must not be reported.
+	// The permitted edges (cmd -> store, engine -> herdr), imports of gen from
+	// internal/herdr and a package under it, and the exempt _test.go files must
+	// not be reported.
 	for _, v := range violations {
-		if strings.Contains(v, "cmd -> store") || strings.Contains(v, "ok_test.go") {
+		if strings.Contains(v, "cmd -> store") || strings.Contains(v, "engine -> herdr") ||
+			strings.Contains(v, "ok_test.go") || strings.Contains(v, "leak_test.go") ||
+			(strings.HasPrefix(v, "internal/herdr/bad.go:") && strings.Contains(v, "internal/herdr/gen")) ||
+			(strings.HasPrefix(v, "internal/herdr/gen/genwire/bad.go:") && strings.Contains(v, "only internal/herdr may import")) {
 			t.Errorf("unexpected violation: %s", v)
 		}
 	}
