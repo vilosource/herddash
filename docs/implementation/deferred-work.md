@@ -67,9 +67,16 @@
 - source_spec: `docs/implementation/spec-transcript-background.md`
   summary: A task whose start is in a transcript but whose end never arrives (Claude Code exiting or crashing with tasks running, then the session resumed) may keep an Agent BACKGROUND until the start falls out of an 8 MiB re-read window; nothing ages tasks out, and the process table only ever adds to the count, never proves an open command gone.
   evidence: Unverified (would be medium). On 2026-10-22 no transcript held more than one sessionId, so whether a resumed session copies earlier task starts into its new file is unknown. Settle it by resuming a session that had a background command open at exit and reading the new transcript's markers; if starts are copied, drop an open command when the process check finds no tool shell for some time.
+  resolved: 2026-10-23, Story 5.2 (`docs/implementation/spec-5-2-a-resumed-session-does-not-keep-finished-background-tasks.md`). On Claude Code 2.1.292 a resumed session copies no starts into a new file: it appends to the same transcript and, as it starts, enqueues a `stopped` notification for every task with no completion record (`docs/research/claude-code-resume-background-tasks-2026-10-23.md`). `stopped` now closes a task (ADR-0009 amended); no time-based drop was added.
 - source_spec: `docs/implementation/spec-transcript-background.md`
   summary: Whether `sessions/<pid>.json` updates `sessionId` when `/clear` starts a new session in the same process is not known; if it does not, the old transcript's open tasks stay on the Box.
   evidence: Unverified (would be medium). Settle it by running `/clear` in a session with a background task open and reading the record's sessionId before and after.
 - source_spec: `docs/implementation/spec-claude-recap.md`
   summary: The recap row's layout (the board--recaps toggle, the taller grid, the two-line clamp) is verified only by the hand-run board-browser.mjs; run it in CI.
   evidence: Removing the toggle or the .board--recaps rule leaves every CI check green; same root as the Story 3.9 deferral to run the browser check in CI.
+- source_spec: `docs/implementation/spec-5-2-a-resumed-session-does-not-keep-finished-background-tasks.md`
+  summary: Between a Claude Code crash and a resume inside herdr, whether herddash's session watch for the dead process ends, so its open start stops showing, is untested.
+  evidence: Unverified (would be medium). The 2026-10-23 experiment ran outside herdr. Settle it by crashing a Claude Code Agent in an isolated herdr and watching its Box.
+- source_spec: `docs/implementation/spec-5-2-a-resumed-session-does-not-keep-finished-background-tasks.md`
+  summary: What a resume writes for a background subagent left open, and whether `--continue` behaves like `--resume`, were not observed; a status other than stopped would leave the subagent open.
+  evidence: Unverified (would be medium). Only shell commands and `--resume` were tested on 2.1.292. Settle it by repeating the SIGKILL-and-resume experiment with a background Agent task and with `--continue`.

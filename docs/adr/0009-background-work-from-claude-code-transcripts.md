@@ -67,6 +67,18 @@ an ADR.
   existing process check). That check also covers a subagent's own background shells, which the
   main transcript is presumed not to record (UNVERIFIED: they are expected in the subagent's own
   transcript; not observed).
+  *Amended 2026-10-23 (Story 5.2):* `stopped` closes a task too. Claude Code 2.1.292, resuming a
+  session, appends to the same transcript (it copies no starts into a new one) and, as it starts,
+  enqueues a notification with status `stopped` for every task that has a start and no completion
+  record. Without it, a command left open by a crashed session kept the resumed Agent BACKGROUND
+  until its start fell out of the re-read window. `stopped` does not mean the work ended: after a
+  crash or "Move to background and exit" the tool shell was seen still running, orphaned
+  (reparented to launchd). It means the resumed session holds no completion record and will never
+  be told of one, so the Agent is no longer waiting on it; closing it is deliberate even while an
+  orphaned shell may still run, which is no child of the Claude Code process, so the process check
+  does not count it either. Any other status, or none, still leaves a task
+  open, and no task is aged out by time. Evidence:
+  [the resume experiment](../research/claude-code-resume-background-tasks-2026-10-23.md).
 - **View, not record.** `AgentView` gains `background_tasks` (a count). The Attention Class, the
   Fold, Waiting Time and the stored record are unchanged: no stored schema change.
 - **Main turn over, a background subagent running.** herdr reports `working` and Claude Code's
