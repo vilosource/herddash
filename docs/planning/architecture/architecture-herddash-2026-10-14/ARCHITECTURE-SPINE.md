@@ -78,6 +78,10 @@ Arrows are the only permitted import directions. `core` imports only the standar
   The sort key is `[zone, group, class_rank, start, agent_key]`, compared element by element:
   - **Top zone** (Needs you, Finished): `group` is 0, so the zone is flat across workspaces.
   - **Lower zone** (Working, Unknown): `group` is the workspace's position in herdr's snapshot.
+    A workspace herdr did not position gets its own group, 2^52 plus a hash of its workspace id,
+    after every positioned group and before the unknown sentinel, which only a pane with no
+    workspace id gets (Story 5.13). A hash collision, negligible at that width, would merge two
+    such groups.
 
   The Board does exactly three things beyond rendering. It advances the displayed Waiting Time from
   the view's start instant. It orders Boxes by the sort key. It draws a workspace header wherever

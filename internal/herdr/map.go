@@ -52,6 +52,7 @@ func mapSnapshot(s gen.SessionSnapshot) core.Snapshot {
 			ProjectDir:        projectDir,
 			WorkspaceLabel:    w.label,
 			TabLabel:          tabs[tabID],
+			WorkspaceID:       workspaceID,
 			WorkspacePosition: w.position,
 			PaneTitle:         paneTitle,
 			PanePosition:      positions[tabID][paneID],

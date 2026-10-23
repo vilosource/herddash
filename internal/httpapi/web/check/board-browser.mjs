@@ -316,6 +316,8 @@ async function main() {
     {
       const sent = structuredClone(state);
       for (const a of sent.agents) a.recap = a.status === "working" ? RECAP : "";
+      // The Needs you Box gets a Context Line, which it shows inside a <bdi>.
+      for (const a of sent.agents) if (a.attention_class === "needs_you") a.context_line = "fix-auth-bug";
       const { result: added } = await browser.send("Page.addScriptToEvaluateOnNewDocument", {
         source: `window.EventSource = class extends EventTarget {
           static CLOSED = 2;
@@ -340,7 +342,9 @@ async function main() {
               return {
                 kind: b.className, height: b.getBoundingClientRect().height, label: b.getAttribute("aria-label"),
                 titleIsLabel: b.title === b.getAttribute("aria-label"),
-                ctxClass: c.className, ctxText: c.textContent, ctxHeight: c.getBoundingClientRect().height,
+                ctxClass: c.className, ctxText: c.textContent,
+                ctxBdi: c.children.length === 1 && c.firstElementChild.tagName === "BDI" && c.firstElementChild.textContent === c.textContent,
+                ctxHeight: c.getBoundingClientRect().height,
                 ctxScroll: c.scrollHeight, ctxClient: c.clientHeight, lineHeight: parseFloat(cs.lineHeight),
                 clamp: cs.webkitLineClamp || cs.getPropertyValue("-webkit-line-clamp"), ellipsis: cs.textOverflow,
               };
@@ -364,6 +368,11 @@ async function main() {
         withRecap,
       );
       check("Box without a recap keeps its Context Line row", other.ctxClass === "context line", other);
+      check(
+        "the context row's text, recap or Context Line, sits in a <bdi>",
+        withRecap.ctxBdi && other.ctxBdi && other.ctxText === "fix-auth-bug",
+        x.boxes,
+      );
       check(
         "while a Box has a recap, every Box is one line taller",
         x.boxes.every((b) => Math.abs(b.height - (needs.height + line)) < 1),

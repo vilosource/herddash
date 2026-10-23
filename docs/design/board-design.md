@@ -104,11 +104,14 @@ read `IDLE`, and the Box shrank to 8.25rem. `docs/design/board.html` predates al
 **Order.** Boxes arrive sorted by `sort_key`, `[zone, group, class_rank, start, key]`. Zone 0 is
 Needs you alone, longest wait first; zone 1 is every other Agent, grouped by workspace position
 and ranked Finished 1, Idle 2, Background 3, Working 4, Unknown 5, each class newest first, so a
-zone-1 `start` is the negated class start (operator decision 2026-10-21, which replaced Working 1,
-Background 2, Finished 3, Idle 4, Unknown 5). A Board that re-sorts must tie-break exactly as the Daemon does
-(`internal/core/view.go`, `SortKey.compare`): zone, group, class rank, start, then the AgentKey
-as host, server, epoch (numerically) and pane id. It must never compare `sort_key[4]` as one
-string. Otherwise it should trust the API's order.
+zone-1 `start` is the negated class start (operator decision 2026-10-21, which replaced Working
+1, Background 2, Finished 3, Idle 4, Unknown 5). A workspace herdr did not position gets its own
+group and header after the positioned ones (Story 5.13); such groups come in a stable but
+arbitrary order, a hash of the workspace id, each headed by its label or `(unlisted workspace)`.
+Agents with no workspace id at all come last, under `(no workspace)`. A Board that re-sorts must
+tie-break exactly as the Daemon does (`internal/core/view.go`, `SortKey.compare`): zone, group,
+class rank, start, then the AgentKey as host, server, epoch (numerically) and pane id. It must
+never compare `sort_key[4]` as one string. Otherwise it should trust the API's order.
 
 ## Emphasis by class
 

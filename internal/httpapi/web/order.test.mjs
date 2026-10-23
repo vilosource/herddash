@@ -219,8 +219,14 @@ test("golden fixture views keep their heading and directory as sent", () => {
   assert.ok(fixture.input.some(({ view: v }) => v.directory.startsWith("~/")), "no fixture directory starts with ~/");
 });
 
-test("header label: the workspace, or (no workspace)", () => {
+test("header label: the workspace, (unlisted workspace), or (no workspace)", () => {
   assert.equal(headerLabel({ workspace: "ops" }), "ops");
+  // An unlabelled workspace herdr did not list has its own group below the
+  // sentinel; only the sentinel group (no workspace id) is (no workspace).
+  assert.equal(headerLabel({ workspace: "", sort_key: [1, 2 ** 52 + 7, 4, -1, "k"] }), "(unlisted workspace)");
+  assert.equal(headerLabel({ workspace: "", sort_key: [1, UNKNOWN - 1, 4, -1, "k"] }), "(unlisted workspace)");
+  assert.equal(headerLabel({ workspace: "", sort_key: [1, UNKNOWN, 4, -1, "k"] }), "(no workspace)");
+  assert.equal(headerLabel({ workspace: "ws", sort_key: [1, 2 ** 52 + 7, 4, -1, "k"] }), "ws");
   assert.equal(headerLabel({ workspace: "" }), "(no workspace)");
   assert.equal(headerLabel({}), "(no workspace)");
 });
@@ -352,6 +358,32 @@ test("golden fixture: needs you alone on top, then each group finished, idle, ba
   const one = groups.find((g) => g.label === "herddash");
   assert.deepEqual(one.views.map(boxKind), ["finished", "idle", "background", "working", "unknown"]);
   assert.equal(one.counts, "1 finished · 1 idle · 1 background · 1 working");
+});
+
+test("golden fixture: each unpositioned workspace has its own header and label, after the positioned ones", () => {
+  // Story 5.13: a workspace herdr did not position gets its own group, above
+  // every real position and below the unknown sentinel (no workspace id).
+  const { groups } = layout(fixture.input.map((i) => i.view).reverse());
+  const panesOf = (g) => g.views.map((v) => v.key.pane_id);
+  const w7 = groups.findIndex((g) => panesOf(g).includes("w7:p1"));
+  const w8 = groups.findIndex((g) => panesOf(g).includes("w8:p1"));
+  const w9 = groups.findIndex((g) => panesOf(g).includes("w9:p1"));
+  assert.ok(w7 >= 0 && w8 >= 0 && w9 >= 0);
+  assert.notEqual(w7, w8);
+  assert.deepEqual(panesOf(groups[w7]), ["w7:p1"]);
+  assert.deepEqual(panesOf(groups[w8]), ["w8:p1"]);
+  assert.equal(groups[w7].label, "scratch");
+  assert.equal(groups[w8].label, "(unlisted workspace)");
+  assert.equal(groups[w9].label, "(no workspace)");
+  const positioned = groups.filter((g) => g.views[0].sort_key[1] < 2 ** 52);
+  assert.ok(positioned.length > 0);
+  for (const i of [w7, w8]) {
+    const g = groups[i].views[0].sort_key[1];
+    assert.ok(g >= 2 ** 52 && g < UNKNOWN, String(g));
+    assert.ok(i >= positioned.length, "after every positioned group");
+  }
+  assert.equal(w9, groups.length - 1);
+  assert.equal(groups[w9].views[0].sort_key[1], UNKNOWN);
 });
 
 test("layout: golden fixture's top zone and groups", () => {

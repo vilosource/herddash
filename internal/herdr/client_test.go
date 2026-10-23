@@ -117,9 +117,9 @@ func TestSnapshot(t *testing.T) {
 	}
 	wantContext := []core.PaneContext{
 		// w1:t1 is split side by side; w2:t1 has one pane, so no position.
-		{ProjectDir: "/private/tmp/hd13", WorkspaceLabel: "probe", TabLabel: "1", WorkspacePosition: 1, PanePosition: "left"},
-		{ProjectDir: "/private/tmp/hd13", WorkspaceLabel: "probe", TabLabel: "1", WorkspacePosition: 1, PanePosition: "right"},
-		{ProjectDir: "/private/tmp", WorkspaceLabel: "second", TabLabel: "1", WorkspacePosition: 2},
+		{ProjectDir: "/private/tmp/hd13", WorkspaceLabel: "probe", TabLabel: "1", WorkspaceID: "w1", WorkspacePosition: 1, PanePosition: "left"},
+		{ProjectDir: "/private/tmp/hd13", WorkspaceLabel: "probe", TabLabel: "1", WorkspaceID: "w1", WorkspacePosition: 1, PanePosition: "right"},
+		{ProjectDir: "/private/tmp", WorkspaceLabel: "second", TabLabel: "1", WorkspaceID: "w2", WorkspacePosition: 2},
 	}
 	for i, w := range wantContext {
 		if got := snap.Panes[i].Context; got != w {
@@ -342,8 +342,9 @@ func TestMapSnapshot(t *testing.T) {
 				Agents: []gen.AgentInfo{{PaneID: "w1:p2", TerminalID: "t2", WorkspaceID: "w1", TabID: "w1:t1", Agent: str("codex"), AgentStatus: "blocked", StateChangeSeq: u64(4)}},
 			},
 			want: []core.PaneObservation{
-				{PaneID: "w1:p1", TerminalID: "t1", WorkspaceID: "w1", TabID: "w1:t1"},
-				{PaneID: "w1:p2", TerminalID: "t2", WorkspaceID: "w1", TabID: "w1:t1",
+				// A workspace missing from the list: no label or position, but the id.
+				{PaneID: "w1:p1", TerminalID: "t1", WorkspaceID: "w1", TabID: "w1:t1", Context: core.PaneContext{WorkspaceID: "w1"}},
+				{PaneID: "w1:p2", TerminalID: "t2", WorkspaceID: "w1", TabID: "w1:t1", Context: core.PaneContext{WorkspaceID: "w1"},
 					Agent: &core.AgentObservation{AgentProgram: "codex", Status: core.StatusBlocked, StateChangeSeq: u64(4)}},
 			},
 		},
@@ -403,13 +404,13 @@ func TestMapSnapshot(t *testing.T) {
 		},
 		want: []core.PaneObservation{
 			{PaneID: "w1:p1", WorkspaceID: "w1", TabID: "w1:t1",
-				Context: core.PaneContext{ProjectDir: "/src/a", WorkspaceLabel: "first", TabLabel: "main", WorkspacePosition: 2, PaneTitle: "fix"}},
+				Context: core.PaneContext{ProjectDir: "/src/a", WorkspaceLabel: "first", TabLabel: "main", WorkspaceID: "w1", WorkspacePosition: 2, PaneTitle: "fix"}},
 			{PaneID: "w2:p1", WorkspaceID: "w2", TabID: "w2:t1",
-				Context: core.PaneContext{ProjectDir: "/home/b", WorkspaceLabel: "second", TabLabel: "aux", WorkspacePosition: 1, PaneTitle: "session"},
+				Context: core.PaneContext{ProjectDir: "/home/b", WorkspaceLabel: "second", TabLabel: "aux", WorkspaceID: "w2", WorkspacePosition: 1, PaneTitle: "session"},
 				Agent:   &core.AgentObservation{AgentProgram: "claude", Status: core.StatusIdle}},
-			{PaneID: "w9:p1", WorkspaceID: "w9", TabID: "w9:t1", Context: core.PaneContext{ProjectDir: "/c"}},
+			{PaneID: "w9:p1", WorkspaceID: "w9", TabID: "w9:t1", Context: core.PaneContext{ProjectDir: "/c", WorkspaceID: "w9"}},
 			{PaneID: "w3:p1", WorkspaceID: "w2", TabID: "w2:t1",
-				Context: core.PaneContext{ProjectDir: "/d", WorkspaceLabel: "second", TabLabel: "aux", WorkspacePosition: 1},
+				Context: core.PaneContext{ProjectDir: "/d", WorkspaceLabel: "second", TabLabel: "aux", WorkspaceID: "w2", WorkspacePosition: 1},
 				Agent:   &core.AgentObservation{AgentProgram: "codex", Status: core.StatusWorking}},
 		},
 	})
