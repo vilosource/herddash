@@ -86,6 +86,9 @@ const (
 //     string starts that background command;
 //   - a toolUseResult with isAsync true, status "async_launched" and an
 //     agentId starts that subagent;
+//   - a toolUseResult with success exactly true and a resumedAgentId (a
+//     finished subagent resumed by SendMessage, Story 5.16) starts that
+//     subagent again; its message and pin are never looked at;
 //   - a user record whose toolUseResult has a string task_type and a task_id
 //     (TaskStop's result) ends that task as killed: a task stopped this way
 //     gets no notification (seen 2026-10-21 for every background command
@@ -262,7 +265,9 @@ func isObject(raw json.RawMessage) bool {
 }
 
 // taskStart reads a toolUseResult for a background command's or subagent's
-// start.
+// start: a backgroundTaskId, an async launch's agentId, or a successful
+// resume's resumedAgentId (Story 5.16), which reopens that subagent so its
+// next notification closes it again.
 func taskStart(raw json.RawMessage) (id string, command bool) {
 	if !isObject(raw) {
 		return "", false
@@ -272,6 +277,8 @@ func taskStart(raw json.RawMessage) (id string, command bool) {
 		IsAsync          bool            `json:"isAsync"`
 		Status           json.RawMessage `json:"status"`
 		AgentID          json.RawMessage `json:"agentId"`
+		Success          json.RawMessage `json:"success"`
+		ResumedAgentID   json.RawMessage `json:"resumedAgentId"`
 	}
 	if json.Unmarshal(raw, &r) != nil {
 		return "", false
@@ -280,6 +287,9 @@ func taskStart(raw json.RawMessage) (id string, command bool) {
 		return id, true
 	}
 	if id := jsonString(r.AgentID); r.IsAsync && jsonString(r.Status) == "async_launched" && taskID(id) {
+		return id, false
+	}
+	if id := jsonString(r.ResumedAgentID); string(bytes.TrimSpace(r.Success)) == "true" && taskID(id) {
 		return id, false
 	}
 	return "", false

@@ -91,6 +91,20 @@ an ADR.
   counting once the command ends. A background subagent across `/clear` was not observed. Tasks
   are never carried from one session id's transcript into another's. Evidence:
   [the `/clear` experiment](../research/claude-code-clear-background-tasks-2026-10-23.md).
+  *Amended 2026-10-23 (Story 5.16):* a resumed subagent is a start marker too. When SendMessage
+  resumes a finished subagent, Claude Code writes a main-thread `user` record whose
+  `toolUseResult` has exactly the keys `success`, `message`, `resumedAgentId` and `pin`; a
+  `toolUseResult` whose `success` is JSON `true` and whose `resumedAgentId` is a well-formed task
+  id now opens that id as a subagent (never a command), and the existing notification handling
+  closes it. Only those two fields are decoded; `message` and `pin` are never looked at. Without
+  it the Box under-counted: the operator saw 1 background task while 3 ran. Evidence (structure
+  only, every transcript under the four config directories, Claude Code 2.1.267 to 2.1.292): 89
+  resume records in 18 transcripts, all `success` true and none a sidechain; every resumed id was
+  a subagent's `agentId` launched earlier in the same transcript; 87 of the 89 resumes are
+  followed by an enqueued `<task-notification>` for the same `<task-id>`, all `completed`, and
+  the other 2 sit within the last 6 lines of their transcripts, still running when read. A resume
+  whose notification never comes stays open, as a launch does; no task is aged out. A resume of a
+  subagent launched in another session's transcript (across `/clear`) was not observed.
 - **View, not record.** `AgentView` gains `background_tasks` (a count). The Attention Class, the
   Fold, Waiting Time and the stored record are unchanged: no stored schema change.
 - **Main turn over, a background subagent running.** herdr reports `working` and Claude Code's
