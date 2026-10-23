@@ -195,6 +195,16 @@ go build -o /tmp/herddash ./cmd/herddash
 node internal/httpapi/web/check/board-browser.mjs /tmp/herddash
 ```
 
+Two more CI jobs run beside those. `macos` runs `go test -race ./...` on macos-latest with go.mod's
+Go, so procenv's darwin reader and `TestLaunchdAgentLints` (`plutil -lint`) run in CI.
+`release-toolchain` runs on ubuntu-latest with the spine's release Go (1.27.2, which
+`release_test.go` holds equal to the spine's row): `go vet ./...`, `go test -race ./...`, then
+`scripts/release-build.sh 0.0.0-ci <commit> "$RUNNER_TEMP/dist"` with `sha256sum -c`, four
+checksum lines and the linux/amd64 binary's `version` output checked. Tests that need a tool
+(`plutil`, `systemd-analyze`) skip when it is missing, unless `HERDDASH_REQUIRE_TOOLS`, a
+space-separated list, names it; then they fail. The `macos` job sets it to `plutil` and
+`release-toolchain` to `systemd-analyze`; locally, leave it unset.
+
 `arch_test.go` at the module root enforces the spine's import graph over every non-test Go file in
 the module: it fails, naming the edge, on any import between internal packages that the spine's
 diagram does not draw, on any package outside the spine, on any non-standard import in
@@ -209,7 +219,10 @@ structural change and needs an ADR.
 <commit> <outdir>` does, so a release binary prints e.g. `herddash 0.1.0 (<commit>)`. Unstamped
 builds take the commit from Go's embedded VCS info (`go run` embeds none, so it prints `unknown`).
 `release_test.go` runs that script (only the host's target under `-short`) and checks the release
-workflows' triggers, concurrency, permissions, pinned actions and Go version.
+workflows' triggers, concurrency, permissions, pinned actions and Go version, and CI's job set.
+`TestReleaseBuild` also checks every binary's `vcs.revision` equals `git rev-parse HEAD` and
+`vcs.modified` matches the tree (`git status --porcelain`), so a dirty local tree still passes;
+with `CI` true, as GitHub sets it, it requires git and a clean tree and fails otherwise.
 
 No npm, no build step for assets. Web assets are embedded in the binary.
 

@@ -37,6 +37,7 @@
 - source_spec: `docs/implementation/spec-1-9-know-which-profile-each-agent-runs-under.md`
   summary: Run the test suite on a macOS runner in CI so procenv's darwin reader (kern.procargs2) is exercised automatically.
   evidence: Story 1.9 review; ci.yml tests only on ubuntu-latest, so the reader the operator's Macs depend on is only vetted and cross-compiled there.
+  resolved: 2026-10-23, Story 5.7 (`docs/implementation/spec-5-7-ci-tests-on-macos.md`). CI's `macos` job (`.github/workflows/ci.yml`) runs `go test -race ./...` on macos-latest with go.mod's Go, so procenv's darwin tests run on every pull request. Run locally on macOS (Go 1.26.5 and 1.27.2, `CI=true`, clean clone): every package passes; the first pull-request run proves it on macos-latest.
 - source_spec: `docs/implementation/spec-1-9-know-which-profile-each-agent-runs-under.md`
   summary: Decide whether a Profile resolution that failed transiently (timeout, herdr call error) should be retried, rather than leaving the Agent unresolved until the next agent detection.
   evidence: Story 1.9 review, unverified (medium if real); settle it by counting "profile resolved" debug entries with an error in dogfooding logs.
@@ -65,6 +66,7 @@
 - source_spec: `docs/implementation/spec-4-2-start-with-my-session-on-macos-and-linux.md`
   summary: Run deploy_test.go's `plutil -lint` check in CI on a macOS runner; today it runs only on a developer's Mac.
   evidence: CI's test job is ubuntu-latest only, so TestLaunchdAgentLints always skips there; the strict Go decoder in TestLaunchdAgent catches most malformed plists on Linux.
+  resolved: 2026-10-23, Story 5.7 (`docs/implementation/spec-5-7-ci-tests-on-macos.md`). CI's `macos` job runs the suite with `HERDDASH_REQUIRE_TOOLS: plutil`, so `TestLaunchdAgentLints` fails rather than skips if plutil is missing; locally, `HERDDASH_REQUIRE_TOOLS=plutil go test -run TestLaunchdAgentLints -v .` passes, not skipped, and `HERDDASH_REQUIRE_TOOLS=systemd-analyze` makes `TestSystemdUnitVerifies` fail on macOS naming the variable.
 - source_spec: `docs/implementation/spec-transcript-background.md`
   summary: A task whose start is in a transcript but whose end never arrives (Claude Code exiting or crashing with tasks running, then the session resumed) may keep an Agent BACKGROUND until the start falls out of an 8 MiB re-read window; nothing ages tasks out, and the process table only ever adds to the count, never proves an open command gone.
   evidence: Unverified (would be medium). On 2026-10-22 no transcript held more than one sessionId, so whether a resumed session copies earlier task starts into its new file is unknown. Settle it by resuming a session that had a background command open at exit and reading the new transcript's markers; if starts are copied, drop an open command when the process check finds no tool shell for some time.
