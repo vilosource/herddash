@@ -200,9 +200,20 @@ export function inNeedsYou(view) {
   return view.sort_key[0] === 0;
 }
 
-// headerLabel is the workspace header's text for the group starting at view.
+// UNPOSITIONED_GROUP is the first group core gives a workspace herdr did not
+// list (2^52, core.UnpositionedGroup); such groups run up to, not including,
+// the unknown sentinel Number.MAX_SAFE_INTEGER.
+const UNPOSITIONED_GROUP = 2 ** 52;
+
+// headerLabel is the workspace header's text for the group starting at view:
+// the workspace's label; else "(unlisted workspace)" for a workspace herdr did
+// not list, which has its own group below the sentinel and never a label;
+// else "(no workspace)".
 export function headerLabel(view) {
-  return view.workspace || "(no workspace)";
+  if (view.workspace) return view.workspace;
+  const g = view.sort_key ? view.sort_key[1] : undefined;
+  if (g >= UNPOSITIONED_GROUP && g < Number.MAX_SAFE_INTEGER) return "(unlisted workspace)";
+  return "(no workspace)";
 }
 
 // groupCounts is a workspace group's counts in the group's reading order,

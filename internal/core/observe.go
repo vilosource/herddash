@@ -51,6 +51,9 @@ type PaneContext struct {
 	// pane lives in.
 	WorkspaceLabel string
 	TabLabel       string
+	// WorkspaceID is herdr's id of the workspace the pane lives in. It is not
+	// shown; it gives a workspace herdr did not position its own Board group.
+	WorkspaceID string
 	// WorkspacePosition is the 1-based position of the pane's workspace in
 	// herdr's workspace order; 0 when the snapshot did not list the workspace.
 	WorkspacePosition int

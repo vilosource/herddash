@@ -81,10 +81,14 @@ function fillBox(box, view, now) {
   }
 
   // Always present, so an empty Context Line keeps its row. A recap takes
-  // the row in its place, up to two lines, the rest in the label.
+  // the row in its place, up to two lines, the rest in the label. The text
+  // is a pane's process's to set, so it sits in a <bdi>: whatever direction
+  // it takes cannot reorder the rest of the Box (the Daemon also drops bidi
+  // controls from the Context Line).
   const text = contextText(view);
-  const ctx = el("p", recapOf(view) ? "context recap" : "context line", text);
-  if (!text) ctx.setAttribute("aria-hidden", "true");
+  const ctx = el("p", recapOf(view) ? "context recap" : "context line");
+  if (text) ctx.appendChild(el("bdi", null, text));
+  else ctx.setAttribute("aria-hidden", "true");
 
   // Last row: the heading on the left, the class and Waiting Time on the
   // right, bold and never truncated.
