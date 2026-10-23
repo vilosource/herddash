@@ -96,6 +96,9 @@ func (s *fakeSub[T]) event(ev T) { s.in <- herdr.Delivery[T]{Event: ev} }
 
 func (s *fakeSub[T]) health(h *herdr.Health) { s.in <- herdr.Delivery[T]{Health: h} }
 
+// unexpected delivers a line flagged unexpected, which is not final.
+func (s *fakeSub[T]) unexpected(err error) { s.in <- herdr.Delivery[T]{Unexpected: err} }
+
 // fakeClient is a scripted herdr. It records every call in order. Snapshot
 // returns the current snapshot, or, while gated, blocks until the test
 // releases it.

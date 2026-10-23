@@ -282,9 +282,6 @@ func TestSubscriptionHealth(t *testing.T) {
 func TestLifecycleUndecodable(t *testing.T) {
 	tests := map[string]string{
 		"garbage":       `{"event":`,
-		"unknown kind":  `{"event":"pane_focused","data":{"type":"pane_focused","pane_id":"w1:p1","workspace_id":"w1"}}`,
-		"no data":       `{"event":"pane_closed"}`,
-		"no pane id":    `{"event":"pane_closed","data":{"type":"pane_closed","workspace_id":"w1"}}`,
 		"bad data type": `{"event":"pane_moved","data":{"pane":"w1:p1"}}`,
 	}
 	for name, line := range tests {
@@ -297,6 +294,43 @@ func TestLifecycleUndecodable(t *testing.T) {
 			defer sub.Close()
 			if events, _ := lastHealth(t, collect(t, sub), HealthUndecodable); len(events) != 0 {
 				t.Errorf("events %+v", events)
+			}
+		})
+	}
+}
+
+// A lifecycle line that decodes as JSON but is not an event the subscription
+// can deliver arrives flagged Unexpected, and the stream goes on: a later event
+// still arrives and nothing ends the stream but the connection closing.
+func TestLifecycleUnexpected(t *testing.T) {
+	closed := `{"event":"pane_closed","data":{"type":"pane_closed","pane_id":"w2:p2","workspace_id":"w2"}}`
+	tests := map[string]string{
+		"unknown kind": `{"event":"pane_focused","data":{"type":"pane_focused","pane_id":"w1:p1","workspace_id":"w1"}}`,
+		"no data":      `{"event":"pane_closed"}`,
+		"no pane id":   `{"event":"pane_closed","data":{"type":"pane_closed","workspace_id":"w1"}}`,
+	}
+	for name, line := range tests {
+		t.Run(name, func(t *testing.T) {
+			s, _ := streamFake(t, false, line, line, closed)
+			sub, err := s.client().SubscribeLifecycle(testContext(t))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer sub.Close()
+			ds := collect(t, sub)
+			if len(ds) != 4 {
+				t.Fatalf("deliveries %+v, want two unexpected, one event, one health", ds)
+			}
+			for i, d := range ds[:2] {
+				if d.Unexpected == nil || !errors.Is(d.Unexpected, errUnexpectedEvent) || d.Health != nil || d.Event != (core.LifecycleEvent{}) {
+					t.Errorf("delivery %d %+v, want unexpected with no event or health", i, d)
+				}
+			}
+			if d := ds[2]; d.Unexpected != nil || d.Health != nil || d.Event.Kind != core.LifecycleClosed || d.Event.PaneID != "w2:p2" {
+				t.Errorf("delivery 2 %+v, want the pane_closed event", d)
+			}
+			if d := ds[3]; d.Health == nil || d.Health.Kind != HealthClosed {
+				t.Errorf("last delivery %+v, want health closed", d)
 			}
 		})
 	}

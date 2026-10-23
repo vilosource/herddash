@@ -478,7 +478,41 @@ func TestTranscriptManualRecap(t *testing.T) {
 		r.awaitRecap("")
 		r.recapNoLeak(t)
 	})
+	// Story 5.15: a bash-mode command (`!cmd`) is a turn, since Claude Code
+	// sends its output to the model, which replies; unlike a local command it
+	// clears the recap and reopens the turn.
+	t.Run("bash mode is a turn", func(t *testing.T) {
+		r := startTranscript(t, core.StatusDone, []string{trPrompt, trEndTurn, trRecap}, recapsOn)
+		r.awaitRecap(trRecapWant)
+		writeTranscript(t, r.path, trBashInput, trBashStdout)
+		r.awaitRecap("")
+		writeTranscript(t, r.path, trEndTurn)
+		r.sess.moreReads(t, r.h)
+		if v := r.view(); v.Recap != "" || v.Class != core.ClassFinished || v.SortKey.ClassRank != 1 {
+			t.Errorf("view %+v", v)
+		}
+		r.expectSessionRows(t)
+		r.recapNoLeak(t)
+	})
+	t.Run("bash mode reopens the turn", func(t *testing.T) {
+		r := startTranscript(t, core.StatusWorking, []string{trPrompt, trSubStart, trEndTurn}, recapsOn)
+		r.awaitTasks(1, true)
+		writeTranscript(t, r.path, trBashInput, trBashStdout)
+		r.awaitTasks(1, false)
+		writeTranscript(t, r.path, trEndTurn)
+		r.awaitTasks(1, true)
+		r.recapNoLeak(t)
+	})
 }
+
+// A bash-mode command's records as Claude Code 2.1.292 writes them (Story
+// 5.15): the input and its output, stderr inside the stdout record. Every
+// text is invented and marked SECRET.
+const (
+	trBashInput  = `{"type":"user","isSidechain":false,"message":{"role":"user","content":"<bash-input>CMD-SECRET</bash-input>"}}`
+	trBashStdout = `{"type":"user","isSidechain":false,"turnOrigin":"human","message":{"role":"user",` +
+		`"content":"<bash-stdout>OUT-SECRET</bash-stdout><bash-stderr>ERR-SECRET</bash-stderr>"}}`
+)
 
 // trClearedSession is the session id the record names after /clear.
 const trClearedSession = "sess-0002"

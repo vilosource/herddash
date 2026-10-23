@@ -14,6 +14,10 @@ const (
 	// defaultSnapshotRetryDelay is how long the engine waits before reading
 	// again after a snapshot read failed, once started.
 	defaultSnapshotRetryDelay = 2 * time.Second
+	// defaultSnapshotFailuresBeforeLost is how many snapshot reads in a row
+	// must fail, once started, before the engine treats herdr as lost and
+	// reconnects. Fewer are retried as blips.
+	defaultSnapshotFailuresBeforeLost = 3
 	// defaultReconnectInitialDelay is how long the engine waits after losing
 	// herdr before its first attempt to start again, and after its first failed
 	// attempt. Each further failure doubles the wait.
@@ -108,6 +112,10 @@ var (
 	sessionInterval        = defaultSessionInterval
 	sessionTimeout         = defaultSessionTimeout
 )
+
+// snapshotFailuresBeforeLost is defaultSnapshotFailuresBeforeLost; tests may
+// lower it.
+var snapshotFailuresBeforeLost = defaultSnapshotFailuresBeforeLost
 
 // reconnectDelay is the wait after the nth consecutive failed attempt to start
 // (n >= 1): the initial delay, doubled for each further failure, never more

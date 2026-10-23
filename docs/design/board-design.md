@@ -187,6 +187,20 @@ connection comes first, then version.
   and cannot signal lost ones. Boxes are shown.
 - **Refused** (`gate: refused`): a red strip naming `herdr_version` and `herdr_minimum` and saying
   nothing is being recorded. No Boxes are shown.
+- **Version unreadable** (*added 2026-10-23*): when `herdr_version` is empty or absent, herddash
+  could not read herdr's version, and the gate treats it as below the minimum. The strips say so
+  instead of calling it old. Refused reads "herddash could not read herdr's version. It needs
+  *Y* or newer and is recording nothing." Advisory reads "herddash could not read herdr's version;
+  recording under the dogfooding flag.", plus the resync sentence when `resync_guaranteed` is not
+  true.
+
+**A silent Daemon is a lost stream.** *Added 2026-10-23 (ADR-0012).* The Daemon sends a
+`keepalive` event every 15 s. When the stream delivers nothing at all for 35 s, the Daemon is hung
+or the socket is half-open, so the Board shows the slate "Lost contact with herddash.
+Reconnecting…" strip at once, dims every Box and reopens the stream with its usual backoff. A
+`state` or change event the Board rejects, or a skipped view sequence, also counts as a lost
+stream and is reopened, because a reopened stream starts with the whole state. The strip for
+those shows only if the reopen has not healed within the usual 3 s grace period.
 
 **A restarted Daemon reloads the page.** *Added 2026-10-21.* When the stream's `state` event
 comes from another Daemon run (`run_id`), such as a Daemon restarted onto a new build, the Board

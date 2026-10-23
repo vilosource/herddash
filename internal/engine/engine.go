@@ -116,6 +116,11 @@ type TranscriptFunc = func(t procenv.Tail, path string, line func([]byte)) (proc
 // panes it starts tracking (and every pane after a reconnect), so a pane herdr
 // keeps rejecting is subscribed again only by a resync, once per interval.
 // While connected and ready, a snapshot is also read every reconcileInterval.
+// A failed read once ready is read again after snapshotRetryDelay, and
+// snapshotFailuresBeforeLost failures in a row are a lost connection, handled
+// as a lost lifecycle stream is, so a herdr that answers nothing is never
+// shown as connected. A lifecycle line flagged unexpected (well-formed, but not
+// an event the engine can act on) ends nothing: the engine reads a snapshot.
 //
 // Version gate (FR-16, AD-11): every start decides the gate on the version
 // ping returns, before the lifecycle subscription. A refused herdr is observed
@@ -248,6 +253,13 @@ type Engine struct {
 	connected bool
 	ready     bool
 	everReady bool
+	// snapFailures counts consecutive failed snapshot reads once ready; a
+	// successful read or a disconnect clears it, and reaching
+	// snapshotFailuresBeforeLost loses the connection.
+	snapFailures int
+	// unexpectedWarned is set once this connection logged an unexpected
+	// lifecycle line at warn; later ones are logged at debug.
+	unexpectedWarned bool
 	// readyOnce is set once any connection of this run became ready, so a
 	// later one is a reconnect in the record. Unlike everReady, a saved state
 	// does not set it.
@@ -782,8 +794,10 @@ func (e *Engine) retry(cause error) {
 	e.awaitConnect(wait)
 }
 
-// lost handles a health signal on the lifecycle stream once started: the
-// engine can no longer trust it has seen every event, so it starts again. A
+// lost handles a health signal on the lifecycle stream once started, after
+// which the engine can no longer trust it has seen every event, or snapshot
+// reads failing snapshotFailuresBeforeLost times in a row, after which it can
+// no longer read herdr's state. Either way it starts again. A
 // loss counts into the backoff like a failed start, unless the connection had
 // stayed up for reconnectStableAfter, so a herdr that drops right after each
 // start is not hammered.
@@ -794,7 +808,7 @@ func (e *Engine) lost(h error) {
 	e.failures++
 	e.disconnect()
 	wait := reconnectDelay(e.failures)
-	e.log.Info("lifecycle stream lost; reconnecting", "cause", h.Error(), "retry_in", wait.String())
+	e.log.Info("connection to herdr lost; reconnecting", "cause", h.Error(), "retry_in", wait.String())
 	e.awaitConnect(wait)
 }
 
@@ -828,6 +842,8 @@ func (e *Engine) disconnect() {
 	}
 	e.connected = false
 	e.ready = false
+	e.snapFailures = 0
+	e.unexpectedWarned = false
 	t := e.truth
 	t.Connected = false
 	e.setTruth(t)
@@ -973,6 +989,19 @@ func (e *Engine) onLifecycle(d herdr.Delivery[core.LifecycleEvent]) {
 		} else {
 			e.lost(err)
 		}
+		return
+	}
+	if d.Unexpected != nil {
+		// A well-formed line the engine cannot act on, perhaps from a newer
+		// herdr: the stream goes on, and a snapshot reads whatever it was
+		// about. The error names only the event, never its payload.
+		if !e.unexpectedWarned {
+			e.unexpectedWarned = true
+			e.log.Warn("unexpected lifecycle event; reading a snapshot", "error", d.Unexpected)
+		} else {
+			e.log.Debug("unexpected lifecycle event; reading a snapshot", "error", d.Unexpected)
+		}
+		e.requestSnapshot()
 		return
 	}
 	e.noteEvent()
@@ -1147,12 +1176,18 @@ func (e *Engine) onSnapshot(m snapshotMsg) {
 			e.retry(fmt.Errorf("engine: snapshot: %w", m.err))
 			return
 		}
-		e.log.Warn("snapshot failed; reading again", "error", m.err, "retry_in", snapshotRetryDelay.String())
+		e.snapFailures++
+		if e.snapFailures >= snapshotFailuresBeforeLost {
+			e.lost(fmt.Errorf("engine: %d snapshot reads failed in a row: %w", e.snapFailures, m.err))
+			return
+		}
+		e.log.Warn("snapshot failed; reading again", "error", m.err, "failures", e.snapFailures, "lost_at", snapshotFailuresBeforeLost, "retry_in", snapshotRetryDelay.String())
 		e.removedDuring = nil
 		e.again = false
 		e.schedule(snapshotRetryDelay)
 		return
 	}
+	e.snapFailures = 0
 	first := !e.ready
 	// The first connection of the run to become ready starts Retention.
 	firstOfRun := first && !e.readyOnce

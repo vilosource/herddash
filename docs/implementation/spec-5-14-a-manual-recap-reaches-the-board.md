@@ -151,3 +151,5 @@ Status: done
 **Verification.** `go build ./...` ok; `go vet ./...` ok; `go test -count=1 ./...` all 12 packages ok; `gofmt -l .` printed nothing; `go test -race -count=20 -run Transcript ./internal/core/ ./internal/engine/` ok; `-run LocalCommand` ok.
 
 **Residual risks.** Story 5.2 changes `Apply` concurrently; a small merge there is likely. Older Claude Code without `commandRun` gets no manual recap.
+
+**Deferred bash-mode entry: resolved by Story 5.15** (2026-10-23). Bash-mode records are turn starts on purpose: Claude Code sends a `!cmd`'s output to the model, which replies (54 of 55 observed commands; `docs/research/claude-code-bash-mode-2026-10-23.md`), so they stay turn starts, now pinned by tests. A user record starting `<local-command-stderr>` is now a local result, like `<local-command-stdout>`. The follow-up review of this story's code is in Story 5.15's triage log.

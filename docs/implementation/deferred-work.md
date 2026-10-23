@@ -37,6 +37,7 @@
 - source_spec: `docs/implementation/spec-1-9-know-which-profile-each-agent-runs-under.md`
   summary: Run the test suite on a macOS runner in CI so procenv's darwin reader (kern.procargs2) is exercised automatically.
   evidence: Story 1.9 review; ci.yml tests only on ubuntu-latest, so the reader the operator's Macs depend on is only vetted and cross-compiled there.
+  resolved: 2026-10-23, Story 5.7 (`docs/implementation/spec-5-7-ci-tests-on-macos.md`). CI's `macos` job (`.github/workflows/ci.yml`) runs `go test -race ./...` on macos-latest with go.mod's Go, so procenv's darwin tests run on every pull request. Run locally on macOS (Go 1.26.5 and 1.27.2, `CI=true`, clean clone): every package passes; the first pull-request run proves it on macos-latest.
 - source_spec: `docs/implementation/spec-1-9-know-which-profile-each-agent-runs-under.md`
   summary: Decide whether a Profile resolution that failed transiently (timeout, herdr call error) should be retried, rather than leaving the Agent unresolved until the next agent detection.
   evidence: Story 1.9 review, unverified (medium if real); settle it by counting "profile resolved" debug entries with an error in dogfooding logs.
@@ -58,12 +59,14 @@
 - source_spec: `docs/implementation/spec-3-9-connection-and-version-strips.md`
   summary: Run the Board's headless-browser check (board.mjs drawing: strips, dimming, refused hiding, live updates, reconnect) in CI, not only by hand.
   evidence: Stories 3.7-3.9 each verified board.mjs only in a manual headless-Chrome run; node --test covers order.mjs alone. ubuntu runners ship Chrome, and Node 22's built-in WebSocket can drive it over CDP without npm, but wiring it into CI is work no story plans.
+  resolved: 2026-10-23, Story 5.6 (`docs/implementation/spec-5-6-ci-runs-the-board-s-browser-check.md`). CI's `board-browser` job (`.github/workflows/ci.yml`) builds `./cmd/herddash` and runs `board-browser.mjs` on ubuntu-latest with the runner's Node and its `google-chrome`, no npm and no extra action, and fails when Node is older than 22 or no Chrome is found. The job's step was run locally (macOS Chrome 156, Node 22): 23 `ok`, exit 0; the first pull-request run proves it on ubuntu-latest.
 - source_spec: `docs/implementation/spec-4-1-clean-shutdown.md`
   summary: CLAUDE.md's operator-checkpoint list still says Story 1.3 must avoid "the live 0.8.2 server"; the live herdr has run 0.9.5 since 2026-10-20.
   evidence: The checkpoint is closed and the server was restarted on 0.9.5 (PID 56666, loaded binary checked via lsof); the line now misleads a reader about the dogfooding flag. Agent-context file, so deferred.
 - source_spec: `docs/implementation/spec-4-2-start-with-my-session-on-macos-and-linux.md`
   summary: Run deploy_test.go's `plutil -lint` check in CI on a macOS runner; today it runs only on a developer's Mac.
   evidence: CI's test job is ubuntu-latest only, so TestLaunchdAgentLints always skips there; the strict Go decoder in TestLaunchdAgent catches most malformed plists on Linux.
+  resolved: 2026-10-23, Story 5.7 (`docs/implementation/spec-5-7-ci-tests-on-macos.md`). CI's `macos` job runs the suite with `HERDDASH_REQUIRE_TOOLS: plutil`, so `TestLaunchdAgentLints` fails rather than skips if plutil is missing; locally, `HERDDASH_REQUIRE_TOOLS=plutil go test -run TestLaunchdAgentLints -v .` passes, not skipped, and `HERDDASH_REQUIRE_TOOLS=systemd-analyze` makes `TestSystemdUnitVerifies` fail on macOS naming the variable.
 - source_spec: `docs/implementation/spec-transcript-background.md`
   summary: A task whose start is in a transcript but whose end never arrives (Claude Code exiting or crashing with tasks running, then the session resumed) may keep an Agent BACKGROUND until the start falls out of an 8 MiB re-read window; nothing ages tasks out, and the process table only ever adds to the count, never proves an open command gone.
   evidence: Unverified (would be medium). On 2026-10-22 no transcript held more than one sessionId, so whether a resumed session copies earlier task starts into its new file is unknown. Settle it by resuming a session that had a background command open at exit and reading the new transcript's markers; if starts are copied, drop an open command when the process check finds no tool shell for some time.
@@ -75,6 +78,7 @@
 - source_spec: `docs/implementation/spec-claude-recap.md`
   summary: The recap row's layout (the board--recaps toggle, the taller grid, the two-line clamp) is verified only by the hand-run board-browser.mjs; run it in CI.
   evidence: Removing the toggle or the .board--recaps rule leaves every CI check green; same root as the Story 3.9 deferral to run the browser check in CI.
+  resolved: 2026-10-23, Story 5.6 (`docs/implementation/spec-5-6-ci-runs-the-board-s-browser-check.md`). CI's `board-browser` job runs `board-browser.mjs` on every pull request. Its step, run locally (macOS Chrome 156, Node 22), passed with 23 `ok`; with the `.board--recaps .box` rule deleted from `board.css` and the binary rebuilt, "while a Box has a recap, every Box is one line taller" printed FAIL and it exited 1. The first pull-request run proves it on ubuntu-latest.
 - source_spec: `docs/implementation/spec-5-2-a-resumed-session-does-not-keep-finished-background-tasks.md`
   summary: Between a Claude Code crash and a resume inside herdr, whether herddash's session watch for the dead process ends, so its open start stops showing, is untested.
   evidence: Unverified (would be medium). The 2026-10-23 experiment ran outside herdr. Settle it by crashing a Claude Code Agent in an isolated herdr and watching its Box.

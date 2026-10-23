@@ -24,6 +24,19 @@ const (
 	oldResult      = `{"type":"user","isSidechain":false,"message":{"role":"user","content":"<local-command-stdout>OUT</local-command-stdout>"}}`
 	compactSummary = `{"type":"user","isSidechain":false,"isCompactSummary":true,"isVisibleInTranscriptOnly":true,"message":{"role":"user","content":"SUMMARY"}}`
 	skillCmd       = `{"type":"user","isSidechain":false,"message":{"role":"user","content":"<command-message>skill</command-message>\n<command-name>/skill</command-name>"}}`
+	// oldStderr is the older user-record result's stderr form (Story 5.15;
+	// not observed on this machine, the twin of oldResult).
+	oldStderr = `{"type":"user","isSidechain":false,"message":{"role":"user","content":"<local-command-stderr>ERR</local-command-stderr>"}}`
+)
+
+// The bash-mode (`!cmd`) record shapes observed in Claude Code 2.1.267 to
+// 2.1.292 (Story 5.15): two string user records, neither meta nor sidechain;
+// the command's stderr sits inside the stdout record, and from 2.1.286 that
+// record carries turnOrigin "human". Every text a placeholder.
+const (
+	bashInput  = `{"type":"user","isSidechain":false,"message":{"role":"user","content":"<bash-input>CMD</bash-input>"}}`
+	bashStdout = `{"type":"user","isSidechain":false,"turnOrigin":"human","message":{"role":"user",` +
+		`"content":"<bash-stdout>OUT</bash-stdout><bash-stderr>ERR</bash-stderr>"}}`
 )
 
 // localResult is a local_command result of command with content, as
@@ -122,6 +135,11 @@ func TestLocalCommandMatrix(t *testing.T) {
 		"manual recap trimmed":            {true, cat([]string{endTurn}, recapTriple("  R. (disable recaps in /config) ")), "R.", true, false},
 		"local command keeps recap":       {true, cat([]string{prompt, endTurn, x}, usageTriple()), "X.", true, false},
 		"old local result":                {true, []string{endTurn, x, caveat, cmdName, oldResult}, "X.", true, false},
+		"old stderr result":               {true, []string{endTurn, x, caveat, cmdName, oldStderr}, "X.", true, false},
+		"old stderr result, turn running": {true, []string{prompt, x, cmdName, oldStderr}, "X.", false, false},
+		"prompt after stderr result":      {true, []string{endTurn, x, caveat, cmdName, oldStderr, prompt}, "", false, false},
+		"local_command with stderr": {true, cat([]string{endTurn, x}, []string{caveat, cmdName,
+			localResult("recap", "<local-command-stderr>ERR</local-command-stderr>")}), "X.", true, false},
 		"confirmed by a prompt":           {true, []string{endTurn, x, cmdName, prompt}, "", false, false},
 		"confirmed by a tool result":      {true, []string{endTurn, x, cmdName, bgStart}, "", false, false},
 		"confirmed by a queued cmd":       {true, []string{endTurn, x, cmdName, queuedCmd}, "", false, false},
@@ -157,8 +175,10 @@ func TestLocalCommandMatrix(t *testing.T) {
 				name, b.Recap(), b.TurnEnded(), b.pending, tc.recap, tc.turnEnded, tc.pending)
 		}
 	}
-	// A bad /recap result is still a local result, carrying nothing else.
-	for _, l := range []string{localResult("recap", []string{"R."}), localResult("recap", "R."),
+	// A bad /recap result is still a local result, carrying nothing else; so
+	// is a stderr result, in either form.
+	for _, l := range []string{oldStderr, localResult("recap", "<local-command-stderr>ERR</local-command-stderr>"),
+		localResult("recap", []string{"R."}), localResult("recap", "R."),
 		localResult("recap", "<local-command-stdout> </local-command-stdout>"), localResult("recap", nil)} {
 		if m, ok := DecodeTranscriptLine([]byte(l), true); !ok || m != (TranscriptLine{CommandResult: true}) {
 			t.Errorf("%s decoded as %+v, %v", l, m, ok)
@@ -197,5 +217,39 @@ func TestLocalCommandPendingAcrossReads(t *testing.T) {
 	}
 	if b.Recap() != "" || b.TurnEnded() || b.pending {
 		t.Errorf("prompt: recap %q, turn ended %v, pending %v", b.Recap(), b.TurnEnded(), b.pending)
+	}
+}
+
+// TestBashModeIsATurn covers Story 5.15's I/O matrix: bash mode's records
+// are turn starts, because Claude Code sends the command's output to the
+// model, which replies (docs/research/claude-code-bash-mode-2026-10-23.md).
+func TestBashModeIsATurn(t *testing.T) {
+	for _, l := range []string{bashInput, bashStdout} {
+		for _, recaps := range []bool{false, true} {
+			if m, ok := DecodeTranscriptLine([]byte(l), recaps); !ok || m != (TranscriptLine{TurnStarted: true}) {
+				t.Errorf("%s (recaps %v) decoded as %+v, %v", l, recaps, m, ok)
+			}
+		}
+	}
+	x := recap("X. (disable recaps in /config)")
+	for name, tc := range map[string]struct {
+		recaps    bool
+		lines     []string
+		recap     string
+		turnEnded bool
+	}{
+		"bash command answered":     {true, []string{prompt, endTurn, x, bashInput, bashStdout, endTurn}, "", true},
+		"bash command, reply going": {true, []string{prompt, endTurn, x, bashInput, bashStdout}, "", false},
+		"prompt after bash":         {true, []string{endTurn, x, bashInput, bashStdout, endTurn, prompt}, "", false},
+		"recap after the reply":     {true, []string{endTurn, x, bashInput, bashStdout, endTurn, recap("Y.")}, "Y.", true},
+		"after a pending command":   {true, []string{endTurn, x, cmdName, bashInput, bashStdout}, "", false},
+		"recaps off, answered":      {false, []string{prompt, endTurn, x, bashInput, bashStdout, endTurn}, "", true},
+		"recaps off, reply going":   {false, []string{prompt, endTurn, x, bashInput, bashStdout}, "", false},
+	} {
+		b := foldRecaps(tc.recaps, tc.lines...)
+		if b.Recap() != tc.recap || b.TurnEnded() != tc.turnEnded || b.pending {
+			t.Errorf("%s: recap %q, turn ended %v, pending %v; want %q, %v, false",
+				name, b.Recap(), b.TurnEnded(), b.pending, tc.recap, tc.turnEnded)
+		}
 	}
 }

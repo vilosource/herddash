@@ -1073,3 +1073,31 @@ transcripts hold 56 user records whose content starts `<bash-input>` and 56 star
 **Then** they neither clear the recap nor mark a turn as started, judged by structure only and verified against real record shapes
 **And** a prompt typed after them still starts a turn
 **And** Story 5.14's code gets the follow-up review its builder recommended, and its findings are fixed or deferred
+
+**Amended 2026-10-23 (built):** the verification this story asks for refuted its premise for bash mode.
+Claude Code sends a `!cmd`'s output to the model, which answers it: 54 of the 56 bash commands in
+this machine's transcripts were answered by a model turn with no prompt between
+(`docs/research/claude-code-bash-mode-2026-10-23.md`). Bash-mode records therefore stay turn starts
+and clear the recap, now pinned by tests; only the `<local-command-stderr>` half was changed. The
+title is kept for traceability. See `docs/implementation/spec-5-15-bash-mode-commands-are-not-turns-either.md`.
+
+### Story 5.16: A resumed subagent counts as background work
+
+As the operator,
+I want a subagent that Claude Code resumes to count as background work on its Box,
+So that a pane whose agent is waiting on resumed subagents does not look less busy than it is.
+
+Source: operator report, 2026-10-23. The orchestrator resumed two subagents with SendMessage; the
+transcript recorded a user record whose `toolUseResult` is
+`{"success":true,"message":"Resuming agent …","resumedAgentId":"<id>",…}`, which ADR-0009's decoder
+does not treat as a task start, so the Box counted 1 background task while 3 ran. The earlier
+"Finished while waiting" observation was correct: both subagents had sent completed notifications and
+nothing was running.
+
+**Acceptance Criteria:**
+
+**Given** a transcript where a `toolUseResult` with `success` true and a non-empty `resumedAgentId` appears
+**When** it is read
+**Then** that id is an open task until a notification for it closes it (completed, failed, killed or stopped), exactly like a launched subagent
+**And** a failed resume (`success` false or no id) opens nothing
+**And** tests use the record shape observed on Claude Code 2.1.292 with placeholder text, and ADR-0009 gets a dated amendment
