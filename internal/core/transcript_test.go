@@ -135,6 +135,10 @@ func TestTranscriptPrivacy(t *testing.T) {
 		[]byte(notify("SECRET words", "completed")),
 		[]byte(notify("ok1", "SECRET-status")),
 		[]byte(`{"type":"queue-operation","operation":"enqueue","content":"SECRET <task-notification><task-id>x</task-id>"}`),
+		[]byte(resumeShape),
+		[]byte(resumed("SECRET words")),
+		[]byte(`{"type":"user","toolUseResult":{"success":true,"message":"SECRET","resumedAgentId":"SECRET/../x","pin":{"text":"SECRET"}}}`),
+		[]byte(`{"type":"user","toolUseResult":{"success":"true","message":"SECRET","resumedAgentId":"ok2"}}`),
 	)
 	// Recaps on: the recap records' text is the only text that may leave
 	// (TestRecapPrivacy covers it); none of these lines is one.
@@ -284,6 +288,69 @@ func TestTranscriptResumeStoppedShape(t *testing.T) {
 		}
 		if b := fold(bgStart, l); b.Count() != 1 {
 			t.Errorf("status %q: %d open, want 1", s, b.Count())
+		}
+	}
+}
+
+// resumeShape is the user record Claude Code writes when SendMessage resumes
+// a finished subagent, shaped on 2.1.292 (observed 2026-10-23, Story 5.16):
+// a tool_result block array in message, and a toolUseResult with exactly
+// success, message, resumedAgentId and pin. Every text is invented and
+// marked SECRET.
+const resumeShape = `{"parentUuid":"SECRET-uuid","isSidechain":false,"type":"user",` +
+	`"message":{"role":"user","content":[{"tool_use_id":"toolu_SECRET","type":"tool_result",` +
+	`"content":[{"type":"text","text":"SECRET resuming the agent in the background"}]}]},` +
+	`"toolUseResult":{"success":true,"message":"Resuming agent SECRET in the background",` +
+	`"resumedAgentId":"ag1","pin":{"id":"SECRET-pin","name":"SECRET pin","ref":"SECRET-ref"}},` +
+	`"sessionId":"SECRET-session","timestamp":"2026-10-23T09:00:00.000Z"}`
+
+// resumed is a minimal resume record for id.
+func resumed(id string) string {
+	return `{"type":"user","toolUseResult":{"success":true,"message":"Resuming agent","resumedAgentId":"` + id + `","pin":{}}}`
+}
+
+// TestTranscriptResumedSubagent covers Story 5.16's matrix: a successful
+// resume reopens the subagent it names, as a subagent, and its next closing
+// notification closes it; a failed or malformed resume opens nothing.
+func TestTranscriptResumedSubagent(t *testing.T) {
+	m, ok := DecodeTranscriptLine([]byte(resumeShape), true)
+	if want := (TranscriptLine{StartID: "ag1", TurnStarted: true}); !ok || m != want {
+		t.Errorf("decoded %+v, %v; want %+v", m, ok, want)
+	}
+	long := strings.Repeat("a", 129)
+	for name, tc := range map[string]struct {
+		lines     []string
+		count     int
+		turnEnded bool
+	}{
+		"resume after completion":        {[]string{prompt, agentStart, notify("ag1", "completed"), resumeShape}, 1, false},
+		"resume closes: completed":       {[]string{resumeShape, notify("ag1", "completed")}, 0, false},
+		"resume closes: failed":          {[]string{resumeShape, notify("ag1", "failed")}, 0, false},
+		"resume closes: killed":          {[]string{resumeShape, notify("ag1", "killed")}, 0, false},
+		"resume closes: stopped":         {[]string{resumeShape, notify("ag1", "stopped")}, 0, false},
+		"resume, notification no status": {[]string{resumeShape, notify("ag1", "")}, 1, false},
+		"success false":                  {[]string{`{"type":"user","toolUseResult":{"success":false,"resumedAgentId":"ag1"}}`}, 0, false},
+		"success the string true":        {[]string{`{"type":"user","toolUseResult":{"success":"true","resumedAgentId":"ag1"}}`}, 0, false},
+		"success absent":                 {[]string{`{"type":"user","toolUseResult":{"resumedAgentId":"ag1"}}`}, 0, false},
+		"no id":                          {[]string{`{"type":"user","toolUseResult":{"success":true,"message":"x"}}`}, 0, false},
+		"empty id":                       {[]string{resumed("")}, 0, false},
+		"id not a string":                {[]string{`{"type":"user","toolUseResult":{"success":true,"resumedAgentId":7}}`}, 0, false},
+		"id with a slash":                {[]string{resumed("a/b")}, 0, false},
+		"id with a space":                {[]string{resumed("a b")}, 0, false},
+		"id too long":                    {[]string{resumed(long)}, 0, false},
+		"id of 128 opens":                {[]string{resumed(long[:128])}, 1, false},
+		"resume of an open id":           {[]string{agentStart, resumed("ag1")}, 1, false},
+		// The operator's report: one subagent still running, two finished
+		// ones resumed: three open, not one.
+		"one running, two resumed": {[]string{prompt, agentStart, `{"type":"user","toolUseResult":{"isAsync":true,"status":"async_launched","agentId":"ag2"}}`,
+			`{"type":"user","toolUseResult":{"isAsync":true,"status":"async_launched","agentId":"ag3"}}`,
+			notify("ag2", "completed"), notify("ag3", "completed"), resumed("ag2"), resumed("ag3"), endTurn}, 3, true},
+		"main turn over":       {[]string{prompt, resumeShape, endTurn}, 1, true},
+		"resume on a non-user": {[]string{`{"type":"assistant","toolUseResult":{"success":true,"resumedAgentId":"ag1"}}`}, 0, false},
+	} {
+		b := fold(tc.lines...)
+		if b.Count() != tc.count || b.TurnEnded() != tc.turnEnded || b.OpenCommand() {
+			t.Errorf("%s: %d open, turn ended %v, command %v; want %d, %v", name, b.Count(), b.TurnEnded(), b.OpenCommand(), tc.count, tc.turnEnded)
 		}
 	}
 }
@@ -442,7 +509,7 @@ func TestRecapOffChangesNothingElse(t *testing.T) {
 	for _, l := range []string{caveat, cmdName, oldResult, oldStderr, compactSummary, skillCmd, bashInput, bashStdout,
 		localResult("usage", "<local-command-stderr>E</local-command-stderr>"),
 		localResult("usage", "<local-command-stdout>O</local-command-stdout>"),
-		localResult("recap", "<local-command-stdout>R.</local-command-stdout>"), localResult("recap", "R."), prompt, endTurn, sideEnd, toolUse, queuedCmd, bgStart, agentStart, notify("bx1", "completed"),
+		localResult("recap", "<local-command-stdout>R.</local-command-stdout>"), localResult("recap", "R."), prompt, endTurn, sideEnd, toolUse, queuedCmd, bgStart, agentStart, resumeShape, notify("bx1", "completed"),
 		notify("bx1", ""), taskStop("bx1"), recap("X. (disable recaps in /config)"), recap(""),
 		`{"type":"system","subtype":"away_summary","isSidechain":true,"content":"S."}`,
 		`{"type":"system","subtype":"turn_duration","content":"S."}`, "garbage", ""} {

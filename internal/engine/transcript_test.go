@@ -130,6 +130,32 @@ func TestTranscriptSubagentAfterTurn(t *testing.T) {
 	r.noLeak(t)
 }
 
+// trSendMessage is the main thread's SendMessage call, and trResume the
+// record Claude Code writes as its result when it resumes the finished
+// subagent a3f9c2d1, shaped on Claude Code 2.1.292 (Story 5.16).
+const trSendMessage = `{"type":"assistant","isSidechain":false,"message":{"content":[{"type":"tool_use","id":"toolu_SECRET",` +
+	`"name":"SendMessage","input":{"to":"a3f9c2d1","message":"PROMPT-SECRET"}}],"stop_reason":"tool_use"}}`
+const trResume = `{"type":"user","isSidechain":false,"message":{"role":"user","content":[{"tool_use_id":"toolu_SECRET","type":"tool_result",` +
+	`"content":[{"type":"text","text":"RESULT-SECRET"}]}]},"toolUseResult":{"success":true,` +
+	`"message":"MESSAGE-SECRET resuming","resumedAgentId":"a3f9c2d1","pin":{"id":"PIN-SECRET","name":"PIN-SECRET","ref":"PIN-SECRET"}}}`
+
+// TestTranscriptResumedSubagent covers Story 5.16: a subagent launched and
+// completed, then resumed by SendMessage, with the main turn over, is one
+// background task again (Background); its next notification closes it.
+func TestTranscriptResumedSubagent(t *testing.T) {
+	r := startTranscript(t, core.StatusWorking,
+		[]string{trPrompt, trSubStart, trDone("a3f9c2d1"), trPrompt, trSendMessage, trResume, trEndTurn}, nil)
+	if v := r.awaitTasks(1, true); v.SortKey.ClassRank != 3 {
+		t.Errorf("view %+v", v)
+	}
+	writeTranscript(t, r.path, trDone("a3f9c2d1"))
+	if v := r.awaitTasks(0, false); v.SortKey.ClassRank != 4 {
+		t.Errorf("rank %d, want Working", v.SortKey.ClassRank)
+	}
+	r.expectSessionRows(t)
+	r.noLeak(t)
+}
+
 // TestTranscriptCommandIdle covers the matrix's "Bg command open, idle" and
 // "Bg command closes" rows: herdr says done with a background command open:
 // Background, one task; closed: Finished.
