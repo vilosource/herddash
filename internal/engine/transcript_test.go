@@ -104,7 +104,7 @@ func (r *transcriptRig) noLeak(t *testing.T) {
 	r.logs.mu.Lock()
 	logged := r.logs.b.String()
 	r.logs.mu.Unlock()
-	for _, s := range []string{"SECRET", trSession, "bk7q2x9", "a3f9c2d1"} {
+	for _, s := range []string{"SECRET", trSession, trClearedSession, "bk7q2x9", "a3f9c2d1"} {
 		if strings.Contains(logged, s) {
 			t.Errorf("the log carries %q: %s", s, logged)
 		}
@@ -424,4 +424,127 @@ func TestTranscriptRecapDropped(t *testing.T) {
 		t.Errorf("recap entries %v", e)
 	}
 	r.recapNoLeak(t)
+}
+
+// trClearedSession is the session id the record names after /clear.
+const trClearedSession = "sess-0002"
+
+// trClear and trClearOutput are the first two records of the transcript
+// /clear starts (Claude Code 2.1.292, observed 2026-10-23; every text
+// invented and marked SECRET): the /clear command and its local output.
+const (
+	trClear = `{"type":"user","isSidechain":false,"message":{"role":"user","content":"<command-name>/clear</command-name>\n` +
+		`<command-message>clear</command-message>\n<command-args>ARGS-SECRET</command-args>"}}`
+	trClearOutput = `{"type":"system","subtype":"local_command","isSidechain":false,` +
+		`"content":"<local-command-stdout>STDOUT-SECRET</local-command-stdout>"}`
+)
+
+// clear writes lines as the transcript of trClearedSession and points the
+// session record at it, as /clear does in the same process, and returns the
+// new transcript's path.
+func (r *transcriptRig) clear(t *testing.T, lines ...string) string {
+	t.Helper()
+	path, err := procenv.ClaudeTranscriptPath(r.cfg, trCWD, trClearedSession)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTranscript(t, path, lines...)
+	r.sess.mu.Lock()
+	r.sess.recs[p1PID] = procenv.Session{PID: p1PID, Status: "shell", SessionID: trClearedSession, CWD: trCWD}
+	r.sess.mu.Unlock()
+	return path
+}
+
+// TestTranscriptCleared covers Story 5.3's "/clear", "Old task ends after
+// /clear" and "Old transcript grows after /clear" rows: the record names a
+// new session id, so its transcript is another path; the tail restarts on it
+// and the old transcript's open command goes: no task, not Background. Once
+// the new transcript opens a task, the old command's completion there names
+// an id not open and changes nothing, and the old file is never read again.
+// A command still running across /clear is left to the process check
+// (ADR-0009 as amended by Story 5.3).
+func TestTranscriptCleared(t *testing.T) {
+	r := startTranscript(t, core.StatusDone, []string{trPrompt, trBgStart, trEndTurn}, nil)
+	r.awaitTasks(1, true)
+	path := r.clear(t, trClear, trClearOutput)
+	// ClassRank 1 is Finished's rank.
+	if v := r.awaitTasks(0, false); v.Class != core.ClassFinished || v.SortKey.ClassRank != 1 {
+		t.Errorf("view %+v", v)
+	}
+	// The new transcript is the one followed: a start there shows.
+	writeTranscript(t, path, trSubStart)
+	r.awaitTasks(1, true)
+	writeTranscript(t, path, trDone("bk7q2x9"))
+	r.sess.moreReads(t, r.h)
+	if v := r.view(); v.BackgroundTasks != 1 || !v.Background {
+		t.Errorf("after the old task's end: %d tasks, background %v; want 1, true", v.BackgroundTasks, v.Background)
+	}
+	// A start the old file gains would make it two, were it read.
+	writeTranscript(t, r.path, trBgStart)
+	r.sess.moreReads(t, r.h)
+	if v := r.view(); v.BackgroundTasks != 1 || !v.Background {
+		t.Errorf("the old transcript was read again: %d tasks, background %v; want 1, true", v.BackgroundTasks, v.Background)
+	}
+	r.expectSessionRows(t)
+	r.noLeak(t)
+}
+
+// TestTranscriptClearedRecap covers Story 5.3's "Recap before /clear" row: a
+// recap from before /clear goes with the old transcript, whether the new
+// transcript holds only the command's local output or, as observed, the
+// /clear record and then it. The first case shows the restart alone drops
+// it. A recap in the new transcript then shows.
+func TestTranscriptClearedRecap(t *testing.T) {
+	for name, lines := range map[string][]string{
+		"output only":  {trClearOutput},
+		"clear record": {trClear, trClearOutput},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := startTranscript(t, core.StatusDone, []string{trPrompt, trEndTurn, trRecap}, recapsOn)
+			r.awaitRecap(trRecapWant)
+			path := r.clear(t, lines...)
+			r.awaitRecap("")
+			writeTranscript(t, path, trPrompt, trEndTurn, strings.Replace(trRecap, "the thing", "another thing", 1))
+			r.awaitRecap("I did RECAP-TEXT another thing. Next I'll ship it.")
+			r.recapNoLeak(t)
+		})
+	}
+}
+
+// TestTranscriptClearedNotWritten covers Story 5.3's "New transcript not
+// written yet" row: the record already names the new session id but its
+// transcript does not exist. What the old transcript said is dropped and the
+// failure is logged once, by kind; a command still running across /clear (a
+// tool shell under the process) is then counted by the process check alone.
+func TestTranscriptClearedNotWritten(t *testing.T) {
+	fastBackground(t)
+	kids := newFakeChildren()
+	r := startTranscript(t, core.StatusDone, []string{trPrompt, trBgStart, trSubStart, trEndTurn},
+		func(o *Options) { o.Children = kids.read })
+	r.awaitTasks(2, true)
+	kids.set(p1PID, toolShell)
+	r.sess.mu.Lock()
+	r.sess.recs[p1PID] = procenv.Session{PID: p1PID, Status: "shell", SessionID: trClearedSession, CWD: trCWD}
+	r.sess.mu.Unlock()
+	r.awaitTasks(1, true)
+	r.sess.moreReads(t, r.h)
+	if v := r.view(); v.BackgroundTasks != 1 || !v.Background {
+		t.Errorf("with only the tool shell: %d tasks, background %v; want 1, true", v.BackgroundTasks, v.Background)
+	}
+	if e := r.logs.entries(t, "DEBUG", "claude transcript not read"); len(e) != 1 {
+		t.Errorf("debug entries %v, want one", e)
+	}
+	kids.set(p1PID)
+	r.awaitTasks(0, false)
+	// Once the new transcript appears it is picked up.
+	path, err := procenv.ClaudeTranscriptPath(r.cfg, trCWD, trClearedSession)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTranscript(t, path, trSubStart)
+	r.awaitTasks(1, true)
+	if e := r.logs.entries(t, "DEBUG", "claude transcript not read"); len(e) != 1 {
+		t.Errorf("debug entries %v, want one", e)
+	}
+	r.noLeak(t)
 }

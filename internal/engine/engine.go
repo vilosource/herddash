@@ -2082,6 +2082,13 @@ func (e *Engine) readSession(ctx context.Context, busy *atomic.Bool, pid int, di
 // readTranscript tails the transcript the session record s names under dir
 // from tail, folding its markers into tasks, and returns where it read to and
 // what it says. A read that restarted from the bound starts tasks afresh.
+//
+// The path follows the record's session id, so another id is another path,
+// and the tail restarts there. That is what /clear does: the same process's
+// record names a new session id at once (Claude Code 2.1.292, observed
+// 2026-10-23; ADR-0009 as amended by Story 5.3), so the old transcript's open
+// tasks and recap go and the old file is not read again. A command still
+// running across /clear is then left to the process check.
 func (e *Engine) readTranscript(dir string, s procenv.Session, tail procenv.Tail,
 	tasks core.BackgroundTasks) (procenv.Tail, core.BackgroundTasks, error) {
 	path, err := procenv.ClaudeTranscriptPath(dir, s.CWD, s.SessionID)

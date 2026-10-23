@@ -79,6 +79,18 @@ an ADR.
   does not count it either. Any other status, or none, still leaves a task
   open, and no task is aged out by time. Evidence:
   [the resume experiment](../research/claude-code-resume-background-tasks-2026-10-23.md).
+  *Amended 2026-10-23 (Story 5.3):* `/clear` starts a new session in the same process, and Claude
+  Code 2.1.292 changes the session record's `sessionId` at once; the new transcript begins with
+  the `/clear` record and the old one is not written again. A new id names another transcript
+  path, so the tail restarts from the bound on the new file and the Agent's open tasks and recap
+  start afresh: the old transcript is not read again, and no session id is tracked beyond the
+  path. A background command started before `/clear` keeps running as a child of the same process,
+  and its completion is written to the new transcript, where it names an id that is not open and
+  changes nothing. While it runs, the process check counts it (adding one, while Status is `done`
+  or `idle`, when no open command from the new transcript accounts for a tool shell), and it stops
+  counting once the command ends. A background subagent across `/clear` was not observed. Tasks
+  are never carried from one session id's transcript into another's. Evidence:
+  [the `/clear` experiment](../research/claude-code-clear-background-tasks-2026-10-23.md).
 - **View, not record.** `AgentView` gains `background_tasks` (a count). The Attention Class, the
   Fold, Waiting Time and the stored record are unchanged: no stored schema change.
 - **Main turn over, a background subagent running.** herdr reports `working` and Claude Code's
