@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -572,5 +573,272 @@ func TestTransitionPreviousFromFold(t *testing.T) {
 	}
 	if !p.fold.EverWorking || p.fold.Since != 200 {
 		t.Errorf("fold %+v, want it continued, working since 200", p.fold)
+	}
+}
+
+// A released pane's next Agent starts fresh (Story 5.17).
+
+// savedReleased is the released panes the store holds for mac/default.
+func savedReleased(st *fakeStore) []string {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	return slices.Clone(st.state["mac/default"].Released)
+}
+
+// releaseA runs Agent A in w1:p1 from working to done live, then herdr
+// releases it: the engine removes the pane and writes no row, and saves the
+// pane as released.
+func releaseA(t *testing.T) (*harness, *fakeStore) {
+	t.Helper()
+	fake := newFakeClient(t, twoAgents())
+	st := newFakeStore(fake)
+	h := startRecording(t, fake, st, nil)
+	h.rec.expect(t, "agent w1:p1 claude working", "agent w1:p2 claude idle")
+	h.fake.awaitSubscribe("w1:p1")
+	h.settle()
+	h.fake.statusSub("w1:p1").event(core.StatusEvent{PaneID: "w1:p1", Status: core.StatusDone, AgentProgram: "claude"})
+	h.rec.awaitCount(t, "transition w1:p1 claude working->done live", 1)
+	h.lifecycle(core.LifecycleEvent{Kind: core.LifecycleAgentReleased, PaneID: "w1:p1", FinalStatus: core.StatusDone})
+	h.rec.awaitCount(t, "removed w1:p1", 1)
+	h.settle()
+	if n := len(paneRows(st, "w1:p1")); n != 2 {
+		t.Fatalf("w1:p1 rows %v, want A's two", rows(paneRows(st, "w1:p1")))
+	}
+	if got := savedReleased(st); !slices.Equal(got, []string{"w1:p1"}) {
+		t.Fatalf("saved released %v, want w1:p1 saved on the release", got)
+	}
+	return h, st
+}
+
+// assertFreshB checks that B, idle in w1:p1, began with a row of its own: no
+// previous Status, the class Working (Idle, never worked) since that row, and
+// the pane's released mark cleared in the store.
+func assertFreshB(t *testing.T, st *fakeStore, as []Agent) {
+	t.Helper()
+	p1 := paneRows(st, "w1:p1")
+	if len(p1) != 3 {
+		t.Fatalf("w1:p1 rows %v, want A's two and B's first", rows(p1))
+	}
+	b := p1[2]
+	if _, ok := b.Previous(); ok || b.New() != core.StatusIdle {
+		t.Errorf("B's first row %s, want nil->idle", row(b))
+	}
+	if a := agentByPane(t, as, "w1:p1"); a.Class != ClassWorking || a.WaitingSince != b.ObservedAt() {
+		t.Errorf("B %s since %d, want working (Idle) since its first row at %d, not A's wait", a.Class, a.WaitingSince, b.ObservedAt())
+	}
+	if got := savedReleased(st); got != nil {
+		t.Errorf("saved released %v, want none once B's first row is recorded", got)
+	}
+}
+
+func TestReleasedPaneNotSeededAcrossRestart(t *testing.T) {
+	// A finishes live and is released; the Daemon stops; B starts in the
+	// same pane and terminal; the Daemon comes back keeping the epoch. B is
+	// not seeded from A's rows: its history is not read, and its first row
+	// has no previous Status.
+	h, st := releaseA(t)
+	h.stop()
+	reads := historyReads(st)
+	snap := twoAgents()
+	snap.Panes[0].Agent.Status = core.StatusIdle
+	fake2 := newFakeClient(t, snap)
+	st.client = fake2
+	logs := &logSink{}
+	h2 := startRecording(t, fake2, st, func(o *Options, _ *recorder) {
+		o.Logger = slog.New(slog.NewJSONHandler(logs, nil))
+	})
+	h2.rec.expect(t, "reconnected 0.9.5 epoch 1 kept", "agent w1:p1 claude idle", "agent w1:p2 claude idle")
+	h2.settle()
+	if n := historyReads(st) - reads; n != 1 {
+		t.Errorf("%d history reads, want only w1:p2's", n)
+	}
+	assertFreshB(t, st, h2.agents())
+	if es := logs.entries(t, "INFO", "agent released since the record; not seeding from it"); len(es) != 1 || es[0]["pane"] != "w1:p1" {
+		t.Errorf("logged %v, want one entry for w1:p1", es)
+	}
+}
+
+func TestReleasedPaneNotSeededAcrossReconnect(t *testing.T) {
+	// The same within one run: the lifecycle stream is lost after the
+	// release, and B appears before the reconnect's first snapshot, which
+	// keeps the epoch.
+	h, st := releaseA(t)
+	snap := twoAgents()
+	snap.Panes[0].Agent.Status = core.StatusIdle
+	h.fake.setSnapshot(snap)
+	reads := historyReads(st)
+	h.loseLifecycle()
+	h.rec.awaitCount(t, "reconnected 0.9.5 epoch 1 kept", 1)
+	h.rec.awaitCount(t, "agent w1:p1 claude idle", 1)
+	h.settle()
+	if n := historyReads(st) - reads; n != 0 {
+		t.Errorf("%d history reads, want none for w1:p1", n)
+	}
+	assertFreshB(t, st, h.agents())
+}
+
+func TestReleasedMarkClearedByLiveDetection(t *testing.T) {
+	// B is detected while the engine watches: its first sight is a row with
+	// no previous Status, which clears the saved mark.
+	h, st := releaseA(t)
+	snap := twoAgents()
+	snap.Panes[0].Agent.Status = core.StatusIdle
+	h.fake.setSnapshot(snap)
+	h.lifecycle(core.LifecycleEvent{Kind: core.LifecycleAgentDetected, PaneID: "w1:p1", AgentProgram: "claude"})
+	h.rec.awaitCount(t, "agent w1:p1 claude idle", 1)
+	h.settle()
+	assertFreshB(t, st, h.agents())
+}
+
+func TestNotReleasedSeededAcrossRestart(t *testing.T) {
+	// The control: A finishes live and is not released. After a restart
+	// showing it done, it is seeded as before: nothing written, Finished
+	// since A's done row.
+	fake := newFakeClient(t, twoAgents())
+	st := newFakeStore(fake)
+	h := startRecording(t, fake, st, nil)
+	h.rec.expect(t, "agent w1:p1 claude working", "agent w1:p2 claude idle")
+	h.fake.awaitSubscribe("w1:p1")
+	h.settle()
+	h.fake.statusSub("w1:p1").event(core.StatusEvent{PaneID: "w1:p1", Status: core.StatusDone, AgentProgram: "claude"})
+	h.rec.awaitCount(t, "transition w1:p1 claude working->done live", 1)
+	h.settle()
+	h.stop()
+	if got := savedReleased(st); got != nil {
+		t.Fatalf("saved released %v, want none", got)
+	}
+	before := len(st.rowList())
+	done := paneRows(st, "w1:p1")[1]
+
+	snap := twoAgents()
+	snap.Panes[0].Agent.Status = core.StatusDone
+	fake2 := newFakeClient(t, snap)
+	st.client = fake2
+	h2 := startRecording(t, fake2, st, nil)
+	h2.rec.expect(t, "reconnected 0.9.5 epoch 1 kept", "agent w1:p1 claude done", "agent w1:p2 claude idle")
+	h2.settle()
+	if n := len(st.rowList()); n != before {
+		t.Errorf("rows %v, want nothing written by the restart", rows(st.rowList()[before:]))
+	}
+	if a := agentByPane(t, h2.agents(), "w1:p1"); a.Class != ClassFinished || a.WaitingSince != done.ObservedAt() || !a.WaitingExact {
+		t.Errorf("w1:p1 %s since %d exact %v, want finished since A's done row at %d, exact", a.Class, a.WaitingSince, a.WaitingExact, done.ObservedAt())
+	}
+}
+
+// releasedRecord seeds A's rows in w1:p1 under epoch 3, which a run saved as
+// released.
+func releasedRecord(t *testing.T, st *fakeStore, snap core.Snapshot) {
+	t.Helper()
+	st.seed(stored(t, "w1:p1", "", core.StatusWorking, 50, core.ProvenanceLive),
+		stored(t, "w1:p1", core.StatusWorking, core.StatusDone, 100, core.ProvenanceLive))
+	st.setState(store.ServerState{Epoch: 3, Terminals: terminalsOf(snap), Released: []string{"w1:p1"}})
+}
+
+func TestReleasedMarkKeptUntilFirstRowRecorded(t *testing.T) {
+	snap := twoAgents()
+	snap.Panes[0].Agent.Status = core.StatusIdle
+	t.Run("append fails", func(t *testing.T) {
+		// B's first row is not recorded: the mark is kept, so the next start
+		// still does not seed B from A's rows, and records B's first row.
+		st := newFakeStore(nil)
+		releasedRecord(t, st, snap)
+		st.appendErr = errors.New("disk full")
+		fake := newFakeClient(t, snap)
+		st.client = fake
+		h := startRecording(t, fake, st, nil)
+		h.rec.expect(t, "reconnected 0.9.5 epoch 3 kept", "agent w1:p1 claude idle", "agent w1:p2 claude idle")
+		h.settle()
+		h.stop()
+		if got := savedReleased(st); !slices.Equal(got, []string{"w1:p1"}) {
+			t.Fatalf("saved released %v, want w1:p1 kept", got)
+		}
+
+		st.mu.Lock()
+		st.appendErr = nil
+		st.mu.Unlock()
+		reads := historyReads(st)
+		fake2 := newFakeClient(t, snap)
+		st.client = fake2
+		h2 := startRecording(t, fake2, st, nil)
+		h2.rec.expect(t, "reconnected 0.9.5 epoch 3 kept", "agent w1:p1 claude idle", "agent w1:p2 claude idle")
+		h2.settle()
+		if n := historyReads(st) - reads; n != 1 {
+			t.Errorf("%d history reads, want only w1:p2's", n)
+		}
+		p1 := paneRows(st, "w1:p1")
+		if len(p1) != 3 {
+			t.Fatalf("w1:p1 rows %v, want A's two and B's first", rows(p1))
+		}
+		if _, ok := p1[2].Previous(); ok {
+			t.Errorf("B's first row %s, want no previous Status", row(p1[2]))
+		}
+		if got := savedReleased(st); got != nil {
+			t.Errorf("saved released %v, want none", got)
+		}
+	})
+	t.Run("profile pending", func(t *testing.T) {
+		// The run ends while B's Profile resolves: nothing recorded for B, so
+		// the mark is kept.
+		setProfileTimeout(t, wait)
+		snap := oneAgent("claude", core.StatusIdle)
+		st := newFakeStore(nil)
+		releasedRecord(t, st, snap)
+		fake := newFakeClient(t, snap)
+		fake.setProc("w1:p1", p1PID)
+		st.client = fake
+		env := newFakeEnviron(t)
+		env.set(p1PID, claudeVar, "/h/.claude-cldw")
+		env.hold()
+		h := startRecording(t, fake, st, func(o *Options, _ *recorder) {
+			o.Profiles = map[core.AgentProgram]core.ProfileRule{"claude": claudeRule()}
+			o.Environ = env.lookup
+		})
+		h.rec.expect(t, "reconnected 0.9.5 epoch 3 kept")
+		h.awaitProcessCalls(1)
+		h.cancel()
+		time.Sleep(quiet)
+		env.unblock()
+		h.stop()
+		if n := len(paneRows(st, "w1:p1")); n != 2 {
+			t.Errorf("w1:p1 rows %v, want only A's two", rows(paneRows(st, "w1:p1")))
+		}
+		if got := savedReleased(st); !slices.Equal(got, []string{"w1:p1"}) {
+			t.Errorf("saved released %v, want w1:p1 kept", got)
+		}
+	})
+}
+
+func TestReleasedMarkDropped(t *testing.T) {
+	// w1:p1 shows as a shell, so no first sight clears its mark: only the
+	// epoch or the pane decides.
+	shellP1 := func(s core.Snapshot) core.Snapshot {
+		tid := s.Panes[0].TerminalID
+		s.Panes[0] = shellPane("w1:p1")
+		s.Panes[0].TerminalID = tid
+		return s
+	}
+	for name, tc := range map[string]struct {
+		snap  core.Snapshot
+		lines []string
+		want  []string
+	}{
+		"epoch kept": {shellP1(twoAgents()), []string{"reconnected 0.9.5 epoch 3 kept", "agent w1:p2 claude idle"}, []string{"w1:p1"}},
+		"epoch incremented": {shellP1(restarted()),
+			[]string{"reconnected 0.9.5 epoch 4 incremented", "agent w1:p2 claude idle"}, nil},
+		"pane gone": {core.Snapshot{HerdrVersion: "0.9.5", Panes: twoAgents().Panes[1:]},
+			[]string{"reconnected 0.9.5 epoch 3 kept", "agent w1:p2 claude idle"}, nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			st := newFakeStore(nil)
+			releasedRecord(t, st, twoAgents())
+			fake := newFakeClient(t, tc.snap)
+			st.client = fake
+			h := startRecording(t, fake, st, nil)
+			h.rec.expect(t, tc.lines...)
+			h.settle()
+			if got := savedReleased(st); !slices.Equal(got, tc.want) {
+				t.Errorf("saved released %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

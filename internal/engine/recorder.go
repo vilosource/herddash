@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"maps"
+	"slices"
 
 	"github.com/vilosource/herddash/internal/core"
 	"github.com/vilosource/herddash/internal/store"
@@ -48,8 +49,12 @@ func (e *Engine) restore() {
 		// The first snapshot decides the epoch as after a reconnect. No Agent
 		// is tracked yet, so an increment removes nothing.
 		e.everReady = true
+		// Panes whose Agent was released and whose next one is not yet
+		// recorded: not seeded from the record (Story 5.17).
+		e.released = releasedSet(st.Released)
 		e.saved, e.savedEpoch, e.savedTerminals = true, st.Epoch, maps.Clone(st.Terminals)
-		e.log.Info("server state loaded", "epoch", st.Epoch, "panes", len(st.Terminals))
+		e.savedReleased = maps.Clone(e.released)
+		e.log.Info("server state loaded", "epoch", st.Epoch, "panes", len(st.Terminals), "released", len(st.Released))
 	}
 	e.mark(store.ReasonDaemonStart, "")
 }
@@ -89,22 +94,35 @@ func (e *Engine) record(t core.Transition) {
 	}
 }
 
-// saveState saves the epoch and terminal map after an applied snapshot when
-// they differ from what was last saved, or when nothing has been saved yet. A
-// failed save is logged and tried again after the next snapshot.
+// saveState saves the epoch, terminal map and released panes after an applied
+// snapshot, a release or a released pane's next first row, when they differ
+// from what was last saved, or when nothing has been saved yet. A failed save
+// is logged and tried again at the next of those.
 func (e *Engine) saveState() {
 	if e.store == nil {
 		return
 	}
-	if e.saved && e.epoch == e.savedEpoch && maps.Equal(e.terminals, e.savedTerminals) {
+	if e.saved && e.epoch == e.savedEpoch && maps.Equal(e.terminals, e.savedTerminals) &&
+		maps.Equal(e.released, e.savedReleased) {
 		return
 	}
-	st := store.ServerState{Epoch: e.epoch, Terminals: maps.Clone(e.terminals)}
+	st := store.ServerState{Epoch: e.epoch, Terminals: maps.Clone(e.terminals),
+		Released: slices.Sorted(maps.Keys(e.released))}
 	if err := e.store.SaveServerState(e.host, e.server, st); err != nil {
 		e.log.Error("server state not saved", "epoch", e.epoch, "error", err.Error())
 		return
 	}
 	e.saved, e.savedEpoch, e.savedTerminals = true, st.Epoch, st.Terminals
+	e.savedReleased = maps.Clone(e.released)
+}
+
+// releasedSet is the released panes' ids as a set, never nil.
+func releasedSet(ids []string) map[string]bool {
+	m := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		m[id] = true
+	}
+	return m
 }
 
 // history reads the record of the Agent in p under the epoch now in force,

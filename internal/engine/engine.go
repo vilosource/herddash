@@ -272,11 +272,19 @@ type Engine struct {
 	// terminals is every pane's terminal_id in the latest applied snapshot,
 	// Agent or not: the evidence the epoch rule compares across a reconnect.
 	terminals map[string]string
+	// released holds the panes whose Agent herdr released and whose next
+	// Agent's first row has not been recorded yet (Story 5.17). Such a pane
+	// is never seeded from the record: the record ends in its released
+	// Agent's rows. A mark only ever splits one Agent, never joins two. It is
+	// dropped when the epoch increments or a snapshot no longer shows the
+	// pane, and saved with the terminals.
+	released map[string]bool
 	// saved is set once the epoch and terminals have been saved or loaded;
-	// savedEpoch and savedTerminals are what the store holds.
+	// savedEpoch, savedTerminals and savedReleased are what the store holds.
 	saved          bool
 	savedEpoch     uint64
 	savedTerminals map[string]string
+	savedReleased  map[string]bool
 	panes          map[string]*pane
 	nextGen        uint64
 	// snapSeq numbers snapshot reads; it is the number of the latest one started.
@@ -373,10 +381,11 @@ type pane struct {
 	fold core.FoldResult
 	// seedHistory is set for a pane first tracked by the first snapshot of a
 	// connection whose epoch was loaded or kept, unless the terminal_id held
-	// for it before that snapshot differs from the one it shows: only its
-	// first sight reads the record. A pane tracked later, after a terminal
-	// replacement, or on a changed terminal is a new Agent even when it reuses
-	// a pane id, and its first row has no previous Status (AD-3).
+	// for it before that snapshot differs from the one it shows, or its last
+	// Agent was released (Engine.released): only its first sight reads the
+	// record. A pane tracked later, after a terminal replacement, on a changed
+	// terminal or after a release is a new Agent even when it reuses a pane
+	// id, and its first row has no previous Status (AD-3).
 	seedHistory bool
 	// unrecorded is set once the record may not hold this Agent's fold: a
 	// History read for its first sight or an Append of one of its Transitions
@@ -614,6 +623,7 @@ func New(o Options) *Engine {
 		inbox:            make(chan any),
 		stopped:          make(chan struct{}),
 		panes:            map[string]*pane{},
+		released:         map[string]bool{},
 		epoch:            firstEpoch,
 	}
 	if e.clock == nil {
@@ -1024,6 +1034,16 @@ func (e *Engine) onLifecycle(d herdr.Delivery[core.LifecycleEvent]) {
 			}
 		}
 		e.remove(ev.PaneID, string(ev.Kind))
+		// The pane's next Agent is another one, even if it starts in the
+		// same terminal while herddash is away: never seed it from the
+		// record, which ends in this Agent's rows. Saved now, since no
+		// snapshot need follow before the Daemon stops; also before a
+		// connection's first snapshot, once a state is saved: the epoch and
+		// terminals saved with it are then the ones already held.
+		e.released[ev.PaneID] = true
+		if e.ready || e.saved {
+			e.saveState()
+		}
 		e.resyncSettle()
 	case core.LifecycleClosed, core.LifecycleExited:
 		e.remove(ev.PaneID, string(ev.Kind))
@@ -1230,6 +1250,12 @@ func (e *Engine) onSnapshot(m snapshotMsg) {
 	for _, obs := range m.snap.Panes {
 		e.terminals[obs.PaneID] = obs.TerminalID
 	}
+	// A released pane that is gone will hold no next Agent: drop its mark.
+	for id := range e.released {
+		if _, shown := e.terminals[id]; !shown {
+			delete(e.released, id)
+		}
+	}
 	// Persist the epoch and terminals before this snapshot records anything,
 	// so no row is keyed by an epoch the store does not hold.
 	e.saveState()
@@ -1311,6 +1337,8 @@ func (e *Engine) decideEpoch(s core.Snapshot) bool {
 	for _, id := range ids {
 		e.remove(id, "herdr restarted")
 	}
+	// Under the new epoch no pane has a record to be seeded from.
+	clear(e.released)
 	e.epoch = next
 	return false
 }
@@ -1363,6 +1391,12 @@ func (e *Engine) apply(seq uint64, s core.Snapshot, resubscribe bool, before map
 				// the record's.
 				e.log.Info("terminal changed since the record; not seeding from it", "pane", obs.PaneID,
 					"terminal_id", obs.TerminalID, "recorded_terminal_id", was)
+				seed = false
+			}
+			if seed && e.released[obs.PaneID] {
+				// The pane's last Agent was released: this is its next one,
+				// never joined to the record's.
+				e.log.Info("agent released since the record; not seeding from it", "pane", obs.PaneID)
 				seed = false
 			}
 			p.seedHistory = seed
@@ -2536,13 +2570,15 @@ func (e *Engine) seen(p *pane, status core.Status, prov core.Provenance, order *
 // history: if the Status and Agent Program seen are the ones last recorded,
 // nothing is written and the class keeps its start, exact if it began live;
 // otherwise the change is recorded with the last stored Status as previous.
-// Otherwise (a new Agent, a terminal replaced or changed, or an unseeded first
-// snapshot) the first sight is a Transition with no previous Status, the
-// boundary where the fold and Retention start over for a reused AgentKey
-// (AD-3). Either way the record holds every Agent's current Status (FR-7):
-// snapshot provenance when a snapshot showed it, live when a status event did,
-// at the time it was observed. reportedAt is the fallback when that is
-// unknown. Without a Store nothing is recorded, but the fold is seeded the
+// Otherwise (a new Agent, a terminal replaced or changed, a released pane's
+// next Agent, or an unseeded first snapshot) the first sight is a Transition
+// with no previous Status, the boundary where the fold and Retention start
+// over for a reused AgentKey (AD-3). Recording that row clears the pane's
+// released mark, and saves the change; a row not recorded (a failed Append,
+// the run ending) keeps it, so the next start still does not seed. Either way
+// the record holds every Agent's current Status (FR-7): snapshot provenance
+// when a snapshot showed it, live when a status event did, at the time it was
+// observed. reportedAt is the fallback when that is unknown. Without a Store nothing is recorded, but the fold is seeded the
 // same way. It reports whether it deliberately recorded nothing: the record
 // matched, or the run is ending.
 func (e *Engine) firstSight(p *pane, reportedAt int64) (skipped bool) {
@@ -2595,6 +2631,12 @@ func (e *Engine) firstSight(p *pane, reportedAt int64) (skipped bool) {
 		return true
 	}
 	e.record(t)
+	if _, hasPrev := t.Previous(); !hasPrev && !p.unrecorded && e.released[p.id] {
+		// The released pane's next Agent now begins the record's rows for
+		// the pane: later starts may seed from them.
+		delete(e.released, p.id)
+		e.saveState()
+	}
 	return false
 }
 

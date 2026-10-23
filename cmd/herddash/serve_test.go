@@ -1662,6 +1662,134 @@ func TestServeHistoryAfterSweepReusedPane(t *testing.T) {
 	}
 }
 
+// TestServeReleasedPaneStartsFresh seeds a record for w1:p1 under epoch 1:
+// Agent A worked and finished, and herdr released it, so the saved state
+// marks w1:p1 released, with the fake herdr's terminals. serve restarts on
+// it with an Agent working in the same pane and terminal: that Agent is not
+// seeded from A's rows. Its history ends in a row with no previous Status,
+// /api/state does not show it Finished, and the saved mark is cleared.
+func TestServeReleasedPaneStartsFresh(t *testing.T) {
+	hermeticEnv(t)
+	f := startFakeHerdr(t)
+	dataDir := filepath.Join(t.TempDir(), "data")
+	if err := os.Mkdir(dataDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	dbPath := filepath.Join(dataDir, "herddash.db")
+	st, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SaveServerState("testhost", "test", store.ServerState{Epoch: 1,
+		Terminals: map[string]string{"w1:p1": "i0-t1", "w1:p2": "i0-t2"}, Released: []string{"w1:p1"}}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UnixMilli()
+	for i, r := range []struct{ prev, next core.Status }{
+		{"", core.StatusWorking},
+		{core.StatusWorking, core.StatusDone},
+	} {
+		in := core.TransitionInput{Key: core.AgentKey{Host: "testhost", Server: "test", Epoch: 1, PaneID: "w1:p1"},
+			AgentProgram: "claude", Profile: "claude", New: r.next, HerdrVersion: "0.9.5",
+			ObservedAt: now - int64(60-i)*1000, Provenance: core.ProvenanceLive}
+		if r.prev != "" {
+			prev := r.prev
+			in.Previous = &prev
+		}
+		tr, err := core.NewTransition(in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := st.Append(tr); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var stdout, stderr syncBuffer
+	done := make(chan int, 1)
+	go func() { done <- run(ctx, serveArgs(f, dataDir), &stdout, &stderr) }()
+	addr := listenAddr(t, dataDir)
+	tr := &http.Transport{DisableKeepAlives: true}
+	defer tr.CloseIdleConnections()
+	client := &http.Client{Transport: tr, Timeout: 5 * time.Second}
+
+	type agent struct {
+		Key          core.AgentKey `json:"key"`
+		Status       string        `json:"status"`
+		Class        string        `json:"attention_class"`
+		WaitingSince int64         `json:"waiting_since"`
+	}
+	var a agent
+	waitFor(t, "the Agent in /api/state", func() bool {
+		resp, err := client.Get("http://" + addr + "/api/state")
+		if err != nil {
+			return false
+		}
+		defer resp.Body.Close()
+		var got struct {
+			Agents []agent `json:"agents"`
+		}
+		if resp.StatusCode != http.StatusOK || json.NewDecoder(resp.Body).Decode(&got) != nil || len(got.Agents) != 1 {
+			return false
+		}
+		a = got.Agents[0]
+		return true
+	})
+	if a.Key.Epoch != 1 || a.Status != "working" || a.Class == string(core.ClassFinished) {
+		t.Errorf("agent %+v, want working under epoch 1 and not Finished", a)
+	}
+
+	resp, err := client.Get("http://" + addr + "/api/agents/testhost/test/1/w1%3Ap1/history")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d, body %s", resp.StatusCode, body)
+	}
+	var got struct {
+		Transitions []struct {
+			Previous   string `json:"previous"`
+			New        string `json:"new"`
+			ObservedAt int64  `json:"observed_at"`
+		} `json:"transitions"`
+	}
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("body %s: %v", body, err)
+	}
+	n := len(got.Transitions)
+	if n != 3 || got.Transitions[0].New != "working" || got.Transitions[1].Previous != "working" ||
+		got.Transitions[1].New != "done" {
+		t.Fatalf("history %s, want A's two rows kept and one row for the new Agent", body)
+	}
+	if last := got.Transitions[n-1]; last.Previous != "" || last.New != "working" || a.WaitingSince != last.ObservedAt {
+		t.Errorf("history %s, want it to end in the new Agent's ->working row, its wait since then (%d)", body, a.WaitingSince)
+	}
+
+	cancel()
+	if code := <-done; code != 0 {
+		t.Fatalf("exit code %d, stderr %q", code, stderr.String())
+	}
+	st, err = store.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	saved, ok, err := st.LoadServerState("testhost", "test")
+	if err != nil || !ok || saved.Released != nil {
+		t.Errorf("saved state %+v, %v, %v; want none released", saved, ok, err)
+	}
+}
+
 // TestServeRecap runs serve with and without claude_recaps = true in its
 // config file (ADR-0010). The Agent's foreground process is a child this
 // test starts with CLAUDE_CONFIG_DIR set to a directory holding its session

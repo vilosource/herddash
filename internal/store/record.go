@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 
 	"github.com/vilosource/herddash/internal/core"
 )
@@ -56,10 +57,14 @@ type ResyncMarker struct {
 
 // ServerState is the engine's state for one Host and Server that must
 // survive a Daemon restart (AD-3): the epoch in force and every pane's
-// terminal_id in the latest applied snapshot.
+// terminal_id in the latest applied snapshot, and the panes whose Agent herdr
+// released and whose next Agent's first row has not been recorded yet (Story
+// 5.17): those are never seeded from the record.
 type ServerState struct {
 	Epoch     uint64
 	Terminals map[string]string
+	// Released is the released panes' ids, sorted; nil is none.
+	Released []string
 }
 
 // insertTransition is the one INSERT of a Transition, every column bound.
@@ -249,9 +254,9 @@ func (s *Store) History(ctx context.Context, key core.AgentKey) ([]core.Transiti
 // when none has been.
 func (s *Store) LoadServerState(host, server string) (ServerState, bool, error) {
 	var epoch int64
-	var terminals string
-	err := s.db.QueryRow(`SELECT epoch, terminals FROM server_state WHERE host = ? AND server = ?`, host, server).
-		Scan(&epoch, &terminals)
+	var terminals, released string
+	err := s.db.QueryRow(`SELECT epoch, terminals, released FROM server_state WHERE host = ? AND server = ?`, host, server).
+		Scan(&epoch, &terminals, &released)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ServerState{}, false, nil
 	}
@@ -267,6 +272,14 @@ func (s *Store) LoadServerState(host, server string) (ServerState, bool, error) 
 	}
 	if st.Terminals == nil {
 		st.Terminals = map[string]string{}
+	}
+	if err := json.Unmarshal([]byte(released), &st.Released); err != nil {
+		return ServerState{}, false, fmt.Errorf("store: load server state: released: %w", err)
+	}
+	if len(st.Released) == 0 {
+		st.Released = nil
+	} else {
+		slices.Sort(st.Released)
 	}
 	return st, true, nil
 }
@@ -286,9 +299,18 @@ func (s *Store) SaveServerState(host, server string, st ServerState) error {
 	if err != nil {
 		return fmt.Errorf("store: save server state: %w", err)
 	}
-	_, err = s.db.Exec(`INSERT INTO server_state (host, server, epoch, terminals) VALUES (?, ?, ?, ?)
-		ON CONFLICT (host, server) DO UPDATE SET epoch = excluded.epoch, terminals = excluded.terminals`,
-		host, server, epoch, string(b))
+	released := slices.Sorted(slices.Values(st.Released))
+	if released == nil {
+		released = []string{}
+	}
+	r, err := json.Marshal(released)
+	if err != nil {
+		return fmt.Errorf("store: save server state: %w", err)
+	}
+	_, err = s.db.Exec(`INSERT INTO server_state (host, server, epoch, terminals, released) VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT (host, server) DO UPDATE SET epoch = excluded.epoch, terminals = excluded.terminals,
+			released = excluded.released`,
+		host, server, epoch, string(b), string(r))
 	if err != nil {
 		return fmt.Errorf("store: save server state: %w", err)
 	}

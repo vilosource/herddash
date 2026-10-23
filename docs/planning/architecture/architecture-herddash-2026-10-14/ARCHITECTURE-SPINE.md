@@ -156,15 +156,29 @@ Arrows are the only permitted import directions. `core` imports only the standar
   back on a new `terminal_id`. The AgentKey and the stored schema stay as they are; a Transition
   with **no previous Status** is an Agent's first row, and it is the boundary between them. Such a
   row is written only as an Agent's first sight when it is not seeded from the record: a new
-  Agent, a terminal replaced, or a pane in the first snapshot of a connection whose saved
+  Agent, a terminal replaced, a pane in the first snapshot of a connection whose saved
   `terminal_id` (non-empty) differs from the non-empty one it now shows, so a pane that changed
-  terminal while the Daemon was down is never seeded from its predecessor's history. Every later
+  terminal while the Daemon was down is never seeded from its predecessor's history, or a pane
+  whose Agent herdr released (Story 5.17). Every later
   row of the Agent names a previous Status, the fold's last one when the engine holds no Status.
   The fold (`core.Fold`, `FoldResult.Add`) starts over at each such row, so Class, Since and
   EverWorking describe only the current Agent; Retention keeps only the current Agent's latest
-  `working` row (AD-4). One case stays undetectable and joins: an Agent that quits and another
-  that starts in the same terminal while the Daemon is down leave no row between them, so the new
-  one is read as the old one continued.
+  `working` row (AD-4).
+
+  **A released pane's next Agent (Story 5.17).** `agent_released` writes no row, so a release
+  followed by a new Agent in the same pane and terminal while herddash is away (a Daemon restart
+  or an in-run reconnect, the epoch kept) would otherwise be seeded from the released Agent's
+  rows. The engine marks the pane released, as engine state saved in `server_state` beside the
+  terminal map (column `released`, migration 0004), outside the append-only record. A marked pane
+  is never seeded: its next Agent's first sight is a row with no previous Status, and recording
+  that row clears the mark. A row not recorded (a failed append, the run ending, the Profile still
+  resolving) keeps it. The mark is dropped when the epoch increments or a snapshot no longer shows
+  the pane. It only ever splits one Agent, never joins two. State saved before migration 0004
+  holds no marks and seeds as before.
+
+  One case stays undetectable and joins: an Agent that quits and another that starts in the same
+  terminal while the Daemon is down, with no `agent_released` observed (the Daemon was down for
+  the release too), leave no row between them, so the new one is read as the old one continued.
 
 ### AD-4 — The record is append-only — ADR-0005
 
