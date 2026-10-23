@@ -82,7 +82,7 @@ development_status:
   5-5-tighter-import-rules-and-transition-invariants-adr-0011: done
   5-6-ci-runs-the-board-s-browser-check: done
   5-7-ci-tests-on-macos: done
-  5-8-documents-agents-read-match-the-code: backlog
+  5-8-documents-agents-read-match-the-code: in-progress
   5-9-decide-whether-acknowledgement-is-needed: backlog
   5-10-a-new-agent-in-a-reused-pane-starts-fresh: done
   5-11-the-board-notices-a-hung-daemon: done
