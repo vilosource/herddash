@@ -1101,3 +1101,27 @@ nothing was running.
 **Then** that id is an open task until a notification for it closes it (completed, failed, killed or stopped), exactly like a launched subagent
 **And** a failed resume (`success` false or no id) opens nothing
 **And** tests use the record shape observed on Claude Code 2.1.292 with placeholder text, and ADR-0009 gets a dated amendment
+
+### Story 5.17: A released pane's next Agent starts fresh across a restart
+
+As the operator,
+I want a Claude session I start in a pane whose previous Agent had quit to start fresh, even if the Daemon was down when it started,
+So that it never shows as Finished with the previous Agent's wait.
+
+Source: independent review of Story 5.10, 2026-10-23, reproduced by a failing test. Agent A goes
+working→done live, herdr sends `agent_released` (the engine removes the pane, writes no row), the
+Daemon stops or loses herdr, B starts in the same pane and terminal, and the Daemon comes back keeping
+the epoch: B is seeded from A's history and shows Finished with A's wait. Decided by the orchestrator
+under the operator's delegation (extends vfkb aa3dcbf096bc; no stored-schema change, no ADR): the
+release is recorded in the engine's saved state outside the append-only record (`server_state`'s
+pane-to-terminal map, or an equivalent there), so a pane released before the restart is not seeded
+and B's first sight is written with no previous Status.
+
+**Acceptance Criteria:**
+
+**Given** the reviewer's scenario, both for a Daemon restart and for an in-run reconnect where B appears during the disconnect
+**When** the Daemon sees B
+**Then** B's first row has no previous Status and B shows Idle (or its live Status) from its own first row, never A's class or wait
+**And** a pane that was not released (A still running across the restart) is still seeded exactly as before
+**And** saved state written by 0.5.0 (no release information) still loads and seeds as before
+**And** AD-3's "Successive Agents on one AgentKey" paragraph states the case and the remaining residual
