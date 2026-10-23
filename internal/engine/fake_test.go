@@ -1056,6 +1056,7 @@ func (f *fakeStore) LoadServerState(host, server string) (store.ServerState, boo
 	}
 	st, ok := f.state[host+"/"+server]
 	st.Terminals = maps.Clone(st.Terminals)
+	st.Released = slices.Clone(st.Released)
 	return st, ok, nil
 }
 
@@ -1073,6 +1074,7 @@ func (f *fakeStore) SaveServerState(host, server string, st store.ServerState) e
 	f.saves++
 	f.writes = append(f.writes, fmt.Sprintf("save %d", st.Epoch))
 	st.Terminals = maps.Clone(st.Terminals)
+	st.Released = slices.Clone(st.Released)
 	f.state[host+"/"+server] = st
 	return nil
 }

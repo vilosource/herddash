@@ -402,6 +402,7 @@ func TestColumns(t *testing.T) {
 			{"server", "TEXT", true, true},
 			{"epoch", "INTEGER", true, false},
 			{"terminals", "TEXT", true, false},
+			{"released", "TEXT", true, false},
 		},
 	}
 	for table, cols := range want {
@@ -557,7 +558,7 @@ func TestMigrationsNumbered(t *testing.T) {
 	for _, m := range ms {
 		names = append(names, m.name)
 	}
-	if got, want := strings.Join(names, ","), "0001_initial.sql,0002_server_state.sql,0003_observed_by.sql"; got != want {
+	if got, want := strings.Join(names, ","), "0001_initial.sql,0002_server_state.sql,0003_observed_by.sql,0004_server_state_released.sql"; got != want {
 		t.Errorf("migrations %s, want %s", got, want)
 	}
 	if len(ms) != schemaVersion {
@@ -566,7 +567,7 @@ func TestMigrationsNumbered(t *testing.T) {
 }
 
 // schemaVersion is the user_version a fully migrated database has.
-const schemaVersion = 3
+const schemaVersion = 4
 
 // TestFailedMigrationRollsBack runs a migration list whose second step fails:
 // nothing from the first step survives and user_version is unchanged.
