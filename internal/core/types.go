@@ -79,6 +79,7 @@ var (
 	ErrInvalidImportKey  = errors.New("import key does not match provenance")
 	ErrInvalidSpurious   = errors.New("only a backfill transition can be possibly spurious")
 	ErrInvalidObserver   = errors.New("observer is unknown or does not match provenance")
+	ErrInvalidHerdrOrder = errors.New("only a snapshot transition can carry herdr's order")
 )
 
 // TransitionError is the typed error NewTransition returns. Field names the
@@ -108,9 +109,10 @@ type TransitionInput struct {
 	Previous *Status
 	New      Status
 	// HerdrOrder is herdr's ordering information for this change, when known:
-	// its per-server state-change counter, which only a snapshot reports. It is
-	// nil for a live Transition, and since it restarts with herdr it orders
-	// Transitions only within one herdr server instance.
+	// its per-server state-change counter, which only a snapshot reports. Only a
+	// snapshot Transition can carry it (NewTransition rejects it otherwise), and
+	// since it restarts with herdr it orders Transitions only within one herdr
+	// server instance.
 	HerdrOrder *uint64
 	// HerdrVersion is the version of the herdr server observed, when known.
 	HerdrVersion string
@@ -161,6 +163,7 @@ type Transition struct {
 //     Transition with one
 //   - an ObservedAt that is not positive
 //   - PossiblySpurious on a live or snapshot Transition
+//   - a HerdrOrder on a live or backfill Transition
 //   - an unknown Observer, and an Observer other than herdr on a Transition
 //     that is not live
 //
@@ -203,6 +206,11 @@ func NewTransition(in TransitionInput) (Transition, error) {
 	}
 	if in.PossiblySpurious && !backfill {
 		return Transition{}, &TransitionError{Field: "possibly spurious", Value: "true with provenance " + string(in.Provenance), Err: ErrInvalidSpurious}
+	}
+	// herdr reports its state_change_seq only on snapshot records (Finding Q3);
+	// migration 0001's CHECK enforces the same at the database.
+	if in.HerdrOrder != nil && in.Provenance != ProvenanceSnapshot {
+		return Transition{}, &TransitionError{Field: "herdr order", Value: fmt.Sprintf("%d with provenance %s", *in.HerdrOrder, in.Provenance), Err: ErrInvalidHerdrOrder}
 	}
 
 	// observed_by is only ever set with provenance live. This check is what

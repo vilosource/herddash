@@ -187,7 +187,9 @@ gofmt -l .      # must print nothing
 `arch_test.go` at the module root enforces the spine's import graph over every non-test Go file in
 the module: it fails, naming the edge, on any import between internal packages that the spine's
 diagram does not draw, on any package outside the spine, on any non-standard import in
-`internal/core`, and on `internal/core` reading or waiting on the clock (`time.Now`, `Since`,
+`internal/core` or in `internal/herdr` and the packages under it (`gen`, `genwire`), on any import
+of `internal/herdr/gen` or a package under it from outside `internal/herdr` (ADR-0011), and on
+`internal/core` reading or waiting on the clock (`time.Now`, `Since`,
 `Sleep` and the like, or a dot-import of `time`). Changing its permitted set is a
 structural change and needs an ADR.
 

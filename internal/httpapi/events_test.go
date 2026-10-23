@@ -409,20 +409,33 @@ func TestEventNames(t *testing.T) {
 // when known, and a resync's detail when set.
 func TestWireTransitionFull(t *testing.T) {
 	prev := core.StatusIdle
-	order := uint64(42)
 	tr, err := core.NewTransition(core.TransitionInput{
 		Key:          core.AgentKey{Host: "h", Server: "s", Epoch: core.BackfillEpoch, PaneID: "p"},
-		AgentProgram: "codex", Profile: "work", Previous: &prev, New: core.StatusDone, HerdrOrder: &order,
+		AgentProgram: "codex", Profile: "work", Previous: &prev, New: core.StatusDone,
 		HerdrVersion: "0.9.5", ObservedAt: 9, Provenance: core.ProvenanceBackfill, ImportKey: "k", PossiblySpurious: true,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	b, _ := json.Marshal(newWireTransition(tr))
-	want := `{"agent_program":"codex","profile":"work","previous":"idle","new":"done","herdr_order":42,` +
+	want := `{"agent_program":"codex","profile":"work","previous":"idle","new":"done",` +
 		`"herdr_version":"0.9.5","observed_at":9,"provenance":"backfill","possibly_spurious":true}`
 	if string(b) != want {
 		t.Errorf("transition\n%s\nwant\n%s", b, want)
+	}
+	// herdr's order is known only on a snapshot Transition.
+	order := uint64(42)
+	tr, err = core.NewTransition(core.TransitionInput{
+		Key: core.AgentKey{Host: "h", Server: "s", Epoch: 2, PaneID: "p"}, New: core.StatusDone, HerdrOrder: &order,
+		ObservedAt: 9, Provenance: core.ProvenanceSnapshot,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ = json.Marshal(newWireTransition(tr))
+	want = `{"agent_program":"","profile":"","new":"done","herdr_order":42,"observed_at":9,"provenance":"snapshot","possibly_spurious":false}`
+	if string(b) != want {
+		t.Errorf("snapshot transition\n%s\nwant\n%s", b, want)
 	}
 	_, data, ok := changeData(engine.Change{Kind: engine.ChangeResync, Reason: "connect", Detail: "epoch incremented"})
 	b, _ = json.Marshal(data)
