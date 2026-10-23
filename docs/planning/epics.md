@@ -215,7 +215,7 @@ So that it runs on my machine with nothing but a Profile Map configured (FR-15, 
 **Given** no socket path configured
 **When** herddash resolves the socket
 **Then** it follows herdr's order: `--session`, `HERDR_SOCKET_PATH`, `HERDR_SESSION`, then `~/.config/herdr/herdr.sock`
-**And** it derives Server as `default` for the default socket and `<name>` for `sessions/<name>/herdr.sock`, and Host as the configured name, else the OS hostname
+**And** it derives Server as `default` for the default socket and `<name>` for `sessions/<name>/herdr.sock`, and Host as the configured name, else the short hostname (the OS hostname up to its first dot; reworded 2026-10-23, Story 5.8, to match the code)
 
 **Given** herddash starts for the first time
 **When** it creates the data directory

@@ -17,7 +17,7 @@ the product, and the recorder is what makes it trustworthy.
 |---|---|
 | [docs/adr/0001-what-herddash-is.md](docs/adr/0001-what-herddash-is.md) | **Accepted, option B.** What this project is, after the prior art took three of its five differentiators. Everything else is scoped by it. |
 | [docs/adr/0003-the-board-is-the-product.md](docs/adr/0003-the-board-is-the-product.md) | Amends one ADR-0001 consequence: the board is what herddash is measured by, and its restraint (read-only, no terminal, no pane control) is the differentiator. |
-| [docs/prd.md](docs/prd.md) | The product definition, **final** as of 2026-10-14. §3 is the vocabulary, used exactly everywhere; §4 holds FR-1 to FR-17 plus FR-2a and FR-9a. Its [addendum](docs/planning/prds/prd-herddash-2026-10-08/addendum.md) holds the protocol constraints, stack and build order. |
+| [docs/prd.md](docs/prd.md) | The product definition, **final** as of 2026-10-14, since amended in place by dated operator decisions. §3 is the vocabulary, used exactly everywhere; §4 holds FR-1 to FR-17 plus FR-2a and FR-9a. Its [addendum](docs/planning/prds/prd-herddash-2026-10-08/addendum.md) holds the protocol constraints, stack and build order. |
 | [docs/planning/architecture/architecture-herddash-2026-10-14/ARCHITECTURE-SPINE.md](docs/planning/architecture/architecture-herddash-2026-10-14/ARCHITECTURE-SPINE.md) | **Final.** The rules every story must obey: package boundaries, the single-writer engine, identity, the record, the event stream. [How herddash works](docs/how-herddash-works.md) is the plain-language version. |
 | [docs/research/herdr-on-this-machine.md](docs/research/herdr-on-this-machine.md) | The setup this project grew out of, none of which is visible from this repository. |
 | [docs/research/herdr-socket-api.md](docs/research/herdr-socket-api.md) | How to talk to herdr. Read before any client code; it contains traps that look like free choices. |
@@ -31,27 +31,36 @@ them to disagree.
 
 ## How the build runs
 
-**Planning is complete.** The PRD, the architecture and the 27 stories in
-`docs/planning/epics.md` are final, and `docs/implementation/sprint-status.yaml` tracks them.
-Build one story at a time with `/bmad-build`, in the order the tracking file lists, starting with
-Story 1.1. Do not write code that no story asks for.
+**Planning is complete.** The PRD, the architecture and the 42 stories in
+`docs/planning/epics.md` (27 for Epics 1 to 4, 15 for Epic 5) are final, and
+`docs/implementation/sprint-status.yaml` tracks them. Build one story at a time with
+`/bmad-build`, in the order the tracking file lists; it names the next one. Do not write code that
+no story asks for.
 
-The tracking file's `action_items` name the operator checkpoints:
-- **Story 1.3** needs an isolated herdr 0.9.5, never the live 0.8.2 server.
-- **Story 2.6** needs a sample of the plugin log.
-- **Story 3.6's design** needs approval before Story 3.7.
-- **Story 4.3** needs a day of dogfooding before release-please PR #2 is merged.
+The tracking file's `action_items` name the operator checkpoints. Those of Epics 1 to 4 are closed:
+- **Story 1.3** ran against an isolated herdr 0.9.5. That rule still holds for any herdr
+  experiment, but the live server itself has run 0.9.5 since 2026-10-20 (see below).
+- **Story 2.6** had its sample of the plugin log.
+- **Story 3.6's design** was approved before Story 3.7.
+- **Story 4.3** had its day of dogfooding before release-please PR #2 was merged, at 0.1.0.
+
+Two are open:
+- **When Epic 5 is done**, the operator is asked once; on their OK it ships as one pull request
+  and one release. Until then its stories are built and installed locally as `-dev` builds.
+- **Story 5.9** runs on or after 2026-11-03, and asks the operator only if the record shows
+  Finished Agents that never cleared.
 
 The architecture spine at
 `docs/planning/architecture/architecture-herddash-2026-10-14/ARCHITECTURE-SPINE.md` is binding on
 every story: its `AD` rules, its import graph and its conventions. ADR-0004 to ADR-0007 carry the
-structural decisions behind it. Its four open questions were answered by Story 1.3 against an
-isolated herdr 0.9.5 binary; the evidence is in the socket API record's "Findings against herdr
-0.9.5".
+structural decisions behind it; ADR-0008 to ADR-0012 added Claude Code's session record, background
+work, recaps, the tighter import rules and the event stream's keepalive. Its four open questions
+were answered by Story 1.3 against an isolated herdr 0.9.5 binary; the evidence is in the socket
+API record's "Findings against herdr 0.9.5".
 
 The PRD's remaining open questions (§8) are answered during the build, not before it: whether
-acknowledgement is needed at all after two weeks of dogfooding, and Profile rules and Pane Titles for Codex and Antigravity once one
-pane of each has been observed.
+acknowledgement is needed at all (Story 5.9, from the record), and Profile rules and Pane Titles
+for Codex and Antigravity once one pane of each has been observed.
 
 ## Working method
 
@@ -60,10 +69,38 @@ repository as the 29 `bmad-*` skills under `.claude/skills/`. Start with `/bmad-
 `docs/` and recommends the next step. How BMAD's documents relate to the PRD and the ADRs, and why
 everything it produces lands under `docs/planning/` and `docs/implementation/` rather than its
 default folder, is [ADR-0002](docs/adr/0002-adopt-bmad-method.md). The order is fixed: decide
-ADR-0001, then rework the PRD with `/bmad-prd`, then architecture, epics, sprint planning. The
-first two are done. The PRD's BMAD run folder keeps a `prd.md` symlink to `docs/prd.md`, so the
-skills find it and there is still only one PRD. The
-skills need `uv` on the machine; building herddash does not.
+ADR-0001, then rework the PRD with `/bmad-prd`, then architecture, epics, sprint planning. All of
+them are done. The PRD's BMAD run folder keeps a `prd.md` symlink to `docs/prd.md`, so the
+skills find it and there is still only one PRD. The skills need `uv` on the machine; building
+herddash does not.
+
+**Deferred work** lives in `docs/implementation/deferred-work.md`, one entry per item with its
+source spec, summary and evidence. An entry that is closed keeps its place and gains a `resolved:`
+line saying when, by which story and where; an entry with no such line is open.
+
+### Lessons from the retrospectives
+
+The Epic 1 to 4 retrospectives (`docs/implementation/epic-<n>-retro-2026-10-23.md`) found these
+habits missing. Apply them in every story:
+
+- **A deferral that names a future story changes that story's acceptance criteria** in
+  `epics.md` in the same commit. A deferral with no story goes into `deferred-work.md` without
+  naming one. One routed "to Story 1.5" only in the ledger was never picked up and surfaced four
+  epics later.
+- **Every spine item marked Open gets an owner** when epics are cut: a story or a
+  `deferred-work.md` entry. AD-3's epoch persistence had neither until a review caught it.
+- **Run a new concurrency test with `-race -count=50`** (or `-cpu=1,4,8`) before merging. A fake
+  client's race hung one run in 40 for five days before anyone saw it.
+- **Test state derived from the record across a Daemon restart**, not only within one run.
+  Waiting Time after an Agent was replaced in the same pane broke only after a restart.
+- **Force a rollback test to fail mid-transaction**, after rows were written, not at `BeginTx`,
+  or it proves nothing about rollback.
+- **State a guarantee in a commit or pull request only as strongly as the code provides it.**
+- **A toolchain the spine pins for a deliverable is tested in CI**, and a test that skips on a
+  missing tool needs CI to prove it did not skip where the tool is expected
+  (`HERDDASH_REQUIRE_TOOLS`).
+- **A design gate for the Board looks at the design rendered with the operator's live data**, not
+  only the anonymised fixture.
 
 ## Non-negotiables
 
@@ -87,7 +124,8 @@ to the stored event schema, or a new network surface.
 - **The live herdr server on this machine hosts real agent work.** Since its restart on
   2026-10-20 it runs 0.9.5, the supported minimum (ADR-0006), so herddash needs no dogfooding flag
   against it. Never stop, restart or experiment on it. A Claude session here usually runs inside
-  one of its panes, so the inherited `HERDR_SOCKET_PATH` points at it: run herdr experiments only
+  one of its panes, so the inherited `HERDR_SOCKET_PATH` points at it, and even a plain `herdr`
+  command typed there is a client of the live server: run herdr experiments only
   in isolation, as `docs/research/herdr-0.9.5-probe.sh` does, under `env -i` with its own `HOME`.
 - **herdr's configuration is owned by an Ansible repository, not by hand.** Do not edit
   `~/.config/herdr/config.toml`. Changes belong in that repository.
@@ -206,18 +244,27 @@ space-separated list, names it; then they fail. The `macos` job sets it to `plut
 `release-toolchain` to `systemd-analyze`; locally, leave it unset.
 
 `arch_test.go` at the module root enforces the spine's import graph over every non-test Go file in
-the module: it fails, naming the edge, on any import between internal packages that the spine's
-diagram does not draw, on any package outside the spine, on any non-standard import in
-`internal/core` or in `internal/herdr` and the packages under it (`gen`, `genwire`), on any import
-of `internal/herdr/gen` or a package under it from outside `internal/herdr` (ADR-0011), and on
-`internal/core` reading or waiting on the clock (`time.Now`, `Since`,
-`Sleep` and the like, or a dot-import of `time`). Changing its permitted set is a
+the module. It fails, naming the edge or the call, on:
+
+- any import between internal packages that the spine's diagram does not draw;
+- any package outside the spine;
+- any non-standard import in `internal/core`, or in `internal/herdr` and the packages under it
+  (`gen`, `genwire`) (ADR-0011);
+- any import of `internal/herdr/gen` or a package under it from outside `internal/herdr`
+  (ADR-0011);
+- `internal/core` reading or waiting on the clock (`time.Now`, `Since`, `Sleep` and the like, or a
+  dot-import of `time`).
+
+`testdata/badtree/` is the fixture that proves each rule fails. Changing the permitted set is a
 structural change and needs an ADR.
 
-`go run ./cmd/herddash version` prints `herddash dev (<commit>)`. Release builds stamp
-`-ldflags "-X main.version=... -X main.commit=..."`, which `scripts/release-build.sh <version>
-<commit> <outdir>` does, so a release binary prints e.g. `herddash 0.1.0 (<commit>)`. Unstamped
-builds take the commit from Go's embedded VCS info (`go run` embeds none, so it prints `unknown`).
+`herddash version` prints `herddash <version> (<commit>)`. Without stamping, the version is `dev`
+and the commit comes from Go's embedded VCS info: a plain `go build` in a clone prints
+`herddash dev (<12 hex digits>)`, with `-dirty` appended when the tree had uncommitted changes,
+and `go run ./cmd/herddash version` embeds none, so it prints `herddash dev (unknown)`. Release
+builds stamp `-ldflags "-s -w -X main.version=<version> -X main.commit=<commit>"`, which
+`scripts/release-build.sh <version> <commit> <outdir>` does, so a release binary prints e.g.
+`herddash 0.5.0 (<12 hex digits>)`; `-s -w` strips the symbol table and DWARF data.
 `release_test.go` runs that script (only the host's target under `-short`) and checks the release
 workflows' triggers, concurrency, permissions, pinned actions and Go version, and CI's job set.
 `TestReleaseBuild` also checks every binary's `vcs.revision` equals `git rev-parse HEAD` and
@@ -230,21 +277,38 @@ No npm, no build step for assets. Web assets are embedded in the binary.
 
 ## Repository state
 
-**Epics 1 to 3 are built, and Epic 4 (running unattended and releases) is in progress.** `docs/implementation/sprint-status.yaml`
-is the authority on which story is next; each story's spec, with its review triage log, is
-`docs/implementation/spec-<key>.md`. What exists:
+**Epics 1 to 4 are done, released as v0.1.0 to v0.5.0, and Epic 5 (closing what dogfooding and
+reviews left open after 0.5.0) is in progress** on `feat/epic-5-after-0.5.0`.
+`docs/implementation/sprint-status.yaml` is the authority on which story is next; each story's
+spec, with its review triage log, is `docs/implementation/spec-<key>.md`. `go.mod` declares
+`go 1.26.0` and three direct dependencies: `modernc.org/sqlite` v1.60.1,
+`github.com/BurntSushi/toml` v1.6.0 and `golang.org/x/sys` v0.49.0 (ADR-0004). What exists:
 
 - `cmd/herddash`: `serve` (the default), `config`, `import-plugin-log` and `version`.
+- `internal/config`: the TOML file, flags, validation, and socket, Host and Server resolution.
 - `internal/herdr`: the socket client (one request per connection, per-pane status
   subscriptions, stream-health signals). `internal/herdr/gen` holds the herdr 0.9.5 wire types,
   generated from the committed schema dump by `go generate ./internal/herdr/gen`; a test fails if
-  they drift.
-- `internal/engine`: the single-writer actor. It reconnects forever, detects server epochs,
-  resyncs, applies the version gate, resolves Profiles through `internal/procenv`, records
-  Transitions and publishes immutable views.
-- `internal/store`: the SQLite record (`modernc.org/sqlite`, WAL, flock-owned).
+  they drift. A lifecycle line that decodes as JSON but is not an event it can deliver arrives
+  flagged unexpected, and the engine answers it with a fresh snapshot rather than a reconnect
+  (Story 5.12).
+- `internal/procenv`: reads one process's environment and its direct children (linux `/proc`,
+  darwin `kern.procargs2` through `golang.org/x/sys`), Claude Code's session record
+  `sessions/<pid>.json`, and that session's transcript, tailed in memory (ADR-0008, ADR-0009).
+- `internal/engine`: the single-writer actor. It reconnects forever, detects server epochs
+  (persisted in `server_state`), resyncs, applies the version gate, resolves Profiles through
+  `internal/procenv`, records Transitions and publishes immutable views. Snapshot reads that keep
+  failing after start, `defaultSnapshotFailuresBeforeLost` (3) in a row, count as herdr lost, so
+  the connection strip says so (Story 5.12). Its fixed timings are in
+  `internal/engine/tunables.go`, listed for operators at the end of `docs/config.example.toml`.
+- `internal/core`: the pure rules: Attention Class, Waiting Time fold, sort key, Context Line,
+  Profile rules, and the transcript decoder. `core.NewTransition` refuses a `HerdrOrder` on a
+  `live` or `backfill` Transition (`core.ErrInvalidHerdrOrder`).
+- `internal/store`: the SQLite record (`modernc.org/sqlite`, WAL, flock-owned), plus the engine's
+  `server_state`, which is engine state, not the append-only record.
 - `internal/httpapi`: the read-only loopback API: `/api/state`, `/events` (SSE) and
-  `/api/agents/{host}/{server}/{epoch}/{pane}/history`.
+  `/api/agents/{host}/{server}/{epoch}/{pane}/history`. Every 15 s a stream sends a `keepalive`
+  event with no `id:` (ADR-0012).
 - `internal/importer`: the plugin-log backfill.
 
 - The Board at `/`, with its files under `internal/httpapi/web/` embedded in the binary: the
@@ -253,6 +317,42 @@ is the authority on which story is next; each story's spec, with its review tria
   run by CI's `board-browser` job. Its approved design is `docs/design/board-design.md`.
 - `deploy/`: a launchd agent and a systemd user unit, installed by hand as `docs/install.md`
   describes.
+
+What the Board shows beyond herdr's Status, all for Claude Code Agents:
+
+- **Needs you from the session record** (ADR-0008): Claude Code's own `sessions/<pid>.json`
+  saying it waits on the operator is a second source of `blocked`, recorded with
+  `observed_by = claude_session`.
+- **Background** (ADR-0009): a done or idle Agent with background shells or tasks still open,
+  from its child processes and its transcript's task markers. A resumed session's `stopped`
+  notifications close the tasks the earlier process left open, and `/clear` starts a new
+  transcript, so the old tasks go with it (Stories 5.2 and 5.3; the research records are
+  `docs/research/claude-code-resume-background-tasks-2026-10-23.md` and
+  `docs/research/claude-code-clear-background-tasks-2026-10-23.md`).
+- **Recaps** (ADR-0010, only with `claude_recaps = true`): the newest recap, from an
+  `away_summary` record or from the output of a `/recap` run by hand (Story 5.14), held in memory
+  and never recorded. A local command such as `/usage`, with its caveat and its output
+  (`<local-command-stdout>` or `<local-command-stderr>`), does not start a turn, so it neither
+  clears the recap nor changes the turn state (Story 5.14). A skill command that starts a model
+  turn does, and so does a `!command` in bash mode, because Claude Code answers it with a model
+  turn (Story 5.15, `docs/research/claude-code-bash-mode-2026-10-23.md`).
+
+Epic 5 has also made these exact so far:
+
+- The Board treats a stream that sends nothing, keepalive included, for 35 s
+  (`STREAM_SILENCE_MS`) as a lost Daemon: it dims, says so and reconnects. A skipped sequence
+  number or a rejected `state` event makes it load the whole state again. With herdr's version
+  unknown, the version strip says it could not be read (Story 5.11).
+  `internal/httpapi/engine_contract_test.go` drives the SSE handler from the real engine and
+  replays the publications through `order.mjs` (`internal/httpapi/testdata/replay-board.mjs`),
+  asserting the Board's model equals the published view.
+- Context Lines lose Unicode bidi controls (other format characters, such as an emoji's
+  zero-width joiner, stay), render inside `<bdi>`, and lose only Claude Code's own status glyph
+  prefix, so a session name starting with `-`, `#` or an emoji keeps it. A workspace herdr gives
+  no position gets its own group and name, after the positioned ones (Story 5.13).
+- CI's `board-browser`, `macos` and `release-toolchain` jobs (Stories 5.6, 5.7; see "Build and
+  test").
+- `arch_test.go`'s ADR-0011 rules (Story 5.5).
 
 `main` and `develop` are kept level; if they are not, a `develop` into `main` pull request is open
 or overdue.

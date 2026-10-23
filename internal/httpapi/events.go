@@ -18,7 +18,8 @@ const (
 	// before the engine drops it as too slow (AD-7).
 	eventBuffer = 64
 	// streamWriteTimeout bounds each write to a stream, so a stalled client
-	// cannot pin its goroutine forever.
+	// cannot pin its goroutine forever. This and keepaliveInterval are listed
+	// under "Fixed timings" in docs/config.example.toml; change it with them.
 	streamWriteTimeout = 10 * time.Second
 	// keepaliveInterval is how often a stream sends a keepalive event
 	// (ADR-0012). The Board takes a stream silent for STREAM_SILENCE_MS

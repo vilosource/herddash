@@ -107,3 +107,47 @@ absent = "claude"
 # Uncomment and adapt, one line per wrapper that sets CLAUDE_CONFIG_DIR:
 # "~/.claude-cldp" = "cldp"
 # "~/.claude-cldw" = "cldw"
+
+# --- Fixed timings (not configurable) ----------------------------------------
+#
+# These are not keys: herddash has no setting for them. They are listed here so
+# you know what to expect. They are named constants in
+# internal/engine/tunables.go, cmd/herddash/serve.go, internal/httpapi/events.go
+# and the Board's internal/httpapi/web/order.mjs, each of which points back
+# here; a change there must change this list too.
+#
+# Talking to herdr
+#   ping timeout, at each start (reads herdr's version)       10 s
+#   subscription setup timeout                                 10 s
+#   one snapshot read, timeout                                 30 s
+#   least time between the starts of two snapshot reads         1 s
+#   reconcile: a snapshot read while connected, every          60 s
+#   least time between the starts of two resyncs                5 s
+#     (also how often a pane herdr keeps rejecting is subscribed again)
+#   wait before reading again after a failed snapshot read      2 s
+#   failed snapshot reads in a row, once started, before
+#     herdr counts as lost and herddash reconnects              3
+#   reconnect backoff: first wait 1 s, doubling per failure, at most 30 s,
+#     forever; a connection up for 30 s resets it
+#   ping of a herdr the version gate refused, every            30 s
+#
+# Agents
+#   resolving one Agent's Profile, timeout                      2 s
+#     (running out records the Profile as "unresolved")
+#   first look for background work after done or idle        250 ms
+#   background work re-read while done or idle, every           5 s
+#   one read of an Agent process's children, timeout            2 s
+#   Claude Code session record read, every                      2 s
+#   one session record read, timeout                            1 s
+#
+# Record
+#   Retention sweep, every (from the first ready connection)    1 h
+#
+# HTTP and the Board
+#   a client's request headers, timeout                        10 s
+#   one write to the event stream or a history reply, timeout  10 s
+#   event stream keepalive, every                              15 s
+#   the Board treats a stream silent for this long as lost     35 s
+#   the Board's reopen after the stream closed: first wait 1 s, doubling,
+#     at most 30 s; a fresh state resets it
+#   graceful HTTP shutdown when herddash stops, at most         5 s

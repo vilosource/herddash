@@ -75,6 +75,10 @@ sequenceDiagram
 When you open the board, the page subscribes to the event stream, and the first thing it receives
 is the whole current state. After that each change arrives as it happens, within about a second.
 If the connection drops, the page reconnects and receives the whole state again, so it cannot drift.
+The stream also sends a keepalive every 15 seconds, so a daemon that hangs with the connection
+still open is noticed too: after 35 seconds of silence the page dims, says it has lost contact and
+reconnects. These timings, and the daemon's own ones for talking to herdr, are fixed; the end of
+[the configuration example](config.example.toml) lists them.
 
 herddash never asks herdr for anything when you load the page. The page shows herddash's own
 record, so a dozen open tabs put no extra load on herdr.

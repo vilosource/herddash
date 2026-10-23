@@ -516,8 +516,9 @@ func TestSnapshotMinInterval(t *testing.T) {
 }
 
 func TestPaneMoved(t *testing.T) {
-	// Today a move is a snapshot: the old id is removed and the new id is a
-	// new Agent with its own subscription.
+	// A move is a removal plus a new Agent (spine AD-3): the move triggers a
+	// snapshot, the old id is removed and the new id is a new Agent with its
+	// own subscription. Identity is never carried across the move.
 	h := started(t)
 	old := h.fake.statusSub("w1:p1")
 	s := twoAgents()

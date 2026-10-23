@@ -109,8 +109,10 @@ read-only, so any future surface shows the same truth the Board does.
   the **Profile Map**, a configured mapping from process environment values to Profile names. For
   other Agent Programs it defaults to the Agent Program name. Profiles usually correspond to
   subscriptions, which is why the operator cares; herdr itself has no notion of either.
-- **Board** — the single page herddash serves: a flat top zone of Needs you and Finished Boxes,
-  longest-waiting first, above the Working and Unknown Boxes grouped by workspace, live.
+- **Board** — the single page herddash serves, live: a top zone of Needs you Boxes alone,
+  longest-waiting first, flat across workspaces, above every other Box grouped by workspace, each
+  group ordered Finished, Idle, Background, Working, Unknown, most recent first (FR-3 as amended
+  2026-10-21).
 - **Box** — the Board's representation of one Agent. Its heading is the Profile and Agent Program;
   its body is the project directory, the workspace and tab it lives in, Attention Class, Waiting
   Time, and one Context Line.
@@ -149,10 +151,12 @@ calm. The Board repaints a Box within a second of the Daemon recording a Transit
 refresh. It is readable from across a desk and carries nothing that is not in a Box or the page's
 strips. Realizes UJ-1, UJ-2, UJ-3.
 
-Boxes are a responsive grid of cards in two zones. The top zone is flat: every Needs you and
-Finished Box, Needs you first, each class longest-waiting first, whatever workspace it is in. Below
-it, Working and Unknown Boxes are grouped by workspace under a thin workspace label, since herdr
-already provides that hierarchy. Grouping never reorders the top zone.
+Boxes are a responsive grid of cards in two zones. The top zone is flat: every Needs you Box,
+longest-waiting first, whatever workspace it is in. Below it, every other Box is grouped by
+workspace under the workspace's heading, in herdr's workspace order, since herdr already provides
+that hierarchy; inside a group Finished comes first, then Idle, Background, Working and Unknown,
+each most recent first. Grouping never reorders the top zone. *(Rewritten 2026-10-23 to match
+FR-3 as amended on 2026-10-21; until then this paragraph put Finished in the top zone.)*
 
 The Context Line's derivation is FR-2a. Measured on the operator's machine on 2026-10-13, Claude
 Code Pane Titles run 7 to 45 characters and read as session names, not prompt text. The Pane
@@ -684,7 +688,8 @@ are now FR-9a and §6.2.
 Drafted as assumptions, then confirmed or revised by the operator on 2026-10-13 and 2026-10-14.
 
 - §4.1 — Boxes are a responsive card grid: a flat Needs-you-first top zone above the Boxes
-  grouped by workspace.
+  grouped by workspace. (The top zone has held Needs you alone since FR-3's 2026-10-21
+  amendment.)
 - §4.1 FR-2a — The global default Context Line is empty.
 - §4.2 FR-9 — Default Retention is 90 days.
 - §4.3 FR-11 — Claude Code's Profile rule is the environment-variable rule on

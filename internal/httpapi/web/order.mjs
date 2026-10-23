@@ -415,7 +415,8 @@ function withAgent(model, view) {
 // Reconnect backoff after the stream closes for good (a non-200 reply, such
 // as the 503 while the Daemon restarts): the first reopen waits
 // RECONNECT_START_MS, each later one twice as long up to RECONNECT_CAP_MS,
-// and a state event resets it.
+// and a state event resets it. These and STREAM_SILENCE_MS are listed under
+// "Fixed timings" in docs/config.example.toml; change it with them.
 export const RECONNECT_START_MS = 1000;
 export const RECONNECT_CAP_MS = 30000;
 

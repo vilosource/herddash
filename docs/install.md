@@ -20,8 +20,7 @@ Every command below runs from a clone of this repository unless it says otherwis
 
 Both units start `~/.local/bin/herddash`, so the binary goes there.
 
-Either download a release binary or build one. Downloads start with the first release; until it
-is published, build it.
+Either download a release binary or build one.
 
 **Download a release binary.** Each release on
 <https://github.com/vilosource/herddash/releases> carries one binary per platform, built with
@@ -36,7 +35,8 @@ is published, build it.
 | Linux, ARM64 | `herddash_<version>_linux_arm64` |
 
 The macOS binaries need macOS 13 or newer. They are not signed or notarised. For example, 0.1.0
-on Apple silicon (set `ASSET` to your platform's name from the table):
+on Apple silicon (set `ASSET` to your platform's name from the table; on Linux, use
+`sha256sum -c -` in place of `shasum -a 256 -c -`):
 
 ```bash
 V=0.1.0
@@ -45,16 +45,18 @@ DL=$(mktemp -d)
 cd "$DL"
 curl -fLO "https://github.com/vilosource/herddash/releases/download/v$V/$ASSET"
 curl -fLO "https://github.com/vilosource/herddash/releases/download/v$V/SHA256SUMS"
-# or: gh release download "v$V" --repo vilosource/herddash --pattern "$ASSET" --pattern SHA256SUMS
-grep " $ASSET\$" SHA256SUMS | shasum -a 256 -c -    # Linux: sha256sum -c - instead of shasum -a 256 -c -
-mkdir -p ~/.local/bin
-install -m 755 "$ASSET" ~/.local/bin/herddash
+grep " $ASSET\$" SHA256SUMS | shasum -a 256 -c - &&
+  mkdir -p ~/.local/bin &&
+  install -m 755 "$ASSET" ~/.local/bin/herddash
 cd - >/dev/null
 ```
 
+With `gh`, `gh release download "v$V" --repo vilosource/herddash --pattern "$ASSET" --pattern
+SHA256SUMS` replaces the two `curl` lines.
+
 The check must print `herddash_<version>_<os>_<arch>: OK`. It fails if `SHA256SUMS` has no line
-for the asset or the hash differs; then do not install the file. A file downloaded through a
-browser rather than `curl` or `gh` is quarantined on macOS; clear that with
+for the asset or the hash differs, and then the `&&` chain installs nothing. A file downloaded
+through a browser rather than `curl` or `gh` is quarantined on macOS; clear that with
 `xattr -d com.apple.quarantine ~/.local/bin/herddash`.
 
 A release with no binaries attached (the release workflow missed it, for example because a later
@@ -154,10 +156,14 @@ plutil -lint ~/Library/LaunchAgents/io.github.vilosource.herddash.plist
 
 If `grep` prints nothing, the substitution failed, which happens when `$HOME` contains `|` or `&`;
 edit the installed plist by hand. Then load it. `bootstrap` fails with error 5 if the agent is
-already loaded, so unload any earlier copy first:
+already loaded, so unload any earlier copy first. `bootout` returns before the process has
+exited, so wait for it. The wait is on any `herddash` process of yours, so stop one you started by
+hand (a `-dev` build, `serve` in a terminal, or a running `import-plugin-log`) first, or the loop
+never ends; every launchd block below waits the same way:
 
 ```bash
 launchctl bootout gui/$(id -u)/io.github.vilosource.herddash 2>/dev/null
+while pgrep -x -u "$(id -u)" herddash >/dev/null; do sleep 1; done
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/io.github.vilosource.herddash.plist
 ```
 
@@ -181,6 +187,7 @@ launchctl kickstart -k gui/$(id -u)/io.github.vilosource.herddash
 
 ```bash
 launchctl bootout gui/$(id -u)/io.github.vilosource.herddash
+while pgrep -x -u "$(id -u)" herddash >/dev/null; do sleep 1; done
 ```
 
 It stays stopped until the next login or the next `bootstrap`. Start it again with the
@@ -207,8 +214,13 @@ and no `pid`, stop the retries, read the reason, fix it, and start again:
 
 ```bash
 launchctl bootout gui/$(id -u)/io.github.vilosource.herddash
+while pgrep -x -u "$(id -u)" herddash >/dev/null; do sleep 1; done
 tail -n 20 ~/.local/share/herddash/herddash.stderr.log
-# fix the cause, then empty the log and load the agent again:
+```
+
+Fix the cause, then empty the log and load the agent again:
+
+```bash
 : > ~/.local/share/herddash/herddash.stderr.log
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/io.github.vilosource.herddash.plist
 ```
@@ -289,6 +301,7 @@ sed "s|__HOME__|$HOME|g" deploy/launchd/io.github.vilosource.herddash.plist \
 grep -F "<string>$HOME/.local/bin/herddash</string>" \
   ~/Library/LaunchAgents/io.github.vilosource.herddash.plist && echo "plist OK"
 launchctl bootout gui/$(id -u)/io.github.vilosource.herddash 2>/dev/null
+while pgrep -x -u "$(id -u)" herddash >/dev/null; do sleep 1; done
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/io.github.vilosource.herddash.plist
 ```
 
@@ -329,14 +342,22 @@ DB=$(~/.local/bin/herddash config | sed -n 's/^  "database": "\(.*\)",$/\1/p'); 
 BACKUP=~/herddash-backup-$(date +%Y%m%d-%H%M%S).db
 ```
 
+It must print the database's path. If it prints an empty line, `herddash config` failed or its
+output changed: stop here, run `~/.local/bin/herddash config` to see why, and set `DB` by hand.
+Set it by hand too if the path holds `&`, `<`, `>`, `"` or `\`, which the JSON escapes. The copy
+steps below print an error and copy nothing when `DB` is empty.
+
 **Stop the Daemon and wait until it has no process.**
 
 macOS:
 
 ```bash
 launchctl bootout gui/$(id -u)/io.github.vilosource.herddash
-while launchctl print gui/$(id -u)/io.github.vilosource.herddash 2>/dev/null | grep -q 'pid ='; do sleep 1; done
+while pgrep -x -u "$(id -u)" herddash >/dev/null; do sleep 1; done
 ```
+
+`launchctl print` cannot be used to wait: once `bootout` has removed the job it prints nothing,
+while the process may still be shutting down. `pgrep` waits on the process itself.
 
 Linux:
 
@@ -350,8 +371,12 @@ normally folds them into the database and removes them, but copying them keeps t
 it did not:
 
 ```bash
-for s in "" -wal -shm; do [ -e "$DB$s" ] && cp -p "$DB$s" "$BACKUP$s"; done
-ls -l "$BACKUP"*
+if [ -n "$DB" ] && [ -n "$BACKUP" ]; then
+  for s in "" -wal -shm; do [ -e "$DB$s" ] && cp -p "$DB$s" "$BACKUP$s"; done
+  ls -l "$BACKUP"*
+else
+  echo "no backup taken: DB or BACKUP is empty" >&2
+fi
 ```
 
 **Start it again** with `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/io.github.vilosource.herddash.plist`
@@ -362,8 +387,13 @@ files before copying the backup in. A leftover write-ahead log from the newer da
 otherwise be applied on top of the older backup:
 
 ```bash
-rm -f "$DB-wal" "$DB-shm"
-for s in "" -wal -shm; do [ -e "$BACKUP$s" ] && cp -p "$BACKUP$s" "$DB$s"; done
+if [ -n "$DB" ] && [ -e "$BACKUP" ]; then
+  rm -f "$DB-wal" "$DB-shm"
+  for s in "" -wal -shm; do [ -e "$BACKUP$s" ] && cp -p "$BACKUP$s" "$DB$s"; done
+  ls -l "$DB"*
+else
+  echo "not restored: DB is empty or BACKUP is not a file" >&2
+fi
 ```
 
 Here `$BACKUP` is the backup you are restoring, for example

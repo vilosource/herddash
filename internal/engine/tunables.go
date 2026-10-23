@@ -2,7 +2,9 @@ package engine
 
 import "time"
 
-// The engine's tunables, in one place. At most one snapshot read is in
+// The engine's tunables, in one place; docs/config.example.toml lists them
+// for operators under "Fixed timings", so change it with them. At most one
+// snapshot read is in
 // flight, any number of requests that arrive during it coalesce into one more
 // read after it, and consecutive reads start at least
 // defaultSnapshotMinInterval apart.
