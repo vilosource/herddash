@@ -1,8 +1,11 @@
 // Headless-Chrome check of the Board's Boxes and workspace groups (layout
 // v4), the State label's background task count (ADR-0009), Claude Code's
 // recap in the Context Line's row (ADR-0010) and its connection and version
-// strips (Story 3.9). Not embedded. CI's board-browser job runs it on ubuntu
-// against the runner's Google Chrome (Story 5.6); it also runs by hand:
+// strips (Story 3.9), including a hung Daemon (Story 5.11): serve is
+// SIGSTOPped with the stream left open, the Board must show the lost strip
+// and dim its Boxes once STREAM_SILENCE_MS passes, and clear both after
+// SIGCONT. Not embedded. CI's board-browser job runs it on ubuntu against the
+// runner's Google Chrome (Story 5.6); it also runs by hand:
 //
 //   go build -o /tmp/herddash ./cmd/herddash
 //   node internal/httpapi/web/check/board-browser.mjs /tmp/herddash
@@ -21,6 +24,7 @@ import { mkdtempSync, readFileSync, rmSync, existsSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { STREAM_SILENCE_MS } from "../order.mjs";
 
 const binary = process.argv[2];
 if (!binary) {
@@ -30,6 +34,8 @@ if (!binary) {
 const CHROME = process.env.CHROME || "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 // More than order.mjs's LOST_GRACE_MS (3 s) plus the one-second tick.
 const PAST_GRACE_MS = 4500;
+// The one warning the Board is expected to log: the skipped-publication case.
+const SKIPPED_WARNING = /^herddash: the stream skipped from view 1 to 3; reopening the stream$/;
 
 const root = mkdtempSync(join(tmpdir(), "hd-check-"));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -151,7 +157,7 @@ function serve(name, sock, bind, extra = []) {
       }
       return null;
     });
-  return { addr, stop: () => (p.kill("SIGINT"), exited) };
+  return { addr, stop: () => (p.kill("SIGINT"), exited), signal: (sig) => p.kill(sig) };
 }
 
 // ---- Chrome over the DevTools protocol ----
@@ -390,6 +396,48 @@ async function main() {
       await browser.send("Page.removeScriptToEvaluateOnNewDocument", { identifier: added.identifier });
     }
 
+    // A skipped publication (Story 5.11), through the same stand-in: a valid
+    // state with id 1, then an agent event with id 3. board.mjs must pass each
+    // event's id to streamDecision, which warns and opens a new /events
+    // EventSource.
+    {
+      const agent = state.agents[0];
+      const warnedBefore = browser.warnings.length;
+      const { result: added } = await browser.send("Page.addScriptToEvaluateOnNewDocument", {
+        source: `window.standInUrls = [];
+        window.EventSource = class extends EventTarget {
+          static CLOSED = 2;
+          readyState = 1;
+          constructor(url) {
+            super();
+            window.standIn = (window.standIn || 0) + 1;
+            window.standInUrls.push(String(url));
+            setTimeout(() => {
+              this.dispatchEvent(new MessageEvent("state", { data: ${JSON.stringify(JSON.stringify(state))}, lastEventId: "1" }));
+              this.dispatchEvent(new MessageEvent("agent", { data: ${JSON.stringify(JSON.stringify(agent))}, lastEventId: "3" }));
+            }, 0);
+          }
+          close() { this.readyState = 2; }
+        };`,
+      });
+      await browser.open("http://" + addr + "/");
+      const urls = await until(
+        "a new /events EventSource after the skipped publication",
+        async () => {
+          const u = await browser.eval("window.standInUrls");
+          return Array.isArray(u) && u.length >= 2 ? u : null;
+        },
+        10000,
+      );
+      const warned = browser.warnings.slice(warnedBefore);
+      check(
+        "skipped publication (ids 1 then 3): warns and opens a new /events EventSource",
+        warned.some((w) => SKIPPED_WARNING.test(w)) && urls.every((u) => new URL(u, "http://" + addr).pathname === "/events"),
+        { warned, urls },
+      );
+      await browser.send("Page.removeScriptToEvaluateOnNewDocument", { identifier: added.identifier });
+    }
+
     await browser.open("http://" + addr + "/");
     await until("the real stream back", async () => ((await snap()).boxes === 2 ? true : null));
     {
@@ -415,6 +463,43 @@ async function main() {
       return !x.strips.length && !x.stale ? x : null;
     });
     check("herdr back: strip and dimming cleared", s.boxes > 0, s);
+
+    // A hung Daemon: the stream stays open but nothing arrives, not even a
+    // keepalive. Paused, so a failure here must not leave it stopped.
+    const boxesBeforeHang = (await snap()).boxes;
+    d.signal("SIGSTOP");
+    try {
+      const hungAt = Date.now();
+      s = await until(
+        "the lost strip for a hung Daemon",
+        async () => {
+          const x = await snap();
+          return x.strips.length && x.stale ? x : null;
+        },
+        STREAM_SILENCE_MS + 10000,
+      );
+      check(
+        "serve hung (SIGSTOP), past STREAM_SILENCE_MS: lost strip, Boxes dimmed",
+        kinds(s).join() === "disconnected" && s.stale && s.boxes > 0 && s.strips[0].text === "Lost contact with herddash. Reconnecting…" &&
+          Date.now() - hungAt >= STREAM_SILENCE_MS - 15000,
+        s,
+      );
+    } finally {
+      d.signal("SIGCONT");
+    }
+    s = await until(
+      "the lost strip to clear after SIGCONT",
+      async () => {
+        const x = await snap();
+        return !x.strips.length && !x.stale && x.boxes > 0 ? x : null;
+      },
+      40000,
+    );
+    check(
+      "serve resumed (SIGCONT): lost strip and dimming cleared, the same Boxes back",
+      s.strips.length === 0 && !s.stale && boxesBeforeHang > 0 && s.boxes === boxesBeforeHang,
+      { before: boxesBeforeHang, s },
+    );
 
     await d.stop();
     await sleep(PAST_GRACE_MS);
@@ -458,7 +543,9 @@ async function main() {
     await d.stop();
     await herdrOld.stop();
 
-    check("no console warnings or exceptions", browser.warnings.length === 0, browser.warnings);
+    // The skipped-publication case's own warning is expected; nothing else is.
+    const unexpected = browser.warnings.filter((w) => !SKIPPED_WARNING.test(w));
+    check("no console warnings or exceptions", unexpected.length === 0, browser.warnings);
   } finally {
     await browser.close();
     rmSync(root, { recursive: true, force: true, maxRetries: 5 });

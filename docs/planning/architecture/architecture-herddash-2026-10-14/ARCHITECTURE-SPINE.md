@@ -194,6 +194,11 @@ Arrows are the only permitted import directions. `core` imports only the standar
   - **Change events.** The engine publishes each view together with the change list that produced
     it. `httpapi` turns that list into `agent`, `removed`, `transition`, `resync` and `connection`
     events, in publish order. The client applies events in arrival order.
+  - **Keepalive** (added 2026-10-23, ADR-0012).
+    Every 15 s a stream also sends a `keepalive` event: a liveness event, not a change, with data
+    `{}` and no `id:`, so `id:` stays the view sequence of real changes. A client that hears
+    nothing at all, keepalive included, for its silence bound treats the stream as lost and opens
+    a new one.
   - **Reconnects and slow clients.** Each stream has a bounded buffer. On overflow the server closes
     that stream, and the client reconnects to a fresh `state`. The server keeps no event history.
   - **Non-streaming clients** use `/api/state`, which serves the same body.
@@ -307,7 +312,7 @@ Arrows are the only permitted import directions. `core` imports only the standar
 | Status and class values | herdr's strings verbatim: `working`, `blocked`, `done`, `idle`, `unknown`. Attention Class values are `needs_you`, `finished`, `working` and `unknown`. Provenance is one of `live`, `snapshot` or `backfill`. |
 | ConnectionTruth | `{connected, last_snapshot_at, herdr_version, herdr_minimum, gate: ok\|advisory\|refused, resync_guaranteed}`. |
 | JSON | `snake_case` fields. Errors are `{"error":{"code":"...","message":"..."}}` with a matching status. Absent values are omitted, except an empty Context Line, which is `""`. Each AgentView carries `heading`, `waiting_since` and `waiting_exact`. |
-| SSE | Event names `state`, `agent`, `removed`, `transition`, `resync` and `connection`. `id:` is the view sequence. `data:` is one JSON object. The write deadline is cleared per stream. |
+| SSE | Event names `state`, `agent`, `removed`, `transition`, `resync` and `connection`, plus `keepalive`, which is sent with no `id:` (ADR-0012). `id:` is the view sequence. `data:` is one JSON object. The write deadline is cleared per stream. |
 | Errors | Adapters wrap with `%w`. herdr error codes are an open set: an unknown code on a subscription is a resync, never a crash. |
 | Logging | `log/slog`, JSON, to `herddash.log` in the data directory. Never log environment values except a matched `CLAUDE_CONFIG_DIR`; Pane Titles only at debug. |
 | Clock | Time-dependent core functions take the clock as a parameter; `core` never calls `time.Now()`. |
