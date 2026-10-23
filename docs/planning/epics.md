@@ -1125,3 +1125,25 @@ and B's first sight is written with no previous Status.
 **And** a pane that was not released (A still running across the restart) is still seeded exactly as before
 **And** saved state written by 0.5.0 (no release information) still loads and seeds as before
 **And** AD-3's "Successive Agents on one AgentKey" paragraph states the case and the remaining residual
+
+### Story 5.18: A Profile hold always ends
+
+As the operator,
+I want an Agent's Box never to freeze while its Profile is being looked up,
+So that repeated detections or a hung lookup cannot stop its rows reaching the record and the Board.
+
+Source: follow-up review of Story 5.4, 2026-10-23, reproduced by a test (`profileTimeout` 200 ms, a
+blocked environment read, `agent_detected` every 50 ms: after 3 s and 61 lookups the row was still
+held). Each `agent_detected` or program change on a known pane calls `resolve`, which supersedes the
+lookup in flight, so while triggers keep arriving no lookup settles, `holdRows` stays true and
+`p.held` grows. Also: `readProfile`'s inner environment-read goroutine is neither tracked nor guarded,
+so a permanently hung read leaves 1 + `profileRetries` goroutines per trigger.
+
+**Acceptance Criteria:**
+
+**Given** triggers keep arriving while rows are held, or the environment read never returns
+**When** the hold has lasted its hard deadline (a tunable, at most a small multiple of `profileTimeout`)
+**Then** the held rows are released in order with the best Profile known (the old one for the old program, `unresolved` otherwise), and the Board shows the Agent's current state
+**And** a trigger arriving while rows are held does not move the hold's deadline
+**And** at most one environment read per pane is in flight, so a hung read cannot multiply goroutines
+**And** the reviewer's reproduction becomes a test that passes, alongside the existing Profile tests
