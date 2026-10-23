@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"sync"
@@ -67,10 +68,15 @@ func (h *Health) Error() string {
 
 func (h *Health) Unwrap() error { return h.Err }
 
-// Delivery is one item from a subscription: an event, or, last of all, a
-// health signal.
+// Delivery is one item from a subscription: an event, a line flagged
+// unexpected, or, last of all, a health signal.
 type Delivery[T any] struct {
 	Event T
+	// Unexpected is set, on the lifecycle subscription only, for a line that
+	// decodes as JSON but is not an event it can deliver (an unknown kind, no
+	// data, no pane id). The delivery is not final: the stream goes on. Event
+	// is then the zero value.
+	Unexpected error
 	// Health is set on the final delivery when the stream ended other than by
 	// Close; Event is then the zero value.
 	Health *Health
@@ -139,7 +145,7 @@ func (c *Client) SubscribeLifecycle(ctx context.Context) (*Subscription[core.Lif
 		}
 		subs = append(subs, b)
 	}
-	return subscribe(ctx, c, subs, decodeLifecycle)
+	return subscribe(ctx, c, subs, decodeLifecycle, true)
 }
 
 // SubscribeStatus subscribes to the agent status changes of one pane on its own
@@ -152,13 +158,15 @@ func (c *Client) SubscribeStatus(ctx context.Context, paneID string) (*Subscript
 	if err != nil {
 		return nil, fmt.Errorf("herdr: subscribe status %s: %w", paneID, err)
 	}
-	return subscribe(ctx, c, []json.RawMessage{b}, decodeStatus)
+	return subscribe(ctx, c, []json.RawMessage{b}, decodeStatus, false)
 }
 
 // subscribe opens a connection, sends one events.subscribe request, waits for
 // subscription_started, and then streams decoded events until the connection
-// ends.
-func subscribe[T any](ctx context.Context, c *Client, subs []json.RawMessage, decode func([]byte) (T, error)) (*Subscription[T], error) {
+// ends. With passUnexpected, a line the decoder reports as errUnexpectedEvent is
+// delivered flagged Unexpected and the stream goes on; without it, such a line
+// ends the stream as HealthUndecodable.
+func subscribe[T any](ctx context.Context, c *Client, subs []json.RawMessage, decode func([]byte) (T, error), passUnexpected bool) (*Subscription[T], error) {
 	id := c.id("s")
 	req := gen.RequestEventsSubscribe{ID: id, Method: gen.RequestMethodEventsSubscribe,
 		Params: gen.EventsSubscribeParams{Subscriptions: subs}}
@@ -191,7 +199,7 @@ func subscribe[T any](ctx context.Context, c *Client, subs []json.RawMessage, de
 
 	ch := make(chan Delivery[T])
 	s := &Subscription[T]{C: ch, conn: conn, done: make(chan struct{})}
-	go s.stream(r, ch, decode)
+	go s.stream(r, ch, decode, passUnexpected)
 	return s, nil
 }
 
@@ -212,9 +220,10 @@ func startHealth(line []byte, id string) *Health {
 	return nil
 }
 
-// stream reads lines until the stream ends, delivering events in order and at
-// most one health signal last, then closes ch.
-func (s *Subscription[T]) stream(r *bufio.Reader, ch chan<- Delivery[T], decode func([]byte) (T, error)) {
+// stream reads lines until the stream ends, delivering events (and, with
+// passUnexpected, unexpected lines) in order and at most one health signal last,
+// then closes ch.
+func (s *Subscription[T]) stream(r *bufio.Reader, ch chan<- Delivery[T], decode func([]byte) (T, error), passUnexpected bool) {
 	defer close(ch)
 	defer s.Close()
 	for {
@@ -228,6 +237,12 @@ func (s *Subscription[T]) stream(r *bufio.Reader, ch chan<- Delivery[T], decode 
 			return
 		}
 		ev, err := decode(line)
+		if err != nil && passUnexpected && errors.Is(err, errUnexpectedEvent) {
+			if !s.deliver(ch, Delivery[T]{Unexpected: err}) {
+				return
+			}
+			continue
+		}
 		if err != nil {
 			s.deliver(ch, Delivery[T]{Health: &Health{Kind: HealthUndecodable, Err: err}})
 			return
