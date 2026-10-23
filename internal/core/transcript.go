@@ -19,7 +19,7 @@ type TranscriptLine struct {
 	StartCommand bool
 	// EndID is a task a notification on the line is about, "" when none,
 	// and EndStatus its status when it is one that closes the task
-	// (completed, failed, killed); "" leaves it open.
+	// (completed, failed, killed, stopped); "" leaves it open.
 	EndID     string
 	EndStatus string
 	// TurnStarted and TurnEnded say the main thread's turn started (a prompt,
@@ -38,8 +38,12 @@ const MaxRecapRunes = 400
 // recapSuffix is the note Claude Code ends every recap with.
 const recapSuffix = "(disable recaps in /config)"
 
-// closingStatuses are the notification statuses that close a task.
-var closingStatuses = map[string]bool{"completed": true, "failed": true, "killed": true}
+// closingStatuses are the notification statuses that close a task. stopped is
+// what a resumed session enqueues, as it starts, for each task its transcript
+// shows started and never completed (Claude Code 2.1.292, observed
+// 2026-10-23; ADR-0009 as amended by Story 5.2): without it, a command left
+// open by a crashed session would stay open after the resume.
+var closingStatuses = map[string]bool{"completed": true, "failed": true, "killed": true, "stopped": true}
 
 // transcriptRecord is the only part of a transcript record that is decoded,
 // by fixed field names (ADR-0009, observed 2026-10-21). Everything else on
@@ -68,7 +72,10 @@ type transcriptRecord struct {
 //     left open in four transcripts);
 //   - a queue-operation record, operation "enqueue", whose content is a
 //     string starting "<task-notification>" ends the task in its
-//     <task-id>, when its <status> closes it;
+//     <task-id>, when its <status> closes it: completed, failed, killed, or
+//     stopped (a resumed session's word for a task the previous process
+//     left with no completion record); any other status, or none, leaves
+//     it open;
 //   - an assistant record that is not a sidechain with message.stop_reason
 //     "end_turn" or "stop_sequence" ends the main turn (both are followed by
 //     the turn's duration record; 33 of 4,902 main-thread turn ends in the

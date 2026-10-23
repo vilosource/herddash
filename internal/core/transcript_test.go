@@ -209,6 +209,8 @@ func TestTranscriptMatrix(t *testing.T) {
 		"bg command open, idle":            {[]string{prompt, bgStart, endTurn}, 1, true},
 		"bg command closes":                {[]string{prompt, bgStart, endTurn, notify("bx1", "completed")}, 0, true},
 		"failed and killed close too":      {[]string{bgStart, agentStart, notify("bx1", "failed"), notify("ag1", "killed")}, 0, false},
+		"stopped on resume closes":         {[]string{prompt, bgStart, endTurn, notify("bx1", "stopped")}, 0, true},
+		"stopped closes only its id":       {[]string{bgStart, agentStart, notify("bx1", "stopped")}, 1, false},
 		"main turn over, subagent running": {[]string{prompt, agentStart, endTurn}, 1, true},
 		"working with bg":                  {[]string{prompt, bgStart, toolUse}, 1, false},
 		"notification without status":      {[]string{bgStart, notify("bx1", "")}, 1, false},
@@ -238,6 +240,38 @@ func TestTranscriptMatrix(t *testing.T) {
 	for _, l := range []string{"garbage", "", `{"type":"user",`, `{"type":"summary","summary":"x"}`, toolUse} {
 		if m, ok := DecodeTranscriptLine([]byte(l), true); ok {
 			t.Errorf("%q decoded as %+v", l, m)
+		}
+	}
+}
+
+// resumeStopped is the notification a resumed session enqueues for a task
+// the previous process left with no completion record, shaped on Claude
+// Code 2.1.292 (observed 2026-10-23): <tool-use-id>, <summary> and <note>
+// around the id and status. Every text is invented and marked SECRET.
+const resumeStopped = `{"type":"queue-operation","operation":"enqueue","timestamp":"2026-10-23T09:00:01.000Z",` +
+	`"sessionId":"SECRET-session","content":"<task-notification>\n<task-id>bx1</task-id>\n` +
+	`<tool-use-id>toolu_SECRET</tool-use-id>\n<status>stopped</status>\n` +
+	`<summary>SECRET command didn't finish before the previous session ended</summary>\n` +
+	`<note>SECRET no completion record was found.</note>\n</task-notification>"}`
+
+// TestTranscriptResumeStoppedShape covers the matrix's "Observed shape" row:
+// the full 2.1.292 notification decodes to the id and stopped, nothing more,
+// and closes the task; with any status but a closing one it stays open.
+func TestTranscriptResumeStoppedShape(t *testing.T) {
+	m, ok := DecodeTranscriptLine([]byte(resumeStopped), true)
+	if want := (TranscriptLine{EndID: "bx1", EndStatus: "stopped"}); !ok || m != want {
+		t.Errorf("decoded %+v, %v; want %+v", m, ok, want)
+	}
+	if b := fold(prompt, bgStart, endTurn, resumeStopped); b.Count() != 0 || b.OpenCommand() {
+		t.Errorf("%d open after stopped", b.Count())
+	}
+	for _, s := range []string{"<status>running</status>", ""} {
+		l := strings.Replace(resumeStopped, "<status>stopped</status>", s, 1)
+		if m, _ := DecodeTranscriptLine([]byte(l), true); m.EndStatus != "" || m.EndID != "bx1" {
+			t.Errorf("status %q decoded as %+v", s, m)
+		}
+		if b := fold(bgStart, l); b.Count() != 1 {
+			t.Errorf("status %q: %d open, want 1", s, b.Count())
 		}
 	}
 }

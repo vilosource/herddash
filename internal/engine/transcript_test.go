@@ -36,10 +36,12 @@ const (
 
 // transcriptRig is a session rig on one claude Agent whose process has
 // CLAUDE_CONFIG_DIR set to a temporary directory, whose session record
-// (a fake) names trSession in trCWD, and whose transcript is path.
+// (a fake) names trSession in trCWD, and whose transcript is path under the
+// config dir cfg.
 type transcriptRig struct {
 	*sessionRig
 	sess *fakeSessions
+	cfg  string
 	path string
 }
 
@@ -66,7 +68,7 @@ func startTranscript(t *testing.T, status core.Status, lines []string, more func
 			more(o)
 		}
 	})
-	return &transcriptRig{sessionRig: r, sess: sess, path: path}
+	return &transcriptRig{sessionRig: r, sess: sess, cfg: cfg, path: path}
 }
 
 // writeTranscript appends lines to the transcript at path.
@@ -284,6 +286,55 @@ func TestTranscriptReadResumes(t *testing.T) {
 			t.Errorf("read %d: from %d, restarted %v; want the previous read's end", i+2, c.offset, c.restarted)
 		}
 	}
+}
+
+// trStopped is the notification a resumed session enqueues for a task the
+// previous process left with no completion record (Claude Code 2.1.292,
+// observed 2026-10-23; every text invented and marked SECRET).
+func trStopped(id string) string {
+	return `{"type":"queue-operation","operation":"enqueue","content":"<task-notification>\n<task-id>` + id +
+		`</task-id>\n<tool-use-id>toolu_SECRET</tool-use-id>\n<status>stopped</status>\n` +
+		`<summary>SUMMARY-SECRET</summary>\n<note>NOTE-SECRET</note>\n</task-notification>"}`
+}
+
+// TestTranscriptResumedStopped covers the matrix's "Engine, new process same
+// session" row (Story 5.2): a crashed process left a command open; the
+// pane's new process resumes the same session, so its record names the same
+// transcript, which it appends to. Following it re-reads from the bound and
+// sees the start again, still open; the resume's stopped notification
+// closes it: no task, not Background.
+func TestTranscriptResumedStopped(t *testing.T) {
+	const p2PID = 202
+	r := startTranscript(t, core.StatusDone, []string{trPrompt, trBgStart, trEndTurn}, nil)
+	r.awaitTasks(1, true)
+	r.env.set(p2PID, claudeVar, r.cfg)
+	r.sess.mu.Lock()
+	r.sess.recs[p2PID] = procenv.Session{PID: p2PID, Status: "idle", SessionID: trSession, CWD: trCWD}
+	// The crashed process's record goes, so only following p2 can show the
+	// open task below, and only p2's watch can read the stopped line.
+	delete(r.sess.recs, p1PID)
+	r.sess.mu.Unlock()
+	r.h.fake.setProc("w1:p1", p2PID)
+	r.h.lifecycle(core.LifecycleEvent{Kind: core.LifecycleAgentDetected, PaneID: "w1:p1", AgentProgram: "claude"})
+	deadline := time.Now().Add(wait)
+	// Reads are serialized by the busy flag, so by the third read of p2's
+	// record the first one's result (and its transcript read) has been applied.
+	for r.sess.readsOf(p2PID) < 3 {
+		if time.Now().After(deadline) {
+			t.Fatal("the new process's record was not read")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	r.h.settle()
+	if v := r.view(); v.BackgroundTasks != 1 || !v.Background {
+		t.Errorf("before the resume's notification: %d tasks, background %v; want 1, true", v.BackgroundTasks, v.Background)
+	}
+	writeTranscript(t, r.path, trStopped("bk7q2x9"))
+	// ClassRank 1 is Finished's rank.
+	if v := r.awaitTasks(0, false); v.Class != core.ClassFinished || v.SortKey.ClassRank != 1 {
+		t.Errorf("view %+v", v)
+	}
+	r.noLeak(t)
 }
 
 // trRecap is a session recap record (ADR-0010), its text marked RECAP-TEXT
