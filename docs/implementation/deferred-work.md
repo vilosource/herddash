@@ -49,6 +49,7 @@
 - source_spec: `docs/implementation/spec-1-9-know-which-profile-each-agent-runs-under.md`
   summary: Decide whether a Profile resolution that failed transiently (timeout, herdr call error) should be retried, rather than leaving the Agent unresolved until the next agent detection.
   evidence: Story 1.9 review, unverified (medium if real); settle it by counting "profile resolved" debug entries with an error in dogfooding logs.
+  resolved: 2026-10-23, Story 5.4 (`docs/implementation/spec-5-4-retry-a-profile-lookup-that-failed-transiently.md`); marked by Story 5.8's final pass. A lookup that ran out of `profileTimeout` or whose foreground process call failed is retried `defaultProfileRetries` (3) times, first after `defaultProfileRetryDelay` (2 s) and doubling (`internal/engine/tunables.go`); a rule outcome or an unreadable environment is never retried, and a known Agent keeps a Profile resolved for its program. The operator log showed no transient failure in two days, so the retry is insurance. Story 5.18 bounded the row hold it added.
 - source_spec: `docs/implementation/spec-1-9-know-which-profile-each-agent-runs-under.md`
   summary: CLAUDE.md's "Repository state" should say internal/procenv is built, golang.org/x/sys v0.49.0 is a dependency, and go.mod declares go 1.26.0.
   evidence: Story 1.9 review; agent-context file, so deferred per the triage rule.
@@ -150,3 +151,10 @@
 - source_spec: `docs/implementation/spec-5-6-ci-runs-the-board-s-browser-check.md`
   summary: No branch protection or ruleset makes CI checks required, so a red CI job does not block a merge into `develop` or `main`.
   evidence: `gh api repos/vilosource/herddash/branches/develop/protection` returned 404 and the rulesets list was empty (Story 5.6 review). A repository setting for every job, outside any story; an operator decision if wanted. Recorded in Story 5.6's spec frontmatter; copied here by Story 5.8.
+- source_spec: `docs/implementation/spec-5-4-retry-a-profile-lookup-that-failed-transiently.md`
+  summary: No user-facing document described the Profile retry tunables or how rows are held while a Profile is resolved again.
+  evidence: Story 5.4 review, low; it belonged with the tunables Story 5.8 documents. Recorded in Story 5.4's spec frontmatter; copied here by Story 5.8's final pass.
+  resolved: 2026-10-23, Story 5.8's final pass. `docs/config.example.toml`'s "Fixed timings" lists the retries, their delay and the hold limit (2 x `profileTimeout`, Story 5.18), `docs/how-herddash-works.md`'s profile reader says what a retry and a hold do, and the spine's AD-14 states the rules.
+- source_spec: `docs/implementation/spec-5-16-a-resumed-subagent-counts-as-background-work.md`
+  summary: A resume of a subagent launched before `/clear` (in another session id's transcript) may never close, and so keep the Box's background count up, if its notification is written to the old transcript.
+  evidence: Unverified (would be medium): all 89 resumes on this machine name a subagent launched earlier in the same transcript. Settle it with a throwaway cldp session outside herdr: launch a background subagent, let it finish, `/clear`, resume it with SendMessage, and see which transcript gets its notification; Story 5.3 saw a background command's completion go to the new transcript, which suggests it closes. Location: `internal/core/transcript.go` `taskStart`; ADR-0009's Story 5.3 and 5.16 amendments. Recorded in Story 5.16's spec frontmatter; copied here by Story 5.8's final pass.

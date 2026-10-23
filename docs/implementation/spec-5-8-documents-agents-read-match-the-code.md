@@ -220,3 +220,16 @@ the empty-`DB` guard (nothing copied). `go run ./cmd/herddash version` printed
 **Residual risk.** The final pass after 5.4, 5.10 and 5.16 (frontmatter `deferred`). AD-3 was also
 edited by 5.10 on the epic branch, so the merge needs a look there.
 
+**Final pass (after 5.4, 5.10, 5.16, 5.17 and 5.18).** CLAUDE.md counts 45 stories (18 in Epic
+5), lists the five in "Repository state" and says the store has migrations 0001 to 0004, with 0.5.0
+refusing a schema-4 database. `docs/config.example.toml`'s "Fixed timings" gains the Profile
+retries (3, first after 2 s, doubling) and the hold limit (4 s, 2 x the Profile timeout), and its
+Profile timeout note no longer says running out always means `unresolved`; every value checked
+against `internal/engine/tunables.go`, and `defaultSnapshotFailuresBeforeLost` was already listed.
+`docs/how-herddash-works.md` says what a retry and a hold do. The spine's AD-3 adds 5.17's
+lost-save residual (its released-pane paragraph and quit-and-restart residual were already there
+from 5.17), AD-10 lists the migrations with 0002 and 0004 as engine state only, and AD-14 gains
+the 5.4 and 5.18 retry and hold rules. `deferred-work.md` marks the Story 1.9 retry entry resolved
+by 5.4, adds 5.4's documentation deferral (resolved here) and 5.16's resume-across-`/clear`
+question (open); 5.10, 5.17 and 5.18 deferred nothing.
+

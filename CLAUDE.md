@@ -31,8 +31,8 @@ them to disagree.
 
 ## How the build runs
 
-**Planning is complete.** The PRD, the architecture and the 42 stories in
-`docs/planning/epics.md` (27 for Epics 1 to 4, 15 for Epic 5) are final, and
+**Planning is complete.** The PRD, the architecture and the 45 stories in
+`docs/planning/epics.md` (27 for Epics 1 to 4, 18 for Epic 5, 5.1 to 5.18) are final, and
 `docs/implementation/sprint-status.yaml` tracks them. Build one story at a time with
 `/bmad-build`, in the order the tracking file lists; it names the next one. Do not write code that
 no story asks for.
@@ -305,7 +305,10 @@ spec, with its review triage log, is `docs/implementation/spec-<key>.md`. `go.mo
   Profile rules, and the transcript decoder. `core.NewTransition` refuses a `HerdrOrder` on a
   `live` or `backfill` Transition (`core.ErrInvalidHerdrOrder`).
 - `internal/store`: the SQLite record (`modernc.org/sqlite`, WAL, flock-owned), plus the engine's
-  `server_state`, which is engine state, not the append-only record.
+  `server_state`, which is engine state, not the append-only record. Four migrations, 0001 to
+  0004; 0004 (Story 5.17) adds `server_state.released`, engine state only. A database is refused
+  by a binary that knows an older schema (`store.ErrSchemaNewer`), so 0.5.0 cannot open a
+  database migrated to schema 4: going back to it means restoring or removing the database.
 - `internal/httpapi`: the read-only loopback API: `/api/state`, `/events` (SSE) and
   `/api/agents/{host}/{server}/{epoch}/{pane}/history`. Every 15 s a stream sends a `keepalive`
   event with no `id:` (ADR-0012).
@@ -353,6 +356,19 @@ Epic 5 has also made these exact so far:
 - CI's `board-browser`, `macos` and `release-toolchain` jobs (Stories 5.6, 5.7; see "Build and
   test").
 - `arch_test.go`'s ADR-0011 rules (Story 5.5).
+- A Profile lookup that failed transiently (a timeout, or herdr's foreground process call
+  failing) is retried `defaultProfileRetries` (3) times with a doubling wait; a known Agent keeps
+  its Profile meanwhile. While a known Agent's Profile is resolved again (program change,
+  redetection, epoch-keeping reconnect) its new rows are held, so each carries the Profile
+  resolved for its program (Story 5.4). A hold ends by `profileHoldLimit()`, 2 x
+  `profileTimeout` from its start, and at most one lookup's reads run per pane (Story 5.18).
+- Successive Agents on one AgentKey: a Transition with no previous Status is an Agent's first
+  row, and the fold starts over there, so a new Agent in a reused pane, or on a new
+  `terminal_id`, starts fresh (Story 5.10). A pane whose Agent herdr released is marked in
+  `server_state`, so its next Agent starts fresh across a Daemon restart or reconnect too (Story
+  5.17). Quit and restart in one terminal while the Daemon is down still join (spine AD-3).
+- A resumed subagent counts as background work until its notification closes it (Story 5.16,
+  ADR-0009 amended).
 
 `main` and `develop` are kept level; if they are not, a `develop` into `main` pull request is open
 or overdue.

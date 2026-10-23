@@ -194,7 +194,9 @@ so do `herdr` and the packages under it, `herdr/gen` and `herdr/gen/genwire` (AD
   that row clears the mark. A row not recorded (a failed append, the run ending, the Profile still
   resolving) keeps it. The mark is dropped when the epoch increments or a snapshot no longer shows
   the pane. It only ever splits one Agent, never joins two. State saved before migration 0004
-  holds no marks and seeds as before.
+  holds no marks and seeds as before. The mark is saved when the release is seen, since no
+  snapshot need follow it before the Daemon stops; if that save fails and the Daemon stops before a
+  later save succeeds, the mark is lost and the next Agent is seeded as before (logged).
 
   One case stays undetectable and joins: an Agent that quits and another that starts in the same
   terminal while the Daemon is down, with no `agent_released` observed (the Daemon was down for
@@ -285,6 +287,12 @@ so do `herdr` and the packages under it, `herdr/gen` and `herdr/gen/genwire` (AD
   refused at start. The database runs in WAL mode. A migration touching the transitions table needs
   an ADR first.
 
+  The migrations so far: 0001 the record; 0002 `server_state` (AD-3); 0003 the transitions table's
+  `observed_by` column (ADR-0008); 0004 `server_state.released` (Story 5.17). 0002 and 0004 change
+  engine state only, outside the append-only record, so they needed no ADR. Every migration is a
+  one-way door for older binaries: a database at schema 4 is refused by 0.5.0, which knows schema
+  3, so going back to it means restoring or removing the database.
+
 ### AD-11 — The engine decides; `internal/herdr` only does
 
 - **Binds:** FR-6, FR-7, FR-8, FR-16
@@ -353,6 +361,19 @@ so do `herdr` and the packages under it, `herdr/gen` and `herdr/gen/genwire` (AD
   `pane.agent_detected`. So that lifecycle event is the re-resolution trigger. A foreground change
   herdr does not report is seen only by calling `pane.process_info` again. A pane herdr restored
   without `CLAUDE_CONFIG_DIR` resolves to the absent case, which is the true Profile.
+
+  **Retries and held rows (Stories 5.4 and 5.18).** A lookup that failed transiently (it ran out of
+  `profileTimeout`, or herdr's foreground process call failed) is retried off the actor,
+  `profileRetries` times with a doubling wait; a rule outcome or an unreadable environment never
+  is. A transient failure for an Agent that already holds a Profile resolved for its program keeps
+  that Profile. An Agent's program change, a redetection and an epoch-keeping reconnect resolve a
+  known Agent again, and its new rows are held until that lookup settles, so no row pairs a program
+  with a Profile resolved for another program. A hold has a deadline set when it starts and never
+  moved, `profileHoldFactor` times `profileTimeout`; at it the rows are released with the best
+  Profile known (`unresolved` for a program no lookup has settled for), and the pane holds nothing
+  more until one of its lookups settles. Rows keep their own `observed_at`, provenance and
+  previous Status; only their Profile is decided at release. At most one lookup's reads run per
+  pane at a time.
 
 ## Consistency Conventions
 

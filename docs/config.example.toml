@@ -133,7 +133,17 @@ absent = "claude"
 #
 # Agents
 #   resolving one Agent's Profile, timeout                      2 s
-#     (running out records the Profile as "unresolved")
+#     (one lookup per pane at a time; a lookup that runs out or whose
+#     herdr call fails is retried, and until one succeeds a new Agent is
+#     recorded as "unresolved" and a known Agent keeps the Profile it had
+#     for the same program)
+#   retries of a Profile lookup that failed that way            3
+#     (first after 2 s, doubling per retry; a rule outcome or an
+#     unreadable environment is never retried)
+#   longest hold of a known Agent's rows while its Profile is
+#     resolved again (program change, redetection, reconnect)   4 s
+#     (2 x the Profile timeout from the hold's start; then the rows are
+#     recorded with the best Profile known)
 #   first look for background work after done or idle        250 ms
 #   background work re-read while done or idle, every           5 s
 #   one read of an Agent process's children, timeout            2 s
