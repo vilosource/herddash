@@ -117,7 +117,7 @@ func TestTranscriptPrivacy(t *testing.T) {
 	// The marker type has only these fields, of these kinds.
 	want := map[string]reflect.Kind{"StartID": reflect.String, "StartCommand": reflect.Bool,
 		"EndID": reflect.String, "EndStatus": reflect.String, "TurnStarted": reflect.Bool, "TurnEnded": reflect.Bool,
-		"Recap": reflect.String}
+		"Recap": reflect.String, "CommandPending": reflect.Bool, "CommandResult": reflect.Bool}
 	rt := reflect.TypeOf(TranscriptLine{})
 	if rt.NumField() != len(want) {
 		t.Fatalf("TranscriptLine has %d fields, want %d", rt.NumField(), len(want))
@@ -144,6 +144,16 @@ func TestTranscriptPrivacy(t *testing.T) {
 		[]byte(`{"type":"system","subtype":"away_summary","content":["SECRET array"]}`),
 		[]byte(`{"type":"user","subtype":"away_summary","content":"SECRET user"}`),
 	)
+	// Local commands: their text never leaves, nor does a result that is not
+	// /recap's.
+	lines = append(lines, localFixtureLines(t)...)
+	lines = append(lines,
+		[]byte(caveat), []byte(`{"type":"user","message":{"content":"<command-name>SECRET</command-name>"}}`),
+		[]byte(`{"type":"system","subtype":"local_command","commandRun":{"command":"usage","args":"SECRET"},"content":"<local-command-stdout>SECRET</local-command-stdout>"}`),
+		[]byte(`{"type":"system","subtype":"local_command","commandRun":{"command":"recap"},"content":"SECRET unwrapped"}`),
+		[]byte(`{"type":"system","subtype":"local_command","content":"<local-command-stdout>SECRET no commandRun</local-command-stdout>"}`),
+		[]byte(`{"type":"user","message":{"content":"<local-command-stdout>SECRET old result</local-command-stdout>"}}`),
+	)
 	// The recap fixture last, so its newest recap is the state's; then
 	// non-recap system lines, which must leave it as it is.
 	lines = append(lines, recapFixtureLines(t)...)
@@ -158,7 +168,9 @@ func TestTranscriptPrivacy(t *testing.T) {
 		if !ok {
 			continue
 		}
-		if strings.Contains(m.Recap, "SECRET") || (m.Recap != "" && !strings.Contains(string(l), `"away_summary"`)) {
+		recapLine := strings.Contains(string(l), `"away_summary"`) ||
+			strings.Contains(string(l), `"local_command"`) && strings.Contains(string(l), `"commandRun":{"command":"recap"`)
+		if strings.Contains(m.Recap, "SECRET") || (m.Recap != "" && !recapLine) {
 			t.Errorf("a recap carries other text: %q", m.Recap)
 		}
 		b.Apply(m)
@@ -392,7 +404,10 @@ func TestRecapClone(t *testing.T) {
 // marker at all with them off.
 func TestRecapOffChangesNothingElse(t *testing.T) {
 	lines := append(fixtureLines(t), recapFixtureLines(t)...)
-	for _, l := range []string{prompt, endTurn, sideEnd, toolUse, queuedCmd, bgStart, agentStart, notify("bx1", "completed"),
+	lines = append(lines, localFixtureLines(t)...)
+	for _, l := range []string{caveat, cmdName, oldResult, skillCmd,
+		localResult("usage", "<local-command-stdout>O</local-command-stdout>"),
+		localResult("recap", "<local-command-stdout>R.</local-command-stdout>"), localResult("recap", "R."), prompt, endTurn, sideEnd, toolUse, queuedCmd, bgStart, agentStart, notify("bx1", "completed"),
 		notify("bx1", ""), taskStop("bx1"), recap("X. (disable recaps in /config)"), recap(""),
 		`{"type":"system","subtype":"away_summary","isSidechain":true,"content":"S."}`,
 		`{"type":"system","subtype":"turn_duration","content":"S."}`, "garbage", ""} {
