@@ -85,7 +85,7 @@ development_status:
   5-8-documents-agents-read-match-the-code: backlog
   5-9-decide-whether-acknowledgement-is-needed: backlog
   5-10-a-new-agent-in-a-reused-pane-starts-fresh: in-progress
-  5-11-the-board-notices-a-hung-daemon: in-progress
+  5-11-the-board-notices-a-hung-daemon: done
   5-12-the-engine-treats-repeated-failures-as-a-lost-connection: done
   5-13-board-text-and-grouping-are-exact: done
   5-14-a-manual-recap-reaches-the-board: done
