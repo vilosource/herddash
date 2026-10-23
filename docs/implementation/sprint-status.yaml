@@ -90,7 +90,7 @@ development_status:
   5-13-board-text-and-grouping-are-exact: done
   5-14-a-manual-recap-reaches-the-board: done
   5-15-bash-mode-commands-are-not-turns-either: done
-  5-16-a-resumed-subagent-counts-as-background-work: in-progress
+  5-16-a-resumed-subagent-counts-as-background-work: done
   5-17-a-released-pane-s-next-agent-starts-fresh-across-a-restart: in-progress
   5-18-a-profile-hold-always-ends: in-progress
   epic-5-retrospective: optional
