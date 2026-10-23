@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 10-16-2026 09:40
-last_updated: 10-21-2026 10:56
+last_updated: 10-23-2026 09:00
 project: herddash
 project_key: NOKEY
 tracking_system: file-system
@@ -74,6 +74,18 @@ development_status:
   4-3-release-binaries-for-every-host: done
   epic-4-retrospective: optional
 
+  epic-5: in-progress
+  5-1-retrospectives-for-epics-1-to-4: backlog
+  5-2-a-resumed-session-does-not-keep-finished-background-tasks: backlog
+  5-3-clear-drops-the-previous-session-s-background-tasks: backlog
+  5-4-retry-a-profile-lookup-that-failed-transiently: backlog
+  5-5-tighter-import-rules-and-transition-invariants-adr-0011: backlog
+  5-6-ci-runs-the-board-s-browser-check: backlog
+  5-7-ci-tests-on-macos: backlog
+  5-8-documents-agents-read-match-the-code: backlog
+  5-9-decide-whether-acknowledgement-is-needed: backlog
+  epic-5-retrospective: optional
+
 # Operator checkpoints and story-size notes carried from epics validation
 # (docs/planning/epics-validation.md, T-2..T-4 and S-4..S-7).
 action_items:
@@ -101,3 +113,11 @@ action_items:
     action: "Story 4.3: operator confirms a day of dogfooding and approves merging release-please PR #2 at 0.x"
     owner: "operator"
     status: done
+  - epic: 5
+    action: "When Epic 5 is done, ask the operator once; on their OK ship it as one PR and one release (vfkb c56d5199f84c)"
+    owner: "operator"
+    status: open
+  - epic: 5
+    action: "Story 5.9 runs on or after 2026-11-03; it asks the operator only if the record shows Finished Agents that never cleared"
+    owner: "dev"
+    status: open

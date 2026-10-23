@@ -125,7 +125,15 @@ FR-17: Epic 3 - loopback listener and Host check; Epic 1 - owner-only data direc
 
 ## Epic List
 
-### Epic 1: See every agent's status, live, from the terminal
+#### Epic 5: After 0.5.0: closing what dogfooding and reviews left open
+
+The deferred-work list and the PRD's open question on acknowledgement are closed. Background
+tracking stays correct across resumed and cleared sessions, CI checks what only a developer's Mac
+or a hand-run browser checked before, and the documents agents read stop contradicting the code.
+Planned on 2026-10-23 with the operator's decisions taken up front (vfkb c56d5199f84c, 1e89662f83af).
+**FRs covered:** none new; hardens ADR-0009, FR-10, FR-1/2 (Board drawing) and PRD §8 Q1
+
+## Epic 1: See every agent's status, live, from the terminal
 
 The operator runs `herddash` and watches every Agent's Status changes stream by as they happen,
 each labelled with its Profile, whether or not a terminal client is attached. The project
@@ -811,3 +819,144 @@ So that the second and third machines install herddash without building it (NFR8
 **Given** Epics 1 to 3 are done and herddash has run on the operator's machine for at least a day
 **When** the held release-please pull request is reviewed
 **Then** its proposed version is checked to be 0.x before it is merged, and the operator is asked before merging
+
+## Epic 5: After 0.5.0: closing what dogfooding and reviews left open
+
+Every item comes from `docs/implementation/deferred-work.md` (audited 2026-10-23: 9 of its 24
+entries were already resolved), from the operator's planning answers, or from PRD §8. The operator
+decided these in advance, so no story asks them again:
+
+- Stories are built and installed locally as `-dev`. When the epic is done the operator is asked
+  once, and on their OK everything ships as one pull request and one release.
+- A pane herdr moves stays a removal plus a new Agent. AD-3 is unchanged and gets no ADR; the
+  behaviour is documented.
+- ADR-0011 (Story 5.5) is accepted in advance, provided it only tightens the import rules.
+- PRD §8 Q1 is decided by the record, not by the operator, unless the record shows a problem.
+- Background-task experiments may run throwaway Claude Code sessions under `cldp`, outside herdr,
+  in a scratch directory.
+
+### Story 5.1: Retrospectives for Epics 1 to 4
+
+As the builder,
+I want each finished epic reviewed against the evidence it left behind,
+So that lessons and any missed work reach this epic before it ships.
+
+**Acceptance Criteria:**
+
+**Given** Epics 1 to 4 are done
+**When** `/bmad-retrospective` runs headless for each
+**Then** each writes its retrospective under `docs/implementation/` with sourced findings and action items
+**And** any action item that is code or documentation work is added to this epic as a story, or to `deferred-work.md` with a reason
+**And** any action item that needs an operator decision not already taken is collected for one question at the end of the epic
+
+### Story 5.2: A resumed session does not keep finished background tasks
+
+As the operator,
+I want a Box to leave BACKGROUND when its background work is really over, even after a session was resumed,
+So that a Box never stays BACKGROUND because of a task that ended in an earlier process.
+
+**Acceptance Criteria:**
+
+**Given** a throwaway Claude Code session under `cldp`, outside herdr, exits with a background command still running, and is then resumed
+**When** the new transcript is read
+**Then** the experiment's finding (whether earlier task starts are copied into the new transcript) is recorded in `docs/research/` with the Claude Code version and date
+**And** if starts are copied, the engine drops an open command when the process check has found no tool shell for a bounded time, covered by a test
+**And** if they are not, the deferred entry is closed with the evidence and no code changes
+
+### Story 5.3: `/clear` drops the previous session's background tasks
+
+As the operator,
+I want a cleared session's Box to show only the new session's work,
+So that tasks from before `/clear` never linger on the Board.
+
+**Acceptance Criteria:**
+
+**Given** a throwaway Claude Code session under `cldp` with a background task open
+**When** `/clear` is run
+**Then** whether `sessions/<pid>.json` changes `sessionId` is recorded in `docs/research/` with the version and date
+**And** when the session id changes, the engine resets the transcript tail and open tasks for that Agent, covered by a test
+**And** if the id does not change, the story finds and documents another signal, or records that none exists and keeps the deferred entry with that evidence
+
+### Story 5.4: Retry a Profile lookup that failed transiently
+
+As the operator,
+I want a Profile that failed to resolve because of a timeout or a herdr call error to be tried again,
+So that an Agent does not stay `unresolved` until its next agent detection.
+
+**Acceptance Criteria:**
+
+**Given** Profile resolution fails with a timeout or call error (not a rule outcome such as absent or unmatched)
+**When** the engine handles the failure
+**Then** it retries with a bounded number of attempts and a backoff from `tunables.go`, never on the engine goroutine's critical path
+**And** a rule outcome (`unresolved` from an unmatched variable, the absent case) is never retried
+**And** `TestProfileFailures` and a new test prove both
+
+### Story 5.5: Tighter import rules and Transition invariants (ADR-0011)
+
+As the builder,
+I want the architecture test to keep herdr's wire types and dependencies where the spine intends,
+So that drift is caught by CI rather than by review.
+
+**Acceptance Criteria:**
+
+**Given** ADR-0011, which only tightens the import rules
+**When** `arch_test.go` runs
+**Then** it fails on any import of `internal/herdr/gen` or `genwire` from outside `internal/herdr`, and on any non-standard import in `internal/herdr` and its gen packages
+**And** `core.NewTransition` rejects a `HerdrOrder` on a live or backfilled Transition with a sentinel error, covered by a test
+
+### Story 5.6: CI runs the Board's browser check
+
+As the builder,
+I want CI to run `internal/httpapi/web/check/board-browser.mjs` against headless Chrome,
+So that the Board's drawing (strips, dimming, recap rows, live updates, reconnect) cannot break with CI green.
+
+**Acceptance Criteria:**
+
+**Given** a pull request
+**When** CI runs on ubuntu-latest
+**Then** a job runs the browser check against the runner's Chrome, with no npm packages
+**And** removing the `.board--recaps` rule makes that job fail
+**And** CLAUDE.md no longer calls the check hand-run
+
+### Story 5.7: CI tests on macOS
+
+As the builder,
+I want the test suite to run on a macOS runner too,
+So that procenv's darwin reader and the launchd plist lint are exercised automatically.
+
+**Acceptance Criteria:**
+
+**Given** a pull request
+**When** CI runs
+**Then** a `macos-latest` job runs `go test ./...` and `TestLaunchdAgentLints` does not skip there
+**And** the existing ubuntu jobs are unchanged
+
+### Story 5.8: Documents agents read match the code
+
+As the builder,
+I want CLAUDE.md, the spine and the configuration docs to state what the code does,
+So that a fresh session is not misled.
+
+**Acceptance Criteria:**
+
+**Given** the open documentation items in `deferred-work.md`
+**When** this story is done
+**Then** CLAUDE.md says what `go run` and a plain `go build` print for `version`, marks the Story 1.3 checkpoint closed without "live 0.8.2", names `golang.org/x/sys` and the exact `go` directive, and describes Epic 5's additions
+**And** the engine tunables are documented beside the configuration, and the spine's Deferred list no longer names them
+**And** the spine's AD-3 notes that a moved pane is a removal plus a new Agent, and `TestPaneMoved`'s comment agrees
+**And** every closed entry in `deferred-work.md` is marked resolved with where
+
+### Story 5.9: Decide whether acknowledgement is needed (PRD §8 Q1)
+
+As the operator,
+I want the acknowledgement question settled by what the record shows,
+So that the Board gets an acknowledgement feature only if it needs one.
+
+**Acceptance Criteria:**
+
+**Given** the date is 2026-11-03 or later
+**When** the record is queried for Agents that stayed Finished after the operator viewed the pane (a `done` never followed by `idle` while the operator was active, or `idle` and `done` disagreeing)
+**Then** if there are none, PRD §8 Q1 is closed as "not needed" with the query and its result
+**And** if there are some, the evidence is prepared for the operator and the story stops for their decision
+**And** before that date the story is skipped, not failed
+
