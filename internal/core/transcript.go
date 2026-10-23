@@ -69,12 +69,14 @@ type transcriptRecord struct {
 	CommandRun       json.RawMessage `json:"commandRun"`
 }
 
-// The tags a local command's records start with (Story 5.14).
+// The tags a local command's records start with (Story 5.14); tagStderr is
+// the older user-record result's other form (Story 5.15).
 const (
 	tagCaveat  = "<local-command-caveat>"
 	tagCommand = "<command-name>"
 	tagStdout  = "<local-command-stdout>"
 	tagStdoutX = "</local-command-stdout>"
+	tagStderr  = "<local-command-stderr>"
 )
 
 // DecodeTranscriptLine decodes one transcript line for the markers ADR-0009
@@ -104,14 +106,20 @@ const (
 //     which is no marker; a user record, not isMeta, whose string
 //     message.content starts "<command-name>", which is CommandPending, not
 //     a turn start; and its result, a system record with subtype
-//     "local_command" (or, from older Claude Code, a user record whose string
-//     message.content starts "<local-command-stdout>"), which is
+//     "local_command", whatever its content (or, from older Claude Code, a
+//     user record whose string message.content starts
+//     "<local-command-stdout>" or "<local-command-stderr>"), which is
 //     CommandResult, not a turn start. None of them is a marker on a
 //     sidechain. Apply decides whether a pending command started a turn. A
 //     user record with isCompactSummary true (the summary /compact writes
 //     before its own local-command records) is no turn start either. A
 //     skill command (a user record starting "<command-message>") starts a
-//     turn as any prompt does;
+//     turn as any prompt does. So does bash mode (`!cmd`): its user records,
+//     one starting "<bash-input>" and one starting "<bash-stdout>" (with the
+//     command's "<bash-stderr>" inside it, never leading a record), are
+//     turn starts, because Claude Code sends the output to the model, which
+//     replies (Story 5.15; see
+//     docs/research/claude-code-bash-mode-2026-10-23.md);
 //   - only when recaps is true (the operator's consent, ADR-0010): a system
 //     record that is not a sidechain, with subtype "away_summary" and a
 //     string content, carries the session recap (see recapOf); so does a
@@ -196,8 +204,9 @@ func recapText(s string) string {
 
 // localUser is the local-command tag a user record's string
 // message.content starts with: tagCaveat (only on an isMeta record),
-// tagCommand (only on a record that is not isMeta) or tagStdout; "" when
-// none. Nothing past the tag is looked at.
+// tagCommand (only on a record that is not isMeta) or tagStdout, which also
+// stands for tagStderr (either is a local result); "" when none. Nothing
+// past the tag is looked at.
 func localUser(rec transcriptRecord) string {
 	if !isObject(rec.Message) {
 		return ""
@@ -214,7 +223,7 @@ func localUser(rec transcriptRecord) string {
 		return tagCaveat
 	case !rec.IsMeta && strings.HasPrefix(c, tagCommand):
 		return tagCommand
-	case strings.HasPrefix(c, tagStdout):
+	case strings.HasPrefix(c, tagStdout), strings.HasPrefix(c, tagStderr):
 		return tagStdout
 	}
 	return ""

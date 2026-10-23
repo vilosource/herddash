@@ -1073,3 +1073,10 @@ transcripts hold 56 user records whose content starts `<bash-input>` and 56 star
 **Then** they neither clear the recap nor mark a turn as started, judged by structure only and verified against real record shapes
 **And** a prompt typed after them still starts a turn
 **And** Story 5.14's code gets the follow-up review its builder recommended, and its findings are fixed or deferred
+
+**Amended 2026-10-23 (built):** the verification this story asks for refuted its premise for bash mode.
+Claude Code sends a `!cmd`'s output to the model, which answers it: 54 of the 56 bash commands in
+this machine's transcripts were answered by a model turn with no prompt between
+(`docs/research/claude-code-bash-mode-2026-10-23.md`). Bash-mode records therefore stay turn starts
+and clear the recap, now pinned by tests; only the `<local-command-stderr>` half was changed. The
+title is kept for traceability. See `docs/implementation/spec-5-15-bash-mode-commands-are-not-turns-either.md`.

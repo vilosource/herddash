@@ -439,7 +439,8 @@ func TestRecapClone(t *testing.T) {
 func TestRecapOffChangesNothingElse(t *testing.T) {
 	lines := append(fixtureLines(t), recapFixtureLines(t)...)
 	lines = append(lines, localFixtureLines(t)...)
-	for _, l := range []string{caveat, cmdName, oldResult, skillCmd,
+	for _, l := range []string{caveat, cmdName, oldResult, oldStderr, compactSummary, skillCmd, bashInput, bashStdout,
+		localResult("usage", "<local-command-stderr>E</local-command-stderr>"),
 		localResult("usage", "<local-command-stdout>O</local-command-stdout>"),
 		localResult("recap", "<local-command-stdout>R.</local-command-stdout>"), localResult("recap", "R."), prompt, endTurn, sideEnd, toolUse, queuedCmd, bgStart, agentStart, notify("bx1", "completed"),
 		notify("bx1", ""), taskStop("bx1"), recap("X. (disable recaps in /config)"), recap(""),

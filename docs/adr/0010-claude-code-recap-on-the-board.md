@@ -27,6 +27,17 @@ reset the turn: the `<command-name>` record is *pending*, and is confirmed as a 
 when a turn start or end comes before that command's result. A skill command (a user record starting
 `<command-message>`) still starts a turn at once.
 
+**Amended 2026-10-23** (Story 5.15): bash mode is a turn, and a stderr result is not. A `!cmd`
+writes two user records, one starting `<bash-input>` and one starting `<bash-stdout>` (the
+command's `<bash-stderr>` inside it, never leading a record). Claude Code sends that output to the
+model, which replies: of 56 bash commands in the transcripts under `~/.claude-cldp` and
+`~/.claude-cldw`, 55 were followed by a main-thread assistant record, and in 54 of those it was a
+model turn chained to the `<bash-stdout>` record with no prompt between (Claude Code 2.1.267 to
+2.1.292, [research record](../research/claude-code-bash-mode-2026-10-23.md)). Both records
+therefore stay turn starts and clear the recap, like a prompt. UNVERIFIED, a defensive assumption
+by symmetry, never observed: a user record starting `<local-command-stderr>` is the older-form
+local result beside `<local-command-stdout>`: a result, no turn start, its text never read.
+
 ## Context
 
 The operator asked whether Claude Code's recap could be shown in the Boxes: "the idea is to have
