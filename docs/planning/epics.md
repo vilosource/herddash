@@ -1055,3 +1055,21 @@ is a real turn. Seen across transcripts: `/recap` 63, `/usage` 53, `/compact` 42
 **And** a skill command that does start a model turn still clears the recap as a turn does
 **And** decoder and fold tests use record shapes copied from real transcripts, with no transcript text beyond what the test needs
 **And** with recaps off, neither record's content is read (ADR-0010 consent)
+
+### Story 5.15: Bash-mode commands are not turns either
+
+As the operator,
+I want a `!command` I run in Claude Code's bash mode to leave the Box's recap and turn state alone,
+So that the Board treats every local action the same way.
+
+Source: Story 5.14's deferred finding, confirmed by the orchestrator on 2026-10-23. This machine's
+transcripts hold 56 user records whose content starts `<bash-input>` and 56 starting
+`<bash-stdout>`; both count as a turn start today. `<local-command-stderr>` was also left unverified.
+
+**Acceptance Criteria:**
+
+**Given** the operator runs `!cmd` in bash mode, or a local command writes `<local-command-stderr>`
+**When** those records are read
+**Then** they neither clear the recap nor mark a turn as started, judged by structure only and verified against real record shapes
+**And** a prompt typed after them still starts a turn
+**And** Story 5.14's code gets the follow-up review its builder recommended, and its findings are fixed or deferred
