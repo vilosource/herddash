@@ -88,6 +88,7 @@ development_status:
   5-11-the-board-notices-a-hung-daemon: backlog
   5-12-the-engine-treats-repeated-failures-as-a-lost-connection: backlog
   5-13-board-text-and-grouping-are-exact: in-progress
+  5-14-a-manual-recap-reaches-the-board: in-progress
   epic-5-retrospective: optional
 
 # Operator checkpoints and story-size notes carried from epics validation
