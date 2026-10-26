@@ -18,9 +18,12 @@ const (
 	// before the engine drops it as too slow (AD-7).
 	eventBuffer = 64
 	// streamWriteTimeout bounds each write to a stream, so a stalled client
-	// cannot pin its goroutine forever.
+	// cannot pin its goroutine forever. This and keepaliveInterval are listed
+	// under "Fixed timings" in docs/config.example.toml; change it with them.
 	streamWriteTimeout = 10 * time.Second
-	// keepaliveInterval is how often a quiet stream sends a comment line.
+	// keepaliveInterval is how often a stream sends a keepalive event
+	// (ADR-0012). The Board takes a stream silent for STREAM_SILENCE_MS
+	// (web/order.mjs) for lost, which a test keeps above twice this.
 	keepaliveInterval = 15 * time.Second
 	// retryPrefix opens every stream: it tells an EventSource to wait 2 s
 	// before reconnecting.
@@ -37,7 +40,14 @@ const (
 	eventTransition = "transition"
 	eventResync     = "resync"
 	eventConnection = "connection"
+	// eventKeepalive is the Daemon's sign of life on a quiet stream
+	// (ADR-0012). It is not a change, and it is sent with no id, so that id
+	// stays the view sequence of real changes.
+	eventKeepalive = "keepalive"
 )
+
+// keepaliveFrame is the whole keepalive event: no id line, data {}.
+const keepaliveFrame = "event: " + eventKeepalive + "\ndata: {}\n\n"
 
 // codeUnavailable is the error code of a /events request refused because the
 // engine has stopped or the server is shutting down.
@@ -129,7 +139,9 @@ func changeData(c engine.Change) (name string, data any, ok bool) {
 // subscribes first, then reads the View, so nothing published between the two
 // is missed: the stream opens with a retry line and a state event carrying
 // exactly the /api/state body, then sends one event per Change of every later
-// publication, in order, skipping publications the state already covers. It
+// publication, in order, skipping publications the state already covers.
+// Every keepaliveInterval it also sends a keepalive event, with no id and data
+// {}, so a client can tell a quiet Daemon from a hung one (ADR-0012). It
 // keeps no history and ignores Last-Event-ID: every stream starts with state.
 // After CloseStreams, or once the engine has stopped, it answers 503 so a
 // client backs off instead of reconnecting in a loop. A stream ends when the
@@ -265,7 +277,7 @@ func (h *Handler) serveEvents(w http.ResponseWriter, r *http.Request) {
 		case <-h.stop:
 			return
 		case <-keepalive.C:
-			if err := write([]byte(": keepalive\n\n")); err != nil {
+			if err := write([]byte(keepaliveFrame)); err != nil {
 				logWrite(err)
 				return
 			}

@@ -516,8 +516,9 @@ func TestSnapshotMinInterval(t *testing.T) {
 }
 
 func TestPaneMoved(t *testing.T) {
-	// Today a move is a snapshot: the old id is removed and the new id is a
-	// new Agent with its own subscription.
+	// A move is a removal plus a new Agent (spine AD-3): the move triggers a
+	// snapshot, the old id is removed and the new id is a new Agent with its
+	// own subscription. Identity is never carried across the move.
 	h := started(t)
 	old := h.fake.statusSub("w1:p1")
 	s := twoAgents()
@@ -1770,34 +1771,68 @@ func TestProfileFailures(t *testing.T) {
 	cases := []struct {
 		name    string
 		prepare func(*fakeClient, *fakeEnviron)
+		// transient failures are retried profileRetries times.
+		transient bool
 	}{
 		{"timeout", func(_ *fakeClient, env *fakeEnviron) {
 			env.set(p1PID, claudeVar, "/h/.claude-cldw")
 			env.hold()
-		}},
+		}, true},
 		{"no foreground process", func(f *fakeClient, _ *fakeEnviron) {
 			f.mu.Lock()
 			delete(f.procs, "w1:p1")
 			f.mu.Unlock()
-		}},
+		}, true},
 		{"environment unreadable", func(_ *fakeClient, env *fakeEnviron) {
 			env.fail(p1PID, errors.New("operation not permitted"))
-		}},
+		}, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			begin := time.Now()
-			h, _, logs := startProfiled(t, oneAgent("claude", core.StatusWorking), c.prepare)
+			h, env, logs := startProfiled(t, oneAgent("claude", core.StatusWorking), c.prepare)
 			h.rec.expect(t, "agent w1:p1 claude working profile=unresolved")
 			if c.name == "timeout" {
 				if d := time.Since(begin); d < profileTimeout {
 					t.Errorf("reported after %v, before the timeout %v", d, profileTimeout)
 				}
 			}
-			entries := logs.entries(t, "DEBUG", "profile resolved")
-			if len(entries) != 1 || entries[0]["error"] == nil || entries[0]["value"] != nil {
-				t.Errorf("want one debug entry naming the error and no value: %v", entries)
+			lookups := 1
+			if c.transient {
+				lookups += profileRetries
+				awaitLog(t, logs, "WARN", "profile lookup failed", 1)
 			}
+			// Past the whole retry window, nothing more is tried.
+			time.Sleep(4 * profileRetryWait(profileRetries))
+			h.settle()
+			// A hung read keeps the pane's slot (Story 5.18): its retries run
+			// out of time waiting for it, reading nothing.
+			calls := lookups
+			if c.name == "timeout" {
+				calls = 1
+				if started, _ := env.reads(); started != 1 {
+					t.Errorf("%d environment reads, want 1", started)
+				}
+			}
+			if n := h.fake.processCalls(); n != calls {
+				t.Errorf("%d foreground process reads, want %d", n, calls)
+			}
+			if n := len(logs.entries(t, "WARN", "profile lookup failed")); c.transient && n != 1 {
+				t.Errorf("%d warnings on giving up, want 1", n)
+			}
+			if n := len(logs.entries(t, "INFO", "profile lookup failed; retrying")); c.transient && n != profileRetries {
+				t.Errorf("%d retries logged, want %d", n, profileRetries)
+			}
+			entries := logs.entries(t, "DEBUG", "profile resolved")
+			if len(entries) != lookups {
+				t.Fatalf("%d debug entries, want %d: %v", len(entries), lookups, entries)
+			}
+			for _, e := range entries {
+				if e["error"] == nil || e["value"] != nil {
+					t.Errorf("want each debug entry naming the error and no value: %v", e)
+				}
+			}
+			h.rec.expect(t, "agent w1:p1 claude working profile=unresolved")
 		})
 	}
 }
@@ -2024,7 +2059,8 @@ func TestProfileSnapshotDuringResolve(t *testing.T) {
 }
 
 // TestProfileReconnectDuringRedetect: a reconnect that keeps the epoch while
-// a reported Agent's Profile is resolved again leaves that resolution intact.
+// a reported Agent's Profile is resolved again leaves that resolution intact:
+// the reconnect starts no lookup of its own for it (Story 5.4).
 func TestProfileReconnectDuringRedetect(t *testing.T) {
 	setProfileTimeout(t, wait)
 	h, env, _ := startedProfiled(t)
@@ -2042,6 +2078,9 @@ func TestProfileReconnectDuringRedetect(t *testing.T) {
 	h.rec.expect(t, "agent w1:p1 claude working profile=cldw", "reconnected 0.9.5 epoch 1 kept")
 	h.fake.awaitSubscribe("w1:p1")
 	h.settle()
+	if n := h.fake.processCalls(); n != 2 {
+		t.Errorf("%d lookups, want 2: the reconnect superseded the lookup in flight", n)
+	}
 	env.unblock()
 	h.rec.expect(t, "agent w1:p1 claude working profile=cldw", "reconnected 0.9.5 epoch 1 kept", "profile w1:p1 cldp previous cldw")
 	h.settle()

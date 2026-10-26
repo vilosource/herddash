@@ -36,10 +36,12 @@ const (
 
 // transcriptRig is a session rig on one claude Agent whose process has
 // CLAUDE_CONFIG_DIR set to a temporary directory, whose session record
-// (a fake) names trSession in trCWD, and whose transcript is path.
+// (a fake) names trSession in trCWD, and whose transcript is path under the
+// config dir cfg.
 type transcriptRig struct {
 	*sessionRig
 	sess *fakeSessions
+	cfg  string
 	path string
 }
 
@@ -66,7 +68,7 @@ func startTranscript(t *testing.T, status core.Status, lines []string, more func
 			more(o)
 		}
 	})
-	return &transcriptRig{sessionRig: r, sess: sess, path: path}
+	return &transcriptRig{sessionRig: r, sess: sess, cfg: cfg, path: path}
 }
 
 // writeTranscript appends lines to the transcript at path.
@@ -102,7 +104,7 @@ func (r *transcriptRig) noLeak(t *testing.T) {
 	r.logs.mu.Lock()
 	logged := r.logs.b.String()
 	r.logs.mu.Unlock()
-	for _, s := range []string{"SECRET", trSession, "bk7q2x9", "a3f9c2d1"} {
+	for _, s := range []string{"SECRET", trSession, trClearedSession, "bk7q2x9", "a3f9c2d1"} {
 		if strings.Contains(logged, s) {
 			t.Errorf("the log carries %q: %s", s, logged)
 		}
@@ -122,6 +124,32 @@ func TestTranscriptSubagentAfterTurn(t *testing.T) {
 	writeTranscript(t, r.path, trDone("a3f9c2d1"))
 	v = r.awaitTasks(0, false)
 	if v.SortKey.ClassRank != 4 {
+		t.Errorf("rank %d, want Working", v.SortKey.ClassRank)
+	}
+	r.expectSessionRows(t)
+	r.noLeak(t)
+}
+
+// trSendMessage is the main thread's SendMessage call, and trResume the
+// record Claude Code writes as its result when it resumes the finished
+// subagent a3f9c2d1, shaped on Claude Code 2.1.292 (Story 5.16).
+const trSendMessage = `{"type":"assistant","isSidechain":false,"message":{"content":[{"type":"tool_use","id":"toolu_SECRET",` +
+	`"name":"SendMessage","input":{"to":"a3f9c2d1","message":"PROMPT-SECRET"}}],"stop_reason":"tool_use"}}`
+const trResume = `{"type":"user","isSidechain":false,"message":{"role":"user","content":[{"tool_use_id":"toolu_SECRET","type":"tool_result",` +
+	`"content":[{"type":"text","text":"RESULT-SECRET"}]}]},"toolUseResult":{"success":true,` +
+	`"message":"MESSAGE-SECRET resuming","resumedAgentId":"a3f9c2d1","pin":{"id":"PIN-SECRET","name":"PIN-SECRET","ref":"PIN-SECRET"}}}`
+
+// TestTranscriptResumedSubagent covers Story 5.16: a subagent launched and
+// completed, then resumed by SendMessage, with the main turn over, is one
+// background task again (Background); its next notification closes it.
+func TestTranscriptResumedSubagent(t *testing.T) {
+	r := startTranscript(t, core.StatusWorking,
+		[]string{trPrompt, trSubStart, trDone("a3f9c2d1"), trPrompt, trSendMessage, trResume, trEndTurn}, nil)
+	if v := r.awaitTasks(1, true); v.SortKey.ClassRank != 3 {
+		t.Errorf("view %+v", v)
+	}
+	writeTranscript(t, r.path, trDone("a3f9c2d1"))
+	if v := r.awaitTasks(0, false); v.SortKey.ClassRank != 4 {
 		t.Errorf("rank %d, want Working", v.SortKey.ClassRank)
 	}
 	r.expectSessionRows(t)
@@ -286,6 +314,55 @@ func TestTranscriptReadResumes(t *testing.T) {
 	}
 }
 
+// trStopped is the notification a resumed session enqueues for a task the
+// previous process left with no completion record (Claude Code 2.1.292,
+// observed 2026-10-23; every text invented and marked SECRET).
+func trStopped(id string) string {
+	return `{"type":"queue-operation","operation":"enqueue","content":"<task-notification>\n<task-id>` + id +
+		`</task-id>\n<tool-use-id>toolu_SECRET</tool-use-id>\n<status>stopped</status>\n` +
+		`<summary>SUMMARY-SECRET</summary>\n<note>NOTE-SECRET</note>\n</task-notification>"}`
+}
+
+// TestTranscriptResumedStopped covers the matrix's "Engine, new process same
+// session" row (Story 5.2): a crashed process left a command open; the
+// pane's new process resumes the same session, so its record names the same
+// transcript, which it appends to. Following it re-reads from the bound and
+// sees the start again, still open; the resume's stopped notification
+// closes it: no task, not Background.
+func TestTranscriptResumedStopped(t *testing.T) {
+	const p2PID = 202
+	r := startTranscript(t, core.StatusDone, []string{trPrompt, trBgStart, trEndTurn}, nil)
+	r.awaitTasks(1, true)
+	r.env.set(p2PID, claudeVar, r.cfg)
+	r.sess.mu.Lock()
+	r.sess.recs[p2PID] = procenv.Session{PID: p2PID, Status: "idle", SessionID: trSession, CWD: trCWD}
+	// The crashed process's record goes, so only following p2 can show the
+	// open task below, and only p2's watch can read the stopped line.
+	delete(r.sess.recs, p1PID)
+	r.sess.mu.Unlock()
+	r.h.fake.setProc("w1:p1", p2PID)
+	r.h.lifecycle(core.LifecycleEvent{Kind: core.LifecycleAgentDetected, PaneID: "w1:p1", AgentProgram: "claude"})
+	deadline := time.Now().Add(wait)
+	// Reads are serialized by the busy flag, so by the third read of p2's
+	// record the first one's result (and its transcript read) has been applied.
+	for r.sess.readsOf(p2PID) < 3 {
+		if time.Now().After(deadline) {
+			t.Fatal("the new process's record was not read")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	r.h.settle()
+	if v := r.view(); v.BackgroundTasks != 1 || !v.Background {
+		t.Errorf("before the resume's notification: %d tasks, background %v; want 1, true", v.BackgroundTasks, v.Background)
+	}
+	writeTranscript(t, r.path, trStopped("bk7q2x9"))
+	// ClassRank 1 is Finished's rank.
+	if v := r.awaitTasks(0, false); v.Class != core.ClassFinished || v.SortKey.ClassRank != 1 {
+		t.Errorf("view %+v", v)
+	}
+	r.noLeak(t)
+}
+
 // trRecap is a session recap record (ADR-0010), its text marked RECAP-TEXT
 // so a test can tell it never reached the log.
 const trRecap = `{"type":"system","subtype":"away_summary","isSidechain":false,"isMeta":false,"level":"info",` +
@@ -373,4 +450,215 @@ func TestTranscriptRecapDropped(t *testing.T) {
 		t.Errorf("recap entries %v", e)
 	}
 	r.recapNoLeak(t)
+}
+
+// A local command's records as Claude Code 2.1.292 writes them (Story
+// 5.14): the caveat, the <command-name> record and the local_command result.
+// Every text is invented; /usage's output is marked SECRET, the manual
+// recap RECAP-TEXT.
+const (
+	trCaveat  = `{"type":"user","isSidechain":false,"isMeta":true,"message":{"role":"user","content":"<local-command-caveat>CAVEAT-SECRET</local-command-caveat>"}}`
+	trCmdName = `{"type":"user","isSidechain":false,"message":{"role":"user","content":"<command-name>/cmd</command-name>\n<command-args>ARGS-SECRET</command-args>"}}`
+	trUsage   = `{"type":"system","subtype":"local_command","isSidechain":false,"isMeta":false,"level":"info",` +
+		`"commandRun":{"command":"usage","args":"ARGS-SECRET"},"content":"<local-command-stdout>USAGE-SECRET</local-command-stdout>"}`
+	trManualRecap = `{"type":"system","subtype":"local_command","isSidechain":false,"isMeta":false,"level":"info",` +
+		`"commandRun":{"command":"recap","args":""},"content":"<local-command-stdout>I did RECAP-TEXT by hand. Next I'll ship it.</local-command-stdout>"}`
+	trManualRecapWant = "I did RECAP-TEXT by hand. Next I'll ship it."
+)
+
+// TestTranscriptManualRecap covers Story 5.14's acceptance at the engine:
+// with recaps on, a Finished Agent's recap survives a /usage and is replaced
+// by a manual /recap within the usual read; a Working Agent whose main turn
+// ended keeps it ended through local commands; the log carries no text.
+func TestTranscriptManualRecap(t *testing.T) {
+	t.Run("finished", func(t *testing.T) {
+		r := startTranscript(t, core.StatusDone, []string{trPrompt, trEndTurn, trRecap}, recapsOn)
+		r.awaitRecap(trRecapWant)
+		writeTranscript(t, r.path, trCaveat, trCmdName, trUsage)
+		r.sess.moreReads(t, r.h)
+		if v := r.view(); v.Recap != trRecapWant || v.Class != core.ClassFinished {
+			t.Errorf("after /usage: recap %q, class %v", v.Recap, v.Class)
+		}
+		writeTranscript(t, r.path, trCaveat, trCmdName, trManualRecap)
+		v := r.awaitRecap(trManualRecapWant)
+		if v.Class != core.ClassFinished || v.SortKey.ClassRank != 1 {
+			t.Errorf("view %+v", v)
+		}
+		r.expectSessionRows(t)
+		r.recapNoLeak(t)
+	})
+	t.Run("turn stays ended", func(t *testing.T) {
+		r := startTranscript(t, core.StatusWorking, []string{trPrompt, trSubStart, trEndTurn}, recapsOn)
+		r.awaitTasks(1, true)
+		writeTranscript(t, r.path, trCaveat, trCmdName, trUsage)
+		r.sess.moreReads(t, r.h)
+		if v := r.view(); !v.Background || v.BackgroundTasks != 1 {
+			t.Errorf("after /usage: background %v, %d tasks", v.Background, v.BackgroundTasks)
+		}
+		writeTranscript(t, r.path, trCaveat, trCmdName, trManualRecap)
+		if v := r.awaitRecap(trManualRecapWant); !v.Background {
+			t.Errorf("after /recap: background %v", v.Background)
+		}
+		writeTranscript(t, r.path, trPrompt)
+		r.awaitTasks(1, false)
+		r.awaitRecap("")
+		r.recapNoLeak(t)
+	})
+	// Story 5.15: a bash-mode command (`!cmd`) is a turn, since Claude Code
+	// sends its output to the model, which replies; unlike a local command it
+	// clears the recap and reopens the turn.
+	t.Run("bash mode is a turn", func(t *testing.T) {
+		r := startTranscript(t, core.StatusDone, []string{trPrompt, trEndTurn, trRecap}, recapsOn)
+		r.awaitRecap(trRecapWant)
+		writeTranscript(t, r.path, trBashInput, trBashStdout)
+		r.awaitRecap("")
+		writeTranscript(t, r.path, trEndTurn)
+		r.sess.moreReads(t, r.h)
+		if v := r.view(); v.Recap != "" || v.Class != core.ClassFinished || v.SortKey.ClassRank != 1 {
+			t.Errorf("view %+v", v)
+		}
+		r.expectSessionRows(t)
+		r.recapNoLeak(t)
+	})
+	t.Run("bash mode reopens the turn", func(t *testing.T) {
+		r := startTranscript(t, core.StatusWorking, []string{trPrompt, trSubStart, trEndTurn}, recapsOn)
+		r.awaitTasks(1, true)
+		writeTranscript(t, r.path, trBashInput, trBashStdout)
+		r.awaitTasks(1, false)
+		writeTranscript(t, r.path, trEndTurn)
+		r.awaitTasks(1, true)
+		r.recapNoLeak(t)
+	})
+}
+
+// A bash-mode command's records as Claude Code 2.1.292 writes them (Story
+// 5.15): the input and its output, stderr inside the stdout record. Every
+// text is invented and marked SECRET.
+const (
+	trBashInput  = `{"type":"user","isSidechain":false,"message":{"role":"user","content":"<bash-input>CMD-SECRET</bash-input>"}}`
+	trBashStdout = `{"type":"user","isSidechain":false,"turnOrigin":"human","message":{"role":"user",` +
+		`"content":"<bash-stdout>OUT-SECRET</bash-stdout><bash-stderr>ERR-SECRET</bash-stderr>"}}`
+)
+
+// trClearedSession is the session id the record names after /clear.
+const trClearedSession = "sess-0002"
+
+// trClear and trClearOutput are the first two records of the transcript
+// /clear starts (Claude Code 2.1.292, observed 2026-10-23; every text
+// invented and marked SECRET): the /clear command and its local output.
+const (
+	trClear = `{"type":"user","isSidechain":false,"message":{"role":"user","content":"<command-name>/clear</command-name>\n` +
+		`<command-message>clear</command-message>\n<command-args>ARGS-SECRET</command-args>"}}`
+	trClearOutput = `{"type":"system","subtype":"local_command","isSidechain":false,` +
+		`"content":"<local-command-stdout>STDOUT-SECRET</local-command-stdout>"}`
+)
+
+// clear writes lines as the transcript of trClearedSession and points the
+// session record at it, as /clear does in the same process, and returns the
+// new transcript's path.
+func (r *transcriptRig) clear(t *testing.T, lines ...string) string {
+	t.Helper()
+	path, err := procenv.ClaudeTranscriptPath(r.cfg, trCWD, trClearedSession)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTranscript(t, path, lines...)
+	r.sess.mu.Lock()
+	r.sess.recs[p1PID] = procenv.Session{PID: p1PID, Status: "shell", SessionID: trClearedSession, CWD: trCWD}
+	r.sess.mu.Unlock()
+	return path
+}
+
+// TestTranscriptCleared covers Story 5.3's "/clear", "Old task ends after
+// /clear" and "Old transcript grows after /clear" rows: the record names a
+// new session id, so its transcript is another path; the tail restarts on it
+// and the old transcript's open command goes: no task, not Background. Once
+// the new transcript opens a task, the old command's completion there names
+// an id not open and changes nothing, and the old file is never read again.
+// A command still running across /clear is left to the process check
+// (ADR-0009 as amended by Story 5.3).
+func TestTranscriptCleared(t *testing.T) {
+	r := startTranscript(t, core.StatusDone, []string{trPrompt, trBgStart, trEndTurn}, nil)
+	r.awaitTasks(1, true)
+	path := r.clear(t, trClear, trClearOutput)
+	// ClassRank 1 is Finished's rank.
+	if v := r.awaitTasks(0, false); v.Class != core.ClassFinished || v.SortKey.ClassRank != 1 {
+		t.Errorf("view %+v", v)
+	}
+	// The new transcript is the one followed: a start there shows.
+	writeTranscript(t, path, trSubStart)
+	r.awaitTasks(1, true)
+	writeTranscript(t, path, trDone("bk7q2x9"))
+	r.sess.moreReads(t, r.h)
+	if v := r.view(); v.BackgroundTasks != 1 || !v.Background {
+		t.Errorf("after the old task's end: %d tasks, background %v; want 1, true", v.BackgroundTasks, v.Background)
+	}
+	// A start the old file gains would make it two, were it read.
+	writeTranscript(t, r.path, trBgStart)
+	r.sess.moreReads(t, r.h)
+	if v := r.view(); v.BackgroundTasks != 1 || !v.Background {
+		t.Errorf("the old transcript was read again: %d tasks, background %v; want 1, true", v.BackgroundTasks, v.Background)
+	}
+	r.expectSessionRows(t)
+	r.noLeak(t)
+}
+
+// TestTranscriptClearedRecap covers Story 5.3's "Recap before /clear" row: a
+// recap from before /clear goes with the old transcript, whether the new
+// transcript holds only the command's local output or, as observed, the
+// /clear record and then it. The first case shows the restart alone drops
+// it. A recap in the new transcript then shows.
+func TestTranscriptClearedRecap(t *testing.T) {
+	for name, lines := range map[string][]string{
+		"output only":  {trClearOutput},
+		"clear record": {trClear, trClearOutput},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := startTranscript(t, core.StatusDone, []string{trPrompt, trEndTurn, trRecap}, recapsOn)
+			r.awaitRecap(trRecapWant)
+			path := r.clear(t, lines...)
+			r.awaitRecap("")
+			writeTranscript(t, path, trPrompt, trEndTurn, strings.Replace(trRecap, "the thing", "another thing", 1))
+			r.awaitRecap("I did RECAP-TEXT another thing. Next I'll ship it.")
+			r.recapNoLeak(t)
+		})
+	}
+}
+
+// TestTranscriptClearedNotWritten covers Story 5.3's "New transcript not
+// written yet" row: the record already names the new session id but its
+// transcript does not exist. What the old transcript said is dropped and the
+// failure is logged once, by kind; a command still running across /clear (a
+// tool shell under the process) is then counted by the process check alone.
+func TestTranscriptClearedNotWritten(t *testing.T) {
+	fastBackground(t)
+	kids := newFakeChildren()
+	r := startTranscript(t, core.StatusDone, []string{trPrompt, trBgStart, trSubStart, trEndTurn},
+		func(o *Options) { o.Children = kids.read })
+	r.awaitTasks(2, true)
+	kids.set(p1PID, toolShell)
+	r.sess.mu.Lock()
+	r.sess.recs[p1PID] = procenv.Session{PID: p1PID, Status: "shell", SessionID: trClearedSession, CWD: trCWD}
+	r.sess.mu.Unlock()
+	r.awaitTasks(1, true)
+	r.sess.moreReads(t, r.h)
+	if v := r.view(); v.BackgroundTasks != 1 || !v.Background {
+		t.Errorf("with only the tool shell: %d tasks, background %v; want 1, true", v.BackgroundTasks, v.Background)
+	}
+	if e := r.logs.entries(t, "DEBUG", "claude transcript not read"); len(e) != 1 {
+		t.Errorf("debug entries %v, want one", e)
+	}
+	kids.set(p1PID)
+	r.awaitTasks(0, false)
+	// Once the new transcript appears it is picked up.
+	path, err := procenv.ClaudeTranscriptPath(r.cfg, trCWD, trClearedSession)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTranscript(t, path, trSubStart)
+	r.awaitTasks(1, true)
+	if e := r.logs.entries(t, "DEBUG", "claude transcript not read"); len(e) != 1 {
+		t.Errorf("debug entries %v, want one", e)
+	}
+	r.noLeak(t)
 }

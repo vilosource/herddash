@@ -50,7 +50,10 @@ type FoldResult struct {
 }
 
 // Fold folds ts in the order given, which is the record's order (History's).
-// With no Transitions the result is not Known and its Class is unknown.
+// With no Transitions the result is not Known and its Class is unknown. One
+// AgentKey can hold successive Agents (AD-3): a Transition with no previous
+// Status is an Agent's first row, and the fold starts over there, so the
+// result describes only the Agent the last such row began.
 func Fold(ts []Transition) FoldResult {
 	f := FoldResult{Class: ClassUnknown}
 	for _, t := range ts {
@@ -62,10 +65,17 @@ func Fold(ts []Transition) FoldResult {
 // Add extends f by one Transition, later than every one folded so far. Adding
 // Transitions one by one gives the same result as folding them all at once.
 //
+// A Transition with no previous Status is a new Agent's first row: f is
+// discarded and the fold starts over from it, Class, Since and EverWorking
+// alike, so nothing of an earlier Agent on the same AgentKey carries across.
+//
 // The first working Transition restarts Since even though the Class stays
 // working: before it the Agent was Idle on the Board, a separate state, and
 // its Waiting Time as Working starts there (Board layout v4, 2026-10-21).
 func (f FoldResult) Add(t Transition) FoldResult {
+	if _, ok := t.Previous(); !ok {
+		f = FoldResult{Class: ClassUnknown}
+	}
 	firstWork := !f.EverWorking && t.New() == StatusWorking
 	f.EverWorking = f.EverWorking || t.New() == StatusWorking
 	class := ClassOf(t.New(), f.EverWorking)

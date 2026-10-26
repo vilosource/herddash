@@ -200,9 +200,20 @@ export function inNeedsYou(view) {
   return view.sort_key[0] === 0;
 }
 
-// headerLabel is the workspace header's text for the group starting at view.
+// UNPOSITIONED_GROUP is the first group core gives a workspace herdr did not
+// list (2^52, core.UnpositionedGroup); such groups run up to, not including,
+// the unknown sentinel Number.MAX_SAFE_INTEGER.
+const UNPOSITIONED_GROUP = 2 ** 52;
+
+// headerLabel is the workspace header's text for the group starting at view:
+// the workspace's label; else "(unlisted workspace)" for a workspace herdr did
+// not list, which has its own group below the sentinel and never a label;
+// else "(no workspace)".
 export function headerLabel(view) {
-  return view.workspace || "(no workspace)";
+  if (view.workspace) return view.workspace;
+  const g = view.sort_key ? view.sort_key[1] : undefined;
+  if (g >= UNPOSITIONED_GROUP && g < Number.MAX_SAFE_INTEGER) return "(unlisted workspace)";
+  return "(no workspace)";
 }
 
 // groupCounts is a workspace group's counts in the group's reading order,
@@ -333,8 +344,9 @@ function sameKey(a, b) {
 
 // EVENT_NAMES are exactly the event names the Daemon sends on /events. The
 // Board listens for these only; an EventSource never dispatches a name
-// nobody listens for.
-export const EVENT_NAMES = Object.freeze(["state", "agent", "removed", "transition", "resync", "connection"]);
+// nobody listens for. keepalive (ADR-0012) changes no model: it is the
+// Daemon's sign of life on a quiet stream.
+export const EVENT_NAMES = Object.freeze(["state", "agent", "removed", "transition", "resync", "connection", "keepalive"]);
 
 // HANDLED_EVENTS are the names applyEvent changes the model for; resync is
 // not one.
@@ -403,7 +415,8 @@ function withAgent(model, view) {
 // Reconnect backoff after the stream closes for good (a non-200 reply, such
 // as the 503 while the Daemon restarts): the first reopen waits
 // RECONNECT_START_MS, each later one twice as long up to RECONNECT_CAP_MS,
-// and a state event resets it.
+// and a state event resets it. These and STREAM_SILENCE_MS are listed under
+// "Fixed timings" in docs/config.example.toml; change it with them.
 export const RECONNECT_START_MS = 1000;
 export const RECONNECT_CAP_MS = 30000;
 
@@ -412,12 +425,21 @@ export function nextReconnectDelay(delay) {
   return Math.min(delay * 2, RECONNECT_CAP_MS);
 }
 
+// STREAM_SILENCE_MS is how long the current source may go without any event,
+// keepalive included, before the Board takes the stream for lost: a hung or
+// stopped Daemon, or a half-open socket, sends nothing, and EventSource sees
+// no error. The Daemon sends a keepalive every 15 s (ADR-0012); a Go test
+// keeps this above twice that.
+export const STREAM_SILENCE_MS = 35000;
+
 // streamState is the Board's stream state before the first source opens:
-// the model, the current source (any token board.mjs compares with ===),
-// whether a reopen is pending, the next reopen delay, whether the current
-// source has yet to deliver a valid state, and lostSince: when (ms) the
-// first error on the current source came since the last valid state, or null
-// (see streamLost).
+// the model; the current source (any token board.mjs compares with ===);
+// whether a reopen is pending; the next reopen delay; whether the current
+// source has yet to deliver a valid state; lostSince, when (ms) the stream
+// was first in trouble since the last valid state, or null (see streamLost);
+// lastEventAt, when (ms) the current source last showed a sign of life (it
+// was opened or connected, or delivered an event of any name), or null; and
+// lastSeq, the view sequence of the last event checked on it, or null.
 export function streamState() {
   return {
     model: emptyModel(),
@@ -426,63 +448,128 @@ export function streamState() {
     delay: RECONNECT_START_MS,
     awaitingState: true,
     lostSince: null,
+    lastEventAt: null,
+    lastSeq: null,
   };
 }
 
-// streamDecision is the Board's stream logic, one input at a time. It returns
-// {st, reopenAfter, warning}: the new state, a delay in ms when board.mjs
-// must open a new source after it, and a warning to log.
+// seqOf is an event id as a view sequence, or null when it is empty, absent
+// or not an integer.
+function seqOf(id) {
+  return typeof id === "string" && /^[0-9]+$/.test(id) ? Number(id) : null;
+}
+
+// reopen is the decision to give up on the current source: close it, and
+// open a new one after the current delay, the delay after that doubling up to
+// the cap. The stream is in trouble from lostSince, and the source's events
+// are ignored from now on until a valid state.
+function reopen(st, lostSince, warning) {
+  const d = {
+    st: { ...st, lostSince, pending: true, awaitingState: true, delay: nextReconnectDelay(st.delay) },
+    reopenAfter: st.delay,
+    close: st.source,
+  };
+  if (warning) d.warning = warning;
+  return d;
+}
+
+// streamDecision is the Board's stream logic, one input at a time. It never
+// reads the clock: every input that needs the time carries it as now (ms). It
+// returns {st, reopenAfter, close, warning, reload}: the new state; when
+// board.mjs must give up on a source, the source to close and the delay in ms
+// after which to open a new one; a warning to log; and reload when the page
+// must reload. Every reopen goes through the same backoff, and none is
+// decided while one is already pending.
 //
-//   - {kind: "open", source}: source is now current; no reopen is pending,
-//     and its events are ignored until it delivers a valid state.
+//   - {kind: "open", source, now}: source is now current; no reopen is
+//     pending, its events are ignored until it delivers a valid state, and
+//     its silence is measured from now.
+//   - {kind: "connected", source, now}: EventSource's own open event, also
+//     when it has reconnected by itself. For the current source, its events
+//     are again ignored until a valid state (a reconnected stream begins with
+//     one), and its silence is measured from now.
 //   - {kind: "error", source, closed, now}: when source is current, the
-//     stream is in trouble from now (lostSince, kept from an earlier error)
-//     until the next valid state. When it is also
-//     closed (the EventSource gave up, as on a non-200 reply) and no reopen
-//     is pending, reopen after the current delay, and the delay after that
-//     doubles up to the cap. Otherwise no reopen: EventSource retries a
-//     dropped stream itself.
-//   - {kind: "event", source, name, data}: an event from a source that is not
-//     current is ignored, and so is every event before a valid state on the
-//     current one, so a malformed state on a new stream cannot leave the old
-//     model to be merged into. A valid state replaces the model, resets the
-//     delay and ends a loss of the stream; other events go through
-//     applyEvent.
+//     stream is in trouble from now (lostSince, kept from earlier trouble)
+//     until the next valid state. When it is also closed (the EventSource
+//     gave up, as on a non-200 reply), reopen. Otherwise no reopen:
+//     EventSource retries a dropped stream itself.
+//   - {kind: "tick", now}: when the current source has shown no sign of life
+//     for more than STREAM_SILENCE_MS, the Daemon is hung or the socket
+//     half-open: reopen, in trouble since that last sign of life, which is
+//     already past LOST_GRACE_MS, so the lost strip shows at once.
+//   - {kind: "event", source, name, data, id, now}: id is the event's id (its
+//     view sequence) as EventSource gives it. An event from a source that is
+//     not current is ignored, and is no sign of life; any other event is one.
+//     Every event before a valid state on the current source is ignored, so a
+//     malformed state on a new stream cannot leave the old model to be merged
+//     into. A valid state replaces the model, resets the delay, ends a loss of
+//     the stream and sets lastSeq from its id. A later agent, transition,
+//     removed or connection event whose id is an integer must carry lastSeq
+//     or lastSeq + 1 (one publication's events share its sequence, and each
+//     publication adds one); anything else is a skipped publication. A
+//     skipped publication, or an event (state included) that applyEvent
+//     rejects, reopens the stream with a warning, in trouble from now: the
+//     reopened stream's first event is the whole state, the only fresh load
+//     that cannot lose a change (AD-7). keepalive and resync change no model
+//     and are never checked; a resync's id still advances lastSeq, since a
+//     publication may hold nothing but a resync.
 export function streamDecision(st, input) {
   switch (input.kind) {
     case "open":
-      return { st: { ...st, source: input.source, pending: false, awaitingState: true } };
+      return {
+        st: { ...st, source: input.source, pending: false, awaitingState: true, lastEventAt: input.now ?? null, lastSeq: null },
+      };
+    case "connected":
+      if (input.source !== st.source) return { st };
+      return { st: { ...st, awaitingState: true, lastEventAt: input.now ?? st.lastEventAt, lastSeq: null } };
     case "error": {
       if (input.source !== st.source) return { st };
-      const lost = st.lostSince != null ? st : { ...st, lostSince: input.now };
-      if (!input.closed || st.pending) return { st: lost };
-      return { st: { ...lost, pending: true, delay: nextReconnectDelay(st.delay) }, reopenAfter: st.delay };
+      const lostSince = st.lostSince ?? input.now;
+      if (!input.closed || st.pending) return { st: st.lostSince != null ? st : { ...st, lostSince } };
+      return reopen(st, lostSince);
+    }
+    case "tick": {
+      if (st.source === null || st.pending || typeof st.lastEventAt !== "number") return { st };
+      if (!(input.now - st.lastEventAt > STREAM_SILENCE_MS)) return { st };
+      return reopen(st, st.lostSince ?? st.lastEventAt);
     }
     case "event": {
       if (input.source !== st.source) return { st };
-      if (st.awaitingState && input.name !== "state") return { st };
+      const at = typeof input.now === "number" ? { ...st, lastEventAt: input.now } : st;
+      if (st.awaitingState && input.name !== "state") return { st: at };
+      const n = seqOf(input.id);
+      if (!HANDLED_EVENTS.includes(input.name)) {
+        return { st: input.name === "resync" && n !== null ? { ...at, lastSeq: n } : at };
+      }
+      // While a reopen is pending this source is already being given up on.
+      const trouble = (warning) =>
+        st.pending ? { st: at, warning } : reopen(at, st.lostSince ?? input.now ?? null, warning + "; reopening the stream");
+      if (input.name !== "state" && n !== null && st.lastSeq !== null && n !== st.lastSeq && n !== st.lastSeq + 1) {
+        return trouble("the stream skipped from view " + st.lastSeq + " to " + n);
+      }
       const r = applyEvent(st.model, input.name, input.data);
-      if (r.warning) return { st, warning: r.warning };
+      if (r.warning) return trouble(r.warning);
       if (input.name === "state") {
         // Another Daemon run, such as one restarted onto a new build: the page
         // reloads, so it never draws new data with old code.
-        if (st.model.runId && r.model.runId && r.model.runId !== st.model.runId) return { st, reload: true };
-        return { st: { ...st, model: r.model, awaitingState: false, delay: RECONNECT_START_MS, lostSince: null } };
+        if (st.model.runId && r.model.runId && r.model.runId !== st.model.runId) return { st: at, reload: true };
+        return { st: { ...at, model: r.model, awaitingState: false, delay: RECONNECT_START_MS, lostSince: null, lastSeq: n } };
       }
-      return r.model === st.model ? { st } : { st: { ...st, model: r.model } };
+      return { st: { ...at, model: r.model, lastSeq: n !== null ? n : st.lastSeq } };
     }
   }
   return { st };
 }
 
 // LOST_GRACE_MS is how long the stream may be in trouble, with no valid state
-// since its first error, before the Board shows it has lost the Daemon: a
+// since the trouble began, before the Board shows it has lost the Daemon: a
 // transient drop that EventSource's own retry heals does not flash the strip.
 export const LOST_GRACE_MS = 3000;
 
 // streamLost reports whether, at nowMs, the Board has lost the Daemon's
-// stream: an error on the current source at least LOST_GRACE_MS ago and no
-// valid state since.
+// stream: trouble on it (an error, silence past STREAM_SILENCE_MS, a skipped
+// publication or a rejected event) at least LOST_GRACE_MS ago and no valid
+// state since.
 export function streamLost(st, nowMs) {
   return typeof st.lostSince === "number" && nowMs - st.lostSince >= LOST_GRACE_MS;
 }
@@ -559,20 +646,25 @@ export function boardStatus(connection, lost, nowMs) {
       strips.push({ kind: "disconnected", parts: [{ text: "Disconnected from herdr. No snapshot received yet." }] });
     }
   }
+  // An empty or absent herdr_version is one herddash could not read, which
+  // the gate treats as below the minimum; say so rather than call it old.
+  const unread = c !== null && !(typeof c.herdr_version === "string" && c.herdr_version);
   if (gate === "advisory") {
-    let t =
-      "herdr " + versionLabel(c.herdr_version) + " is below the supported minimum " +
-      versionLabel(c.herdr_minimum) + "; recording under the dogfooding flag.";
+    let t = unread
+      ? "herddash could not read herdr's version; recording under the dogfooding flag."
+      : "herdr " + c.herdr_version + " is below the supported minimum " + versionLabel(c.herdr_minimum) +
+        "; recording under the dogfooding flag.";
     if (c.resync_guaranteed !== true) t += " Resync is not guaranteed with this herdr version.";
     strips.push({ kind: "advisory", parts: [{ text: t }] });
   } else if (gate === "refused") {
+    const needs = versionLabel(c.herdr_minimum) + " or newer and is recording nothing.";
     strips.push({
       kind: "refused",
       parts: [
         {
-          text:
-            "herdr " + versionLabel(c.herdr_version) + " is not supported. herddash needs " +
-            versionLabel(c.herdr_minimum) + " or newer and is recording nothing.",
+          text: unread
+            ? "herddash could not read herdr's version. It needs " + needs
+            : "herdr " + c.herdr_version + " is not supported. herddash needs " + needs,
         },
       ],
     });

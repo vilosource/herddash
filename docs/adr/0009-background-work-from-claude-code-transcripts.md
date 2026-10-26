@@ -67,6 +67,44 @@ an ADR.
   existing process check). That check also covers a subagent's own background shells, which the
   main transcript is presumed not to record (UNVERIFIED: they are expected in the subagent's own
   transcript; not observed).
+  *Amended 2026-10-23 (Story 5.2):* `stopped` closes a task too. Claude Code 2.1.292, resuming a
+  session, appends to the same transcript (it copies no starts into a new one) and, as it starts,
+  enqueues a notification with status `stopped` for every task that has a start and no completion
+  record. Without it, a command left open by a crashed session kept the resumed Agent BACKGROUND
+  until its start fell out of the re-read window. `stopped` does not mean the work ended: after a
+  crash or "Move to background and exit" the tool shell was seen still running, orphaned
+  (reparented to launchd). It means the resumed session holds no completion record and will never
+  be told of one, so the Agent is no longer waiting on it; closing it is deliberate even while an
+  orphaned shell may still run, which is no child of the Claude Code process, so the process check
+  does not count it either. Any other status, or none, still leaves a task
+  open, and no task is aged out by time. Evidence:
+  [the resume experiment](../research/claude-code-resume-background-tasks-2026-10-23.md).
+  *Amended 2026-10-23 (Story 5.3):* `/clear` starts a new session in the same process, and Claude
+  Code 2.1.292 changes the session record's `sessionId` at once; the new transcript begins with
+  the `/clear` record and the old one is not written again. A new id names another transcript
+  path, so the tail restarts from the bound on the new file and the Agent's open tasks and recap
+  start afresh: the old transcript is not read again, and no session id is tracked beyond the
+  path. A background command started before `/clear` keeps running as a child of the same process,
+  and its completion is written to the new transcript, where it names an id that is not open and
+  changes nothing. While it runs, the process check counts it (adding one, while Status is `done`
+  or `idle`, when no open command from the new transcript accounts for a tool shell), and it stops
+  counting once the command ends. A background subagent across `/clear` was not observed. Tasks
+  are never carried from one session id's transcript into another's. Evidence:
+  [the `/clear` experiment](../research/claude-code-clear-background-tasks-2026-10-23.md).
+  *Amended 2026-10-23 (Story 5.16):* a resumed subagent is a start marker too. When SendMessage
+  resumes a finished subagent, Claude Code writes a main-thread `user` record whose
+  `toolUseResult` has exactly the keys `success`, `message`, `resumedAgentId` and `pin`; a
+  `toolUseResult` whose `success` is JSON `true` and whose `resumedAgentId` is a well-formed task
+  id now opens that id as a subagent (never a command), and the existing notification handling
+  closes it. Only those two fields are decoded; `message` and `pin` are never looked at. Without
+  it the Box under-counted: the operator saw 1 background task while 3 ran. Evidence (structure
+  only, every transcript under the four config directories, Claude Code 2.1.267 to 2.1.292): 89
+  resume records in 18 transcripts, all `success` true and none a sidechain; every resumed id was
+  a subagent's `agentId` launched earlier in the same transcript; 87 of the 89 resumes are
+  followed by an enqueued `<task-notification>` for the same `<task-id>`, all `completed`, and
+  the other 2 sit within the last 6 lines of their transcripts, still running when read. A resume
+  whose notification never comes stays open, as a launch does; no task is aged out. A resume of a
+  subagent launched in another session's transcript (across `/clear`) was not observed.
 - **View, not record.** `AgentView` gains `background_tasks` (a count). The Attention Class, the
   Fold, Waiting Time and the stored record are unchanged: no stored schema change.
 - **Main turn over, a background subagent running.** herdr reports `working` and Claude Code's

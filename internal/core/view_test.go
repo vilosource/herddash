@@ -29,6 +29,21 @@ func TestContextLine(t *testing.T) {
 		{"claude", "◐ Claude Code", ""},
 		{"claude", "✳fix-auth", "✳fix-auth"},
 		{"claude", "1 fix", "1 fix"},
+		// Bidi controls are dropped; other format characters, such as the
+		// zero-width joiner in an emoji sequence, are kept.
+		{"claude", "fix\u202egnp.exe", "fixgnp.exe"},
+		{"claude", "\u2066a\u2069 \u200eb\u200f \u061cc \u202a\u202b\u202c\u202dd", "a b c d"},
+		{"claude", "\U0001F468\u200d\U0001F4BB pair", "\U0001F468\u200d\U0001F4BB pair"},
+		// Only Claude Code's own status glyphs are a prefix to strip; a
+		// session name's leading "-", "#" or emoji stays.
+		{"claude", "- wip", "- wip"},
+		{"claude", "# notes", "# notes"},
+		{"claude", "🚀 launch", "🚀 launch"},
+		{"claude", "◐ fix", "fix"},
+		{"claude", "✳", ""},
+		{"claude", " ✳ ", ""},
+		{"claude", "◐", ""},
+		{"claude", "✳ ✳ x", "✳ x"},
 	}
 	for _, tt := range tests {
 		if got := ContextLine(tt.program, tt.title); got != tt.want {
@@ -264,6 +279,57 @@ func TestNewAgentView(t *testing.T) {
 	}
 }
 
+func TestUnpositionedGroups(t *testing.T) {
+	in := func(pane string, pos int, ws string) AgentView {
+		return NewAgentView(AgentViewInput{
+			Key: key(pane), AgentProgram: "claude", Profile: "cldp", Status: StatusWorking,
+			Fold:    FoldResult{Known: true, Status: StatusWorking, Class: ClassWorking, Since: 10, SinceProvenance: ProvenanceLive},
+			Context: PaneContext{WorkspaceID: ws, WorkspacePosition: pos},
+		})
+	}
+	a, a2 := in("w7:p1", 0, "w7"), in("w7:p2", 0, "w7")
+	b := in("w8:p1", 0, "w8")
+	none := in("w9:p1", 0, "")
+	positioned := in("w1:p1", 3, "w1")
+	neg := in("w6:p1", -1, "w6")
+
+	if a.SortKey.Group != a2.SortKey.Group {
+		t.Errorf("one workspace, two groups: %d and %d", a.SortKey.Group, a2.SortKey.Group)
+	}
+	if a.SortKey.Group == b.SortKey.Group {
+		t.Errorf("w7 and w8 share group %d", a.SortKey.Group)
+	}
+	if none.SortKey.Group != SortUnknown {
+		t.Errorf("no workspace id: group %d, want SortUnknown", none.SortKey.Group)
+	}
+	if positioned.SortKey.Group != 3 {
+		t.Errorf("positioned group = %d, want 3", positioned.SortKey.Group)
+	}
+	if neg.SortKey.Group != UnpositionedGroup("w6") {
+		t.Errorf("position -1: group %d, want UnpositionedGroup", neg.SortKey.Group)
+	}
+	for _, v := range []AgentView{a, b, neg} {
+		if g := v.SortKey.Group; g < 1<<52 || g >= SortUnknown {
+			t.Errorf("%s: group %d outside [2^52, 2^53-1)", v.Key.PaneID, g)
+		}
+	}
+	for _, id := range []string{"", "w1", "w7", "a much longer workspace id", "\xff"} {
+		if g := UnpositionedGroup(id); g < 1<<52 || g > SortUnknown-1 {
+			t.Errorf("UnpositionedGroup(%q) = %d, out of range", id, g)
+		}
+	}
+
+	vs := []AgentView{none, b, positioned, a, a2}
+	SortViews(vs)
+	if vs[0].Key.PaneID != "w1:p1" || vs[len(vs)-1].Key.PaneID != "w9:p1" {
+		t.Errorf("order = %v, want the positioned first and no workspace id last", panes(vs))
+	}
+	// Positioned, w7 and w8 (in hash order), then no workspace id: four headers.
+	if h := WorkspaceHeaders(vs); len(h) != 4 {
+		t.Errorf("headers = %v over %v, want four groups", h, panes(vs))
+	}
+}
+
 func TestAgentViewJSON(t *testing.T) {
 	v := NewAgentView(AgentViewInput{
 		Key: AgentKey{Host: "mac", Server: "default", Epoch: 2, PaneID: "w1:p1"}, AgentProgram: "claude",
@@ -327,6 +393,7 @@ type boardFixture struct {
 		Exact             bool         `json:"exact"`
 		Directory         string       `json:"directory"`
 		Workspace         string       `json:"workspace"`
+		WorkspaceID       string       `json:"workspace_id"`
 		WorkspacePosition int          `json:"workspace_position"`
 		Tab               string       `json:"tab"`
 		PanePosition      string       `json:"pane_position"`
@@ -376,7 +443,7 @@ func loadBoard(t *testing.T) ([]AgentView, boardFixture) {
 		views = append(views, NewAgentView(AgentViewInput{
 			Key: in.Key, AgentProgram: in.AgentProgram, Profile: in.Profile, Status: in.Status, Fold: f,
 			Context: PaneContext{ProjectDir: in.Directory, WorkspaceLabel: in.Workspace, TabLabel: in.Tab,
-				WorkspacePosition: in.WorkspacePosition, PaneTitle: in.PaneTitle, PanePosition: in.PanePosition},
+				WorkspaceID: in.WorkspaceID, WorkspacePosition: in.WorkspacePosition, PaneTitle: in.PaneTitle, PanePosition: in.PanePosition},
 			Home: fx.Home, Background: in.Background, Transcript: tr,
 		}))
 	}

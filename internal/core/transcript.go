@@ -19,13 +19,19 @@ type TranscriptLine struct {
 	StartCommand bool
 	// EndID is a task a notification on the line is about, "" when none,
 	// and EndStatus its status when it is one that closes the task
-	// (completed, failed, killed); "" leaves it open.
+	// (completed, failed, killed, stopped); "" leaves it open.
 	EndID     string
 	EndStatus string
 	// TurnStarted and TurnEnded say the main thread's turn started (a prompt,
 	// a tool result or a queued command) or ended (end_turn or stop_sequence).
 	TurnStarted bool
 	TurnEnded   bool
+	// CommandPending says the line is a local command's <command-name>
+	// record, which starts a turn only if a turn start or end comes before
+	// that command's result; CommandResult says it is a local command's
+	// result, which is no turn start (Story 5.14).
+	CommandPending bool
+	CommandResult  bool
 	// Recap is Claude Code's session recap the line carries (ADR-0010),
 	// trimmed, without its trailing "(disable recaps in /config)" and at most
 	// MaxRecapRunes long; "" when none, and always "" when recaps are off.
@@ -38,8 +44,12 @@ const MaxRecapRunes = 400
 // recapSuffix is the note Claude Code ends every recap with.
 const recapSuffix = "(disable recaps in /config)"
 
-// closingStatuses are the notification statuses that close a task.
-var closingStatuses = map[string]bool{"completed": true, "failed": true, "killed": true}
+// closingStatuses are the notification statuses that close a task. stopped is
+// what a resumed session enqueues, as it starts, for each task its transcript
+// shows started and never completed (Claude Code 2.1.292, observed
+// 2026-10-23; ADR-0009 as amended by Story 5.2): without it, a command left
+// open by a crashed session would stay open after the resume.
+var closingStatuses = map[string]bool{"completed": true, "failed": true, "killed": true, "stopped": true}
 
 // transcriptRecord is the only part of a transcript record that is decoded,
 // by fixed field names (ADR-0009, observed 2026-10-21). Everything else on
@@ -53,7 +63,21 @@ type transcriptRecord struct {
 	Content       json.RawMessage `json:"content"`
 	Attachment    json.RawMessage `json:"attachment"`
 	Subtype       string          `json:"subtype"`
+	IsMeta        bool            `json:"isMeta"`
+	// IsCompactSummary marks the summary /compact writes as a user record.
+	IsCompactSummary bool            `json:"isCompactSummary"`
+	CommandRun       json.RawMessage `json:"commandRun"`
 }
+
+// The tags a local command's records start with (Story 5.14); tagStderr is
+// the older user-record result's other form (Story 5.15).
+const (
+	tagCaveat  = "<local-command-caveat>"
+	tagCommand = "<command-name>"
+	tagStdout  = "<local-command-stdout>"
+	tagStdoutX = "</local-command-stdout>"
+	tagStderr  = "<local-command-stderr>"
+)
 
 // DecodeTranscriptLine decodes one transcript line for the markers ADR-0009
 // names, and ok is false when it holds none or does not decode:
@@ -62,22 +86,50 @@ type transcriptRecord struct {
 //     string starts that background command;
 //   - a toolUseResult with isAsync true, status "async_launched" and an
 //     agentId starts that subagent;
+//   - a toolUseResult with success exactly true and a resumedAgentId (a
+//     finished subagent resumed by SendMessage, Story 5.16) starts that
+//     subagent again; its message and pin are never looked at;
 //   - a user record whose toolUseResult has a string task_type and a task_id
 //     (TaskStop's result) ends that task as killed: a task stopped this way
 //     gets no notification (seen 2026-10-21 for every background command
 //     left open in four transcripts);
 //   - a queue-operation record, operation "enqueue", whose content is a
 //     string starting "<task-notification>" ends the task in its
-//     <task-id>, when its <status> closes it;
+//     <task-id>, when its <status> closes it: completed, failed, killed, or
+//     stopped (a resumed session's word for a task the previous process
+//     left with no completion record); any other status, or none, leaves
+//     it open;
 //   - an assistant record that is not a sidechain with message.stop_reason
 //     "end_turn" or "stop_sequence" ends the main turn (both are followed by
 //     the turn's duration record; 33 of 4,902 main-thread turn ends in the
 //     transcripts read on 2026-10-22 were stop_sequence); a user record that is not a sidechain,
 //     or an attachment of type queued_command, starts it again;
+//   - a local command (/usage, /recap, /model, ...) writes an isMeta user
+//     record whose string message.content starts "<local-command-caveat>",
+//     which is no marker; a user record, not isMeta, whose string
+//     message.content starts "<command-name>", which is CommandPending, not
+//     a turn start; and its result, a system record with subtype
+//     "local_command", whatever its content (or, from older Claude Code, a
+//     user record whose string message.content starts
+//     "<local-command-stdout>" or "<local-command-stderr>"), which is
+//     CommandResult, not a turn start. None of them is a marker on a
+//     sidechain. Apply decides whether a pending command started a turn. A
+//     user record with isCompactSummary true (the summary /compact writes
+//     before its own local-command records) is no turn start either. A
+//     skill command (a user record starting "<command-message>") starts a
+//     turn as any prompt does. So does bash mode (`!cmd`): its user records,
+//     one starting "<bash-input>" and one starting "<bash-stdout>" (with the
+//     command's "<bash-stderr>" inside it, never leading a record), are
+//     turn starts, because Claude Code sends the output to the model, which
+//     replies (Story 5.15; see
+//     docs/research/claude-code-bash-mode-2026-10-23.md);
 //   - only when recaps is true (the operator's consent, ADR-0010): a system
 //     record that is not a sidechain, with subtype "away_summary" and a
-//     string content, carries the session recap (see recapOf). With recaps
-//     false it is no marker, and its content is never looked at.
+//     string content, carries the session recap (see recapOf); so does a
+//     local_command record whose commandRun.command is "recap" and whose
+//     string content is wrapped in <local-command-stdout> tags (a manual
+//     /recap, Story 5.14). With recaps false neither carries one, and their
+//     content and commandRun are never looked at.
 //
 // Ids must be 1 to 128 letters, digits, "-" or "_"; a line with any other is
 // not a marker for that id.
@@ -89,7 +141,15 @@ func DecodeTranscriptLine(line []byte, recaps bool) (TranscriptLine, bool) {
 	}
 	switch rec.Type {
 	case "user":
-		l.TurnStarted = !rec.IsSidechain
+		switch local := localUser(rec); {
+		case rec.IsSidechain || rec.IsCompactSummary || local == tagCaveat:
+		case local == tagCommand:
+			l.CommandPending = true
+		case local == tagStdout:
+			l.CommandResult = true
+		default:
+			l.TurnStarted = true
+		}
 		l.StartID, l.StartCommand = taskStart(rec.ToolUseResult)
 		if id := taskStopped(rec.ToolUseResult); id != "" {
 			l.EndID, l.EndStatus = id, "killed"
@@ -111,8 +171,17 @@ func DecodeTranscriptLine(line []byte, recaps bool) (TranscriptLine, bool) {
 			l.EndID, l.EndStatus = taskNotification(rec.Content)
 		}
 	case "system":
-		if recaps && !rec.IsSidechain && rec.Subtype == "away_summary" {
-			l.Recap = recapOf(rec.Content)
+		switch {
+		case rec.IsSidechain:
+		case rec.Subtype == "away_summary":
+			if recaps {
+				l.Recap = recapOf(rec.Content)
+			}
+		case rec.Subtype == "local_command":
+			l.CommandResult = true
+			if recaps && commandRun(rec.CommandRun) == "recap" {
+				l.Recap = manualRecap(rec.Content)
+			}
 		}
 	}
 	return l, l != TranscriptLine{}
@@ -123,12 +192,70 @@ func DecodeTranscriptLine(line []byte, recaps bool) (TranscriptLine, bool) {
 // MaxRecapRunes whole runes; "" when the content is not a string or nothing
 // is left.
 func recapOf(raw json.RawMessage) string {
-	s := strings.TrimSpace(jsonString(raw))
+	return recapText(jsonString(raw))
+}
+
+// recapText is recapOf for a string.
+func recapText(s string) string {
+	s = strings.TrimSpace(s)
 	s = strings.TrimSpace(strings.TrimSuffix(s, recapSuffix))
 	if utf8.RuneCountInString(s) > MaxRecapRunes {
 		s = strings.TrimSpace(string([]rune(s)[:MaxRecapRunes]))
 	}
 	return s
+}
+
+// localUser is the local-command tag a user record's string
+// message.content starts with: tagCaveat (only on an isMeta record),
+// tagCommand (only on a record that is not isMeta) or tagStdout, which also
+// stands for tagStderr (either is a local result); "" when none. Nothing
+// past the tag is looked at.
+func localUser(rec transcriptRecord) string {
+	if !isObject(rec.Message) {
+		return ""
+	}
+	var m struct {
+		Content json.RawMessage `json:"content"`
+	}
+	if json.Unmarshal(rec.Message, &m) != nil {
+		return ""
+	}
+	c := jsonString(m.Content)
+	switch {
+	case rec.IsMeta && strings.HasPrefix(c, tagCaveat):
+		return tagCaveat
+	case !rec.IsMeta && strings.HasPrefix(c, tagCommand):
+		return tagCommand
+	case strings.HasPrefix(c, tagStdout), strings.HasPrefix(c, tagStderr):
+		return tagStdout
+	}
+	return ""
+}
+
+// commandRun is a local_command record's commandRun.command, "" when absent
+// or not a string; its args are never looked at.
+func commandRun(raw json.RawMessage) string {
+	if !isObject(raw) {
+		return ""
+	}
+	var r struct {
+		Command json.RawMessage `json:"command"`
+	}
+	if json.Unmarshal(raw, &r) != nil {
+		return ""
+	}
+	return jsonString(r.Command)
+}
+
+// manualRecap is a /recap result's content as shown: the text inside its
+// <local-command-stdout> wrapper, then as recapOf; "" when the content is
+// not a string so wrapped.
+func manualRecap(raw json.RawMessage) string {
+	s := strings.TrimSpace(jsonString(raw))
+	if !strings.HasPrefix(s, tagStdout) || !strings.HasSuffix(s, tagStdoutX) {
+		return ""
+	}
+	return recapText(s[len(tagStdout) : len(s)-len(tagStdoutX)])
 }
 
 // isObject reports whether raw is a JSON object.
@@ -138,7 +265,9 @@ func isObject(raw json.RawMessage) bool {
 }
 
 // taskStart reads a toolUseResult for a background command's or subagent's
-// start.
+// start: a backgroundTaskId, an async launch's agentId, or a successful
+// resume's resumedAgentId (Story 5.16), which reopens that subagent so its
+// next notification closes it again.
 func taskStart(raw json.RawMessage) (id string, command bool) {
 	if !isObject(raw) {
 		return "", false
@@ -148,6 +277,8 @@ func taskStart(raw json.RawMessage) (id string, command bool) {
 		IsAsync          bool            `json:"isAsync"`
 		Status           json.RawMessage `json:"status"`
 		AgentID          json.RawMessage `json:"agentId"`
+		Success          json.RawMessage `json:"success"`
+		ResumedAgentID   json.RawMessage `json:"resumedAgentId"`
 	}
 	if json.Unmarshal(raw, &r) != nil {
 		return "", false
@@ -156,6 +287,9 @@ func taskStart(raw json.RawMessage) (id string, command bool) {
 		return id, true
 	}
 	if id := jsonString(r.AgentID); r.IsAsync && jsonString(r.Status) == "async_launched" && taskID(id) {
+		return id, false
+	}
+	if id := jsonString(r.ResumedAgentID); string(bytes.TrimSpace(r.Success)) == "true" && taskID(id) {
 		return id, false
 	}
 	return "", false
@@ -264,6 +398,9 @@ type BackgroundTasks struct {
 	open      []openTask
 	turnEnded bool
 	recap     string
+	// pending is a local command seen and its result not yet: a turn start
+	// or end before that result confirms the command started a turn.
+	pending bool
 }
 
 type openTask struct {
@@ -275,7 +412,23 @@ type openTask struct {
 //
 // A started turn clears the recap, so a stale one never shows beside a new
 // turn; a recap line replaces it, the newest winning (ADR-0010).
+//
+// A local command's own records are no turn start (Story 5.14): its
+// <command-name> record is pending until its result (no turn started) or a
+// turn start or end, which confirms a turn started before that marker
+// applies. Any other marker (a notification, a task start without a turn
+// start, a recap, another local command) leaves it pending.
 func (b *BackgroundTasks) Apply(l TranscriptLine) {
+	if b.pending && (l.TurnStarted || l.TurnEnded) {
+		b.turnEnded = false
+		b.recap = ""
+	}
+	if l.TurnStarted || l.TurnEnded || l.CommandResult {
+		b.pending = false
+	}
+	if l.CommandPending {
+		b.pending = true
+	}
 	if l.TurnStarted {
 		b.turnEnded = false
 		b.recap = ""
@@ -332,5 +485,5 @@ func (b BackgroundTasks) Recap() string { return b.recap }
 
 // Clone is a copy of b that shares nothing with it.
 func (b BackgroundTasks) Clone() BackgroundTasks {
-	return BackgroundTasks{open: append([]openTask(nil), b.open...), turnEnded: b.turnEnded, recap: b.recap}
+	return BackgroundTasks{open: append([]openTask(nil), b.open...), turnEnded: b.turnEnded, recap: b.recap, pending: b.pending}
 }

@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -233,11 +234,87 @@ func TestLaunchdAgent(t *testing.T) {
 	}
 }
 
-func TestLaunchdAgentLints(t *testing.T) {
-	plutil, err := exec.LookPath("plutil")
-	if err != nil {
-		t.Skip("plutil not found (not macOS)")
+// requireToolsEnv names the tools a run must have: a space-separated list
+// such as "plutil systemd-analyze". CI sets it so that a test needing a
+// listed tool fails instead of skipping when the tool is missing.
+const requireToolsEnv = "HERDDASH_REQUIRE_TOOLS"
+
+// toolRequired reports whether name appears in a requireToolsEnv value.
+func toolRequired(list, name string) bool {
+	return slices.Contains(strings.Fields(list), name)
+}
+
+// requireTool returns the path of the named tool. When it is missing the test
+// skips, with why as the likely reason, unless requireToolsEnv lists it; then
+// the test fails.
+func requireTool(t *testing.T, name, why string) string {
+	t.Helper()
+	path, err := exec.LookPath(name)
+	if err == nil {
+		return path
 	}
+	if toolRequired(os.Getenv(requireToolsEnv), name) {
+		t.Fatalf("%s not found (%v), and %s=%q requires it", name, err, requireToolsEnv, os.Getenv(requireToolsEnv))
+	}
+	t.Skipf("%s not found (%s); list it in %s to make this a failure", name, why, requireToolsEnv)
+	return ""
+}
+
+func TestToolRequired(t *testing.T) {
+	for _, c := range []struct {
+		list, name string
+		want       bool
+	}{
+		{"", "plutil", false},
+		{"plutil", "plutil", true},
+		{"  plutil  ", "plutil", true},
+		{"plutil systemd-analyze", "systemd-analyze", true},
+		{"plutil\tsystemd-analyze", "plutil", true},
+		{"systemd-analyze", "plutil", false},
+		{"plutils", "plutil", false},
+		{"plutil,systemd-analyze", "plutil", false},
+		{"plutil", "", false},
+	} {
+		if got := toolRequired(c.list, c.name); got != c.want {
+			t.Errorf("toolRequired(%q, %q) = %v, want %v", c.list, c.name, got, c.want)
+		}
+	}
+}
+
+// TestRequireToolFailsWhenListed re-runs this test binary on
+// TestSystemdUnitVerifies with an empty PATH, so systemd-analyze is missing
+// even on Linux: listed in requireToolsEnv the test fails naming the
+// variable, unlisted it skips.
+func TestRequireToolFailsWhenListed(t *testing.T) {
+	var env []string
+	for _, e := range os.Environ() {
+		if !strings.HasPrefix(e, "PATH=") && !strings.HasPrefix(e, requireToolsEnv+"=") {
+			env = append(env, e)
+		}
+	}
+	env = append(env, "PATH="+t.TempDir())
+	run := func(extra ...string) (string, error) {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestSystemdUnitVerifies$", "-test.v")
+		cmd.Env = append(slices.Clone(env), extra...)
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+
+	out, err := run(requireToolsEnv + "=systemd-analyze")
+	if err == nil {
+		t.Errorf("with %s=systemd-analyze and no systemd-analyze, the run passed:\n%s", requireToolsEnv, out)
+	} else if !strings.Contains(out, requireToolsEnv) {
+		t.Errorf("the failure does not name %s:\n%s", requireToolsEnv, out)
+	}
+
+	out, err = run()
+	if err != nil || !strings.Contains(out, "--- SKIP: TestSystemdUnitVerifies") {
+		t.Errorf("without %s the run did not skip (%v):\n%s", requireToolsEnv, err, out)
+	}
+}
+
+func TestLaunchdAgentLints(t *testing.T) {
+	plutil := requireTool(t, "plutil", "not macOS")
 	data, err := os.ReadFile(plistPath)
 	if err != nil {
 		t.Fatal(err)
@@ -382,10 +459,7 @@ func TestSystemdUnit(t *testing.T) {
 }
 
 func TestSystemdUnitVerifies(t *testing.T) {
-	analyze, err := exec.LookPath("systemd-analyze")
-	if err != nil {
-		t.Skip("systemd-analyze not found (not Linux with systemd)")
-	}
+	analyze := requireTool(t, "systemd-analyze", "not Linux with systemd")
 	// verify checks that ExecStart's binary exists, so point it at a stand-in
 	// in a temporary home. Nothing is installed or started.
 	home := t.TempDir()

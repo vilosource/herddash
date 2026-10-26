@@ -117,7 +117,7 @@ func TestTranscriptPrivacy(t *testing.T) {
 	// The marker type has only these fields, of these kinds.
 	want := map[string]reflect.Kind{"StartID": reflect.String, "StartCommand": reflect.Bool,
 		"EndID": reflect.String, "EndStatus": reflect.String, "TurnStarted": reflect.Bool, "TurnEnded": reflect.Bool,
-		"Recap": reflect.String}
+		"Recap": reflect.String, "CommandPending": reflect.Bool, "CommandResult": reflect.Bool}
 	rt := reflect.TypeOf(TranscriptLine{})
 	if rt.NumField() != len(want) {
 		t.Fatalf("TranscriptLine has %d fields, want %d", rt.NumField(), len(want))
@@ -135,6 +135,10 @@ func TestTranscriptPrivacy(t *testing.T) {
 		[]byte(notify("SECRET words", "completed")),
 		[]byte(notify("ok1", "SECRET-status")),
 		[]byte(`{"type":"queue-operation","operation":"enqueue","content":"SECRET <task-notification><task-id>x</task-id>"}`),
+		[]byte(resumeShape),
+		[]byte(resumed("SECRET words")),
+		[]byte(`{"type":"user","toolUseResult":{"success":true,"message":"SECRET","resumedAgentId":"SECRET/../x","pin":{"text":"SECRET"}}}`),
+		[]byte(`{"type":"user","toolUseResult":{"success":"true","message":"SECRET","resumedAgentId":"ok2"}}`),
 	)
 	// Recaps on: the recap records' text is the only text that may leave
 	// (TestRecapPrivacy covers it); none of these lines is one.
@@ -143,6 +147,16 @@ func TestTranscriptPrivacy(t *testing.T) {
 		[]byte(`{"type":"system","subtype":"turn_duration","content":"SECRET other subtype"}`),
 		[]byte(`{"type":"system","subtype":"away_summary","content":["SECRET array"]}`),
 		[]byte(`{"type":"user","subtype":"away_summary","content":"SECRET user"}`),
+	)
+	// Local commands: their text never leaves, nor does a result that is not
+	// /recap's.
+	lines = append(lines, localFixtureLines(t)...)
+	lines = append(lines,
+		[]byte(caveat), []byte(`{"type":"user","message":{"content":"<command-name>SECRET</command-name>"}}`),
+		[]byte(`{"type":"system","subtype":"local_command","commandRun":{"command":"usage","args":"SECRET"},"content":"<local-command-stdout>SECRET</local-command-stdout>"}`),
+		[]byte(`{"type":"system","subtype":"local_command","commandRun":{"command":"recap"},"content":"SECRET unwrapped"}`),
+		[]byte(`{"type":"system","subtype":"local_command","content":"<local-command-stdout>SECRET no commandRun</local-command-stdout>"}`),
+		[]byte(`{"type":"user","message":{"content":"<local-command-stdout>SECRET old result</local-command-stdout>"}}`),
 	)
 	// The recap fixture last, so its newest recap is the state's; then
 	// non-recap system lines, which must leave it as it is.
@@ -158,7 +172,9 @@ func TestTranscriptPrivacy(t *testing.T) {
 		if !ok {
 			continue
 		}
-		if strings.Contains(m.Recap, "SECRET") || (m.Recap != "" && !strings.Contains(string(l), `"away_summary"`)) {
+		recapLine := strings.Contains(string(l), `"away_summary"`) ||
+			strings.Contains(string(l), `"local_command"`) && strings.Contains(string(l), `"commandRun":{"command":"recap"`)
+		if strings.Contains(m.Recap, "SECRET") || (m.Recap != "" && !recapLine) {
 			t.Errorf("a recap carries other text: %q", m.Recap)
 		}
 		b.Apply(m)
@@ -209,6 +225,8 @@ func TestTranscriptMatrix(t *testing.T) {
 		"bg command open, idle":            {[]string{prompt, bgStart, endTurn}, 1, true},
 		"bg command closes":                {[]string{prompt, bgStart, endTurn, notify("bx1", "completed")}, 0, true},
 		"failed and killed close too":      {[]string{bgStart, agentStart, notify("bx1", "failed"), notify("ag1", "killed")}, 0, false},
+		"stopped on resume closes":         {[]string{prompt, bgStart, endTurn, notify("bx1", "stopped")}, 0, true},
+		"stopped closes only its id":       {[]string{bgStart, agentStart, notify("bx1", "stopped")}, 1, false},
 		"main turn over, subagent running": {[]string{prompt, agentStart, endTurn}, 1, true},
 		"working with bg":                  {[]string{prompt, bgStart, toolUse}, 1, false},
 		"notification without status":      {[]string{bgStart, notify("bx1", "")}, 1, false},
@@ -238,6 +256,101 @@ func TestTranscriptMatrix(t *testing.T) {
 	for _, l := range []string{"garbage", "", `{"type":"user",`, `{"type":"summary","summary":"x"}`, toolUse} {
 		if m, ok := DecodeTranscriptLine([]byte(l), true); ok {
 			t.Errorf("%q decoded as %+v", l, m)
+		}
+	}
+}
+
+// resumeStopped is the notification a resumed session enqueues for a task
+// the previous process left with no completion record, shaped on Claude
+// Code 2.1.292 (observed 2026-10-23): <tool-use-id>, <summary> and <note>
+// around the id and status. Every text is invented and marked SECRET.
+const resumeStopped = `{"type":"queue-operation","operation":"enqueue","timestamp":"2026-10-23T09:00:01.000Z",` +
+	`"sessionId":"SECRET-session","content":"<task-notification>\n<task-id>bx1</task-id>\n` +
+	`<tool-use-id>toolu_SECRET</tool-use-id>\n<status>stopped</status>\n` +
+	`<summary>SECRET command didn't finish before the previous session ended</summary>\n` +
+	`<note>SECRET no completion record was found.</note>\n</task-notification>"}`
+
+// TestTranscriptResumeStoppedShape covers the matrix's "Observed shape" row:
+// the full 2.1.292 notification decodes to the id and stopped, nothing more,
+// and closes the task; with any status but a closing one it stays open.
+func TestTranscriptResumeStoppedShape(t *testing.T) {
+	m, ok := DecodeTranscriptLine([]byte(resumeStopped), true)
+	if want := (TranscriptLine{EndID: "bx1", EndStatus: "stopped"}); !ok || m != want {
+		t.Errorf("decoded %+v, %v; want %+v", m, ok, want)
+	}
+	if b := fold(prompt, bgStart, endTurn, resumeStopped); b.Count() != 0 || b.OpenCommand() {
+		t.Errorf("%d open after stopped", b.Count())
+	}
+	for _, s := range []string{"<status>running</status>", ""} {
+		l := strings.Replace(resumeStopped, "<status>stopped</status>", s, 1)
+		if m, _ := DecodeTranscriptLine([]byte(l), true); m.EndStatus != "" || m.EndID != "bx1" {
+			t.Errorf("status %q decoded as %+v", s, m)
+		}
+		if b := fold(bgStart, l); b.Count() != 1 {
+			t.Errorf("status %q: %d open, want 1", s, b.Count())
+		}
+	}
+}
+
+// resumeShape is the user record Claude Code writes when SendMessage resumes
+// a finished subagent, shaped on 2.1.292 (observed 2026-10-23, Story 5.16):
+// a tool_result block array in message, and a toolUseResult with exactly
+// success, message, resumedAgentId and pin. Every text is invented and
+// marked SECRET.
+const resumeShape = `{"parentUuid":"SECRET-uuid","isSidechain":false,"type":"user",` +
+	`"message":{"role":"user","content":[{"tool_use_id":"toolu_SECRET","type":"tool_result",` +
+	`"content":[{"type":"text","text":"SECRET resuming the agent in the background"}]}]},` +
+	`"toolUseResult":{"success":true,"message":"Resuming agent SECRET in the background",` +
+	`"resumedAgentId":"ag1","pin":{"id":"SECRET-pin","name":"SECRET pin","ref":"SECRET-ref"}},` +
+	`"sessionId":"SECRET-session","timestamp":"2026-10-23T09:00:00.000Z"}`
+
+// resumed is a minimal resume record for id.
+func resumed(id string) string {
+	return `{"type":"user","toolUseResult":{"success":true,"message":"Resuming agent","resumedAgentId":"` + id + `","pin":{}}}`
+}
+
+// TestTranscriptResumedSubagent covers Story 5.16's matrix: a successful
+// resume reopens the subagent it names, as a subagent, and its next closing
+// notification closes it; a failed or malformed resume opens nothing.
+func TestTranscriptResumedSubagent(t *testing.T) {
+	m, ok := DecodeTranscriptLine([]byte(resumeShape), true)
+	if want := (TranscriptLine{StartID: "ag1", TurnStarted: true}); !ok || m != want {
+		t.Errorf("decoded %+v, %v; want %+v", m, ok, want)
+	}
+	long := strings.Repeat("a", 129)
+	for name, tc := range map[string]struct {
+		lines     []string
+		count     int
+		turnEnded bool
+	}{
+		"resume after completion":        {[]string{prompt, agentStart, notify("ag1", "completed"), resumeShape}, 1, false},
+		"resume closes: completed":       {[]string{resumeShape, notify("ag1", "completed")}, 0, false},
+		"resume closes: failed":          {[]string{resumeShape, notify("ag1", "failed")}, 0, false},
+		"resume closes: killed":          {[]string{resumeShape, notify("ag1", "killed")}, 0, false},
+		"resume closes: stopped":         {[]string{resumeShape, notify("ag1", "stopped")}, 0, false},
+		"resume, notification no status": {[]string{resumeShape, notify("ag1", "")}, 1, false},
+		"success false":                  {[]string{`{"type":"user","toolUseResult":{"success":false,"resumedAgentId":"ag1"}}`}, 0, false},
+		"success the string true":        {[]string{`{"type":"user","toolUseResult":{"success":"true","resumedAgentId":"ag1"}}`}, 0, false},
+		"success absent":                 {[]string{`{"type":"user","toolUseResult":{"resumedAgentId":"ag1"}}`}, 0, false},
+		"no id":                          {[]string{`{"type":"user","toolUseResult":{"success":true,"message":"x"}}`}, 0, false},
+		"empty id":                       {[]string{resumed("")}, 0, false},
+		"id not a string":                {[]string{`{"type":"user","toolUseResult":{"success":true,"resumedAgentId":7}}`}, 0, false},
+		"id with a slash":                {[]string{resumed("a/b")}, 0, false},
+		"id with a space":                {[]string{resumed("a b")}, 0, false},
+		"id too long":                    {[]string{resumed(long)}, 0, false},
+		"id of 128 opens":                {[]string{resumed(long[:128])}, 1, false},
+		"resume of an open id":           {[]string{agentStart, resumed("ag1")}, 1, false},
+		// The operator's report: one subagent still running, two finished
+		// ones resumed: three open, not one.
+		"one running, two resumed": {[]string{prompt, agentStart, `{"type":"user","toolUseResult":{"isAsync":true,"status":"async_launched","agentId":"ag2"}}`,
+			`{"type":"user","toolUseResult":{"isAsync":true,"status":"async_launched","agentId":"ag3"}}`,
+			notify("ag2", "completed"), notify("ag3", "completed"), resumed("ag2"), resumed("ag3"), endTurn}, 3, true},
+		"main turn over":       {[]string{prompt, resumeShape, endTurn}, 1, true},
+		"resume on a non-user": {[]string{`{"type":"assistant","toolUseResult":{"success":true,"resumedAgentId":"ag1"}}`}, 0, false},
+	} {
+		b := fold(tc.lines...)
+		if b.Count() != tc.count || b.TurnEnded() != tc.turnEnded || b.OpenCommand() {
+			t.Errorf("%s: %d open, turn ended %v, command %v; want %d, %v", name, b.Count(), b.TurnEnded(), b.OpenCommand(), tc.count, tc.turnEnded)
 		}
 	}
 }
@@ -392,7 +505,11 @@ func TestRecapClone(t *testing.T) {
 // marker at all with them off.
 func TestRecapOffChangesNothingElse(t *testing.T) {
 	lines := append(fixtureLines(t), recapFixtureLines(t)...)
-	for _, l := range []string{prompt, endTurn, sideEnd, toolUse, queuedCmd, bgStart, agentStart, notify("bx1", "completed"),
+	lines = append(lines, localFixtureLines(t)...)
+	for _, l := range []string{caveat, cmdName, oldResult, oldStderr, compactSummary, skillCmd, bashInput, bashStdout,
+		localResult("usage", "<local-command-stderr>E</local-command-stderr>"),
+		localResult("usage", "<local-command-stdout>O</local-command-stdout>"),
+		localResult("recap", "<local-command-stdout>R.</local-command-stdout>"), localResult("recap", "R."), prompt, endTurn, sideEnd, toolUse, queuedCmd, bgStart, agentStart, resumeShape, notify("bx1", "completed"),
 		notify("bx1", ""), taskStop("bx1"), recap("X. (disable recaps in /config)"), recap(""),
 		`{"type":"system","subtype":"away_summary","isSidechain":true,"content":"S."}`,
 		`{"type":"system","subtype":"turn_duration","content":"S."}`, "garbage", ""} {

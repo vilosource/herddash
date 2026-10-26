@@ -2,7 +2,9 @@ package engine
 
 import "time"
 
-// The engine's tunables, in one place. At most one snapshot read is in
+// The engine's tunables, in one place; docs/config.example.toml lists them
+// for operators under "Fixed timings", so change it with them. At most one
+// snapshot read is in
 // flight, any number of requests that arrive during it coalesce into one more
 // read after it, and consecutive reads start at least
 // defaultSnapshotMinInterval apart.
@@ -14,6 +16,10 @@ const (
 	// defaultSnapshotRetryDelay is how long the engine waits before reading
 	// again after a snapshot read failed, once started.
 	defaultSnapshotRetryDelay = 2 * time.Second
+	// defaultSnapshotFailuresBeforeLost is how many snapshot reads in a row
+	// must fail, once started, before the engine treats herdr as lost and
+	// reconnects. Fewer are retried as blips.
+	defaultSnapshotFailuresBeforeLost = 3
 	// defaultReconnectInitialDelay is how long the engine waits after losing
 	// herdr before its first attempt to start again, and after its first failed
 	// attempt. Each further failure doubles the wait.
@@ -43,6 +49,22 @@ const (
 	// Agent's first report waits for it, and running out gives
 	// core.ProfileUnresolved.
 	defaultProfileTimeout = 2 * time.Second
+	// defaultProfileRetries is how many times a Profile lookup that failed
+	// transiently (it ran out of profileTimeout, or herdr's foreground process
+	// call failed) is tried again before the engine gives up until the next
+	// trigger. A rule outcome or an unreadable environment is never retried.
+	defaultProfileRetries = 3
+	// defaultProfileRetryDelay is the wait before the first retry of a
+	// transiently failed Profile lookup; each further retry doubles it.
+	defaultProfileRetryDelay = 2 * time.Second
+	// defaultProfileHoldFactor sets how long a reported Agent's rows may be
+	// held while its Profile is resolved again: profileHoldFactor times
+	// profileTimeout from the hold's start, never moved by a later trigger.
+	// One trigger superseding a lookup just before it ends still settles
+	// inside it; only an unending stream of triggers or a lookup that cannot
+	// run reaches it, and the rows are then released with the best Profile
+	// known.
+	defaultProfileHoldFactor = 2
 	// defaultBackgroundCheckDelay is how long after a background-capable
 	// Agent's Status changes to done or idle, or its process becomes known,
 	// the engine first reads that process's children for background work: a
@@ -91,6 +113,9 @@ var (
 	reconcileInterval      = defaultReconcileInterval
 	refusedRecheckInterval = defaultRefusedRecheckInterval
 	profileTimeout         = defaultProfileTimeout
+	profileRetries         = defaultProfileRetries
+	profileRetryDelay      = defaultProfileRetryDelay
+	profileHoldFactor      = defaultProfileHoldFactor
 	retentionSweepInterval = defaultRetentionSweepInterval
 	backgroundCheckDelay   = defaultBackgroundCheckDelay
 	backgroundInterval     = defaultBackgroundInterval
@@ -98,6 +123,10 @@ var (
 	sessionInterval        = defaultSessionInterval
 	sessionTimeout         = defaultSessionTimeout
 )
+
+// snapshotFailuresBeforeLost is defaultSnapshotFailuresBeforeLost; tests may
+// lower it.
+var snapshotFailuresBeforeLost = defaultSnapshotFailuresBeforeLost
 
 // reconnectDelay is the wait after the nth consecutive failed attempt to start
 // (n >= 1): the initial delay, doubled for each further failure, never more
@@ -108,4 +137,20 @@ func reconnectDelay(n int) time.Duration {
 		d *= 2
 	}
 	return min(d, reconnectMaxDelay)
+}
+
+// profileRetryWait is the wait before the nth retry of a Profile lookup
+// (n >= 1): profileRetryDelay, doubled for each retry before it.
+func profileRetryWait(n int) time.Duration {
+	d := profileRetryDelay
+	for i := 1; i < n; i++ {
+		d *= 2
+	}
+	return d
+}
+
+// profileHoldLimit is the longest a hold of a reported Agent's rows lasts:
+// profileHoldFactor times profileTimeout.
+func profileHoldLimit() time.Duration {
+	return time.Duration(profileHoldFactor) * profileTimeout
 }

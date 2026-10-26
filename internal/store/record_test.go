@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"maps"
 	"net/url"
+	"slices"
 	"testing"
 
 	"github.com/vilosource/herddash/internal/core"
@@ -185,8 +186,6 @@ func TestAppendBackfillRefusesOtherRows(t *testing.T) {
 			Provenance: core.ProvenanceLive}),
 		"previous": mustTransition(t, core.TransitionInput{Key: key, Previous: status(core.StatusWorking), New: core.StatusDone,
 			ObservedAt: 1000, Provenance: core.ProvenanceBackfill, ImportKey: "p"}),
-		"order": mustTransition(t, core.TransitionInput{Key: key, HerdrOrder: order(1), New: core.StatusDone,
-			ObservedAt: 1000, Provenance: core.ProvenanceBackfill, ImportKey: "o"}),
 		"version": mustTransition(t, core.TransitionInput{Key: key, HerdrVersion: "0.9.2", New: core.StatusDone,
 			ObservedAt: 1000, Provenance: core.ProvenanceBackfill, ImportKey: "v"}),
 	} {
@@ -329,7 +328,7 @@ func TestServerState(t *testing.T) {
 	if _, ok, err := s.LoadServerState("mac", "default"); err != nil || ok {
 		t.Fatalf("fresh database: found %v, err %v; want nothing", ok, err)
 	}
-	st := ServerState{Epoch: 3, Terminals: map[string]string{"w1:p1": "t1", "w1:p3": "t3"}}
+	st := ServerState{Epoch: 3, Terminals: map[string]string{"w1:p1": "t1", "w1:p3": "t3"}, Released: []string{"w1:p3"}}
 	if err := s.SaveServerState("mac", "default", st); err != nil {
 		t.Fatal(err)
 	}
@@ -337,9 +336,17 @@ func TestServerState(t *testing.T) {
 	if err := s.SaveServerState("mac", "work", ServerState{Epoch: 1}); err != nil {
 		t.Fatal(err)
 	}
-	// Upserted: the latest save wins.
-	st = ServerState{Epoch: 4, Terminals: map[string]string{"w1:p1": "t9"}}
+	// Upserted: the latest save wins, released panes included, which load
+	// sorted.
+	st = ServerState{Epoch: 4, Terminals: map[string]string{"w1:p1": "t9"}, Released: []string{"w1:p2", "w1:p1"}}
 	if err := s.SaveServerState("mac", "default", st); err != nil {
+		t.Fatal(err)
+	}
+	// Saving no released panes clears them.
+	if err := s.SaveServerState("mac", "cleared", ServerState{Epoch: 2, Released: []string{"w1:p1"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveServerState("mac", "cleared", ServerState{Epoch: 2}); err != nil {
 		t.Fatal(err)
 	}
 	s.Close()
@@ -350,19 +357,24 @@ func TestServerState(t *testing.T) {
 	}
 	defer s.Close()
 	got, ok, err := s.LoadServerState("mac", "default")
-	if err != nil || !ok || got.Epoch != 4 || !maps.Equal(got.Terminals, st.Terminals) {
-		t.Errorf("loaded %+v, %v, %v; want %+v", got, ok, err, st)
+	if err != nil || !ok || got.Epoch != 4 || !maps.Equal(got.Terminals, st.Terminals) ||
+		!slices.Equal(got.Released, []string{"w1:p1", "w1:p2"}) {
+		t.Errorf("loaded %+v, %v, %v; want %+v, released sorted", got, ok, err, st)
 	}
 	got, ok, err = s.LoadServerState("mac", "work")
-	if err != nil || !ok || got.Epoch != 1 || got.Terminals == nil || len(got.Terminals) != 0 {
-		t.Errorf("loaded %+v, %v, %v; want epoch 1 with no terminals", got, ok, err)
+	if err != nil || !ok || got.Epoch != 1 || got.Terminals == nil || len(got.Terminals) != 0 || got.Released != nil {
+		t.Errorf("loaded %+v, %v, %v; want epoch 1 with no terminals and none released", got, ok, err)
+	}
+	got, ok, err = s.LoadServerState("mac", "cleared")
+	if err != nil || !ok || got.Released != nil {
+		t.Errorf("loaded %+v, %v, %v; want none released", got, ok, err)
 	}
 	var n int
 	if err := s.db.QueryRow("SELECT count(*) FROM server_state").Scan(&n); err != nil {
 		t.Fatal(err)
 	}
-	if n != 2 {
-		t.Errorf("%d server_state rows, want 2", n)
+	if n != 3 {
+		t.Errorf("%d server_state rows, want 3", n)
 	}
 	if err := s.SaveServerState("mac", "default", ServerState{Epoch: 0}); err == nil {
 		t.Error("epoch 0 saved as server state")
@@ -484,8 +496,8 @@ func TestUpgradeFromSchema2(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	if v := userVersion(t, s.db); v != schemaVersion || schemaVersion != 3 {
-		t.Errorf("user_version %d, want 3", v)
+	if v := userVersion(t, s.db); v != schemaVersion {
+		t.Errorf("user_version %d, want %d", v, schemaVersion)
 	}
 	var rootAfter, nulls int
 	if err := s.db.QueryRow("SELECT rootpage FROM sqlite_schema WHERE name = 'transitions'").Scan(&rootAfter); err != nil {
@@ -505,5 +517,54 @@ func TestUpgradeFromSchema2(t *testing.T) {
 		New: core.StatusBlocked, ObservedAt: 30, Provenance: core.ProvenanceLive, ObservedBy: core.ObservedByClaudeSession})
 	if err := s.Append(tr); err != nil {
 		t.Errorf("append after the upgrade: %v", err)
+	}
+}
+
+// TestUpgradeFromSchema3: a server_state row 0.5.0 saved at schema version 3
+// loads after migration 0004 with its epoch and terminals and no released
+// panes, and a save then stores some.
+func TestUpgradeFromSchema3(t *testing.T) {
+	path := dbPath(t)
+	ms, err := migrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := sql.Open("sqlite", (&url.URL{Scheme: "file", Path: path}).String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw.SetMaxOpenConns(1)
+	old := &Store{db: raw}
+	if err := old.prepare(context.Background(), path, ms[:3]); err != nil {
+		t.Fatal(err)
+	}
+	if v := userVersion(t, raw); v != 3 {
+		t.Fatalf("old database at %d, want 3", v)
+	}
+	if _, err := raw.Exec(`INSERT INTO server_state (host, server, epoch, terminals)
+		VALUES ('mac', 'default', 2, '{"w1:p1":"t1"}')`); err != nil {
+		t.Fatal(err)
+	}
+	raw.Close()
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if v := userVersion(t, s.db); v != schemaVersion {
+		t.Errorf("user_version %d, want %d", v, schemaVersion)
+	}
+	got, ok, err := s.LoadServerState("mac", "default")
+	if err != nil || !ok || got.Epoch != 2 || !maps.Equal(got.Terminals, map[string]string{"w1:p1": "t1"}) || got.Released != nil {
+		t.Fatalf("loaded %+v, %v, %v; want epoch 2, w1:p1 on t1, none released", got, ok, err)
+	}
+	got.Released = []string{"w1:p1"}
+	if err := s.SaveServerState("mac", "default", got); err != nil {
+		t.Fatal(err)
+	}
+	got, _, err = s.LoadServerState("mac", "default")
+	if err != nil || !slices.Equal(got.Released, []string{"w1:p1"}) {
+		t.Errorf("loaded %+v, %v; want w1:p1 released", got, err)
 	}
 }

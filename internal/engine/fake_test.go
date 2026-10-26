@@ -96,6 +96,9 @@ func (s *fakeSub[T]) event(ev T) { s.in <- herdr.Delivery[T]{Event: ev} }
 
 func (s *fakeSub[T]) health(h *herdr.Health) { s.in <- herdr.Delivery[T]{Health: h} }
 
+// unexpected delivers a line flagged unexpected, which is not final.
+func (s *fakeSub[T]) unexpected(err error) { s.in <- herdr.Delivery[T]{Unexpected: err} }
+
 // fakeClient is a scripted herdr. It records every call in order. Snapshot
 // returns the current snapshot, or, while gated, blocks until the test
 // releases it.
@@ -201,6 +204,8 @@ type fakeEnviron struct {
 	errs map[int]error
 	// block, while set, holds every read until it closes.
 	block chan struct{}
+	// started counts the reads begun; running, those not yet returned.
+	started, running int
 }
 
 func newFakeEnviron(t *testing.T) *fakeEnviron {
@@ -212,7 +217,14 @@ func newFakeEnviron(t *testing.T) *fakeEnviron {
 func (f *fakeEnviron) lookup(pid int, name string) (string, bool, error) {
 	f.mu.Lock()
 	block := f.block
+	f.started++
+	f.running++
 	f.mu.Unlock()
+	defer func() {
+		f.mu.Lock()
+		f.running--
+		f.mu.Unlock()
+	}()
 	if block != nil {
 		<-block
 	}
@@ -223,6 +235,13 @@ func (f *fakeEnviron) lookup(pid int, name string) (string, bool, error) {
 	}
 	v, ok := f.vars[pid][name]
 	return v, ok, nil
+}
+
+// reads says how many reads began and how many have not returned.
+func (f *fakeEnviron) reads() (started, running int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.started, f.running
 }
 
 // set sets name in pid's environment; unset removes it.
@@ -870,6 +889,7 @@ func TestMain(m *testing.M) {
 	resyncMinInterval = 10 * time.Millisecond
 	refusedRecheckInterval = 10 * time.Millisecond
 	profileTimeout = 200 * time.Millisecond
+	profileRetryDelay = 10 * time.Millisecond
 	os.Exit(m.Run())
 }
 
@@ -966,8 +986,11 @@ type sweepCall struct {
 
 // Sweep notes the call and applies Retention to the rows and markers in
 // memory, as the store does: rows observed before cutoff go, except, for a
-// present key, those at or after its Since (all of them for Since 0) and its
-// latest working row; markers go by age. sweepErr fails it, deleting nothing.
+// present key, those at or after its Since (all of them for Since 0) and the
+// current Agent's latest working row: the highest append index among working
+// rows at or after the key's last row with no previous Status in History order
+// (observed time, then append order; AD-3). Markers go by age. sweepErr fails
+// it, deleting nothing.
 func (f *fakeStore) Sweep(ctx context.Context, cutoff int64, present []store.Present) (store.SweepResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -981,18 +1004,35 @@ func (f *fakeStore) Sweep(ctx context.Context, cutoff int64, present []store.Pre
 	for _, p := range present {
 		since[p.Key] = p.Since
 	}
+	// after reports whether row i comes after row j in History order.
+	after := func(i, j int) bool {
+		a, b := f.rows[i].ObservedAt(), f.rows[j].ObservedAt()
+		return a > b || a == b && i > j
+	}
+	boundary := map[core.AgentKey]int{}
+	for i, t := range f.rows {
+		if _, ok := t.Previous(); !ok {
+			if j, seen := boundary[t.Key()]; !seen || after(i, j) {
+				boundary[t.Key()] = i
+			}
+		}
+	}
 	latestWorking := map[core.AgentKey]int{}
 	for i, t := range f.rows {
-		if t.New() == core.StatusWorking {
-			latestWorking[t.Key()] = i
+		if t.New() != core.StatusWorking {
+			continue
 		}
+		if j, ok := boundary[t.Key()]; ok && after(j, i) {
+			continue // an earlier Agent's
+		}
+		latestWorking[t.Key()] = i
 	}
 	var r store.SweepResult
 	var kept []core.Transition
 	for i, t := range f.rows {
 		s, ok := since[t.Key()]
 		keep := t.ObservedAt() >= cutoff ||
-			ok && (s == 0 || t.ObservedAt() >= s || latestWorking[t.Key()] == i && t.New() == core.StatusWorking)
+			ok && (s == 0 || t.ObservedAt() >= s || keptWorking(latestWorking, t.Key(), i))
 		if keep {
 			kept = append(kept, t)
 		} else {
@@ -1012,6 +1052,12 @@ func (f *fakeStore) Sweep(ctx context.Context, cutoff int64, present []store.Pre
 	return r, nil
 }
 
+// keptWorking reports whether row i is key's latest working row in latest.
+func keptWorking(latest map[core.AgentKey]int, key core.AgentKey, i int) bool {
+	j, ok := latest[key]
+	return ok && j == i
+}
+
 func (f *fakeStore) sweepList() []sweepCall {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -1026,6 +1072,7 @@ func (f *fakeStore) LoadServerState(host, server string) (store.ServerState, boo
 	}
 	st, ok := f.state[host+"/"+server]
 	st.Terminals = maps.Clone(st.Terminals)
+	st.Released = slices.Clone(st.Released)
 	return st, ok, nil
 }
 
@@ -1043,6 +1090,7 @@ func (f *fakeStore) SaveServerState(host, server string, st store.ServerState) e
 	f.saves++
 	f.writes = append(f.writes, fmt.Sprintf("save %d", st.Epoch))
 	st.Terminals = maps.Clone(st.Terminals)
+	st.Released = slices.Clone(st.Released)
 	f.state[host+"/"+server] = st
 	return nil
 }

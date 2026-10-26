@@ -125,7 +125,15 @@ FR-17: Epic 3 - loopback listener and Host check; Epic 1 - owner-only data direc
 
 ## Epic List
 
-### Epic 1: See every agent's status, live, from the terminal
+#### Epic 5: After 0.5.0: closing what dogfooding and reviews left open
+
+The deferred-work list and the PRD's open question on acknowledgement are closed. Background
+tracking stays correct across resumed and cleared sessions, CI checks what only a developer's Mac
+or a hand-run browser checked before, and the documents agents read stop contradicting the code.
+Planned on 2026-10-23 with the operator's decisions taken up front (vfkb c56d5199f84c, 1e89662f83af).
+**FRs covered:** none new; hardens ADR-0009, FR-10, FR-1/2 (Board drawing) and PRD §8 Q1
+
+## Epic 1: See every agent's status, live, from the terminal
 
 The operator runs `herddash` and watches every Agent's Status changes stream by as they happen,
 each labelled with its Profile, whether or not a terminal client is attached. The project
@@ -207,7 +215,7 @@ So that it runs on my machine with nothing but a Profile Map configured (FR-15, 
 **Given** no socket path configured
 **When** herddash resolves the socket
 **Then** it follows herdr's order: `--session`, `HERDR_SOCKET_PATH`, `HERDR_SESSION`, then `~/.config/herdr/herdr.sock`
-**And** it derives Server as `default` for the default socket and `<name>` for `sessions/<name>/herdr.sock`, and Host as the configured name, else the OS hostname
+**And** it derives Server as `default` for the default socket and `<name>` for `sessions/<name>/herdr.sock`, and Host as the configured name, else the short hostname (the OS hostname up to its first dot; reworded 2026-10-23, Story 5.8, to match the code)
 
 **Given** herddash starts for the first time
 **When** it creates the data directory
@@ -811,3 +819,331 @@ So that the second and third machines install herddash without building it (NFR8
 **Given** Epics 1 to 3 are done and herddash has run on the operator's machine for at least a day
 **When** the held release-please pull request is reviewed
 **Then** its proposed version is checked to be 0.x before it is merged, and the operator is asked before merging
+
+## Epic 5: After 0.5.0: closing what dogfooding and reviews left open
+
+Every item comes from `docs/implementation/deferred-work.md` (audited 2026-10-23: 9 of its 24
+entries were already resolved), from the operator's planning answers, or from PRD §8. The operator
+decided these in advance, so no story asks them again:
+
+- Stories are built and installed locally as `-dev`. When the epic is done the operator is asked
+  once, and on their OK everything ships as one pull request and one release.
+- A pane herdr moves stays a removal plus a new Agent. AD-3 is unchanged and gets no ADR; the
+  behaviour is documented.
+- ADR-0011 (Story 5.5) is accepted in advance, provided it only tightens the import rules.
+- PRD §8 Q1 is decided by the record, not by the operator, unless the record shows a problem.
+- Background-task experiments may run throwaway Claude Code sessions under `cldp`, outside herdr,
+  in a scratch directory.
+
+### Story 5.1: Retrospectives for Epics 1 to 4
+
+As the builder,
+I want each finished epic reviewed against the evidence it left behind,
+So that lessons and any missed work reach this epic before it ships.
+
+**Acceptance Criteria:**
+
+**Given** Epics 1 to 4 are done
+**When** `/bmad-retrospective` runs headless for each
+**Then** each writes its retrospective under `docs/implementation/` with sourced findings and action items
+**And** any action item that is code or documentation work is added to this epic as a story, or to `deferred-work.md` with a reason
+**And** any action item that needs an operator decision not already taken is collected for one question at the end of the epic
+
+### Story 5.2: A resumed session does not keep finished background tasks
+
+As the operator,
+I want a Box to leave BACKGROUND when its background work is really over, even after a session was resumed,
+So that a Box never stays BACKGROUND because of a task that ended in an earlier process.
+
+**Acceptance Criteria:**
+
+**Given** a throwaway Claude Code session under `cldp`, outside herdr, exits with a background command still running, and is then resumed
+**When** the new transcript is read
+**Then** the experiment's finding (whether earlier task starts are copied into the new transcript) is recorded in `docs/research/` with the Claude Code version and date
+**And** if starts are copied, the engine drops an open command when the process check has found no tool shell for a bounded time, covered by a test
+**And** if they are not, the deferred entry is closed with the evidence and no code changes
+
+### Story 5.3: `/clear` drops the previous session's background tasks
+
+As the operator,
+I want a cleared session's Box to show only the new session's work,
+So that tasks from before `/clear` never linger on the Board.
+
+**Acceptance Criteria:**
+
+**Given** a throwaway Claude Code session under `cldp` with a background task open
+**When** `/clear` is run
+**Then** whether `sessions/<pid>.json` changes `sessionId` is recorded in `docs/research/` with the version and date
+**And** when the session id changes, the engine resets the transcript tail and open tasks for that Agent, covered by a test
+**And** if the id does not change, the story finds and documents another signal, or records that none exists and keeps the deferred entry with that evidence
+
+### Story 5.4: Retry a Profile lookup that failed transiently
+
+As the operator,
+I want a Profile that failed to resolve because of a timeout or a herdr call error to be tried again,
+So that an Agent does not stay `unresolved` until its next agent detection.
+
+**Acceptance Criteria:**
+
+**Given** Profile resolution fails with a timeout or call error (not a rule outcome such as absent or unmatched)
+**When** the engine handles the failure
+**Then** it retries with a bounded number of attempts and a backoff from `tunables.go`, never on the engine goroutine's critical path
+**And** a rule outcome (`unresolved` from an unmatched variable, the absent case) is never retried
+**And** `TestProfileFailures` and a new test prove both
+**And** when an Agent's Agent Program changes, its Profile is resolved again before the next row is written, so no row pairs the new program with the old Profile (Epic 1 retro #1), and `agent_detected` for a new pane records its program (#4, test first)
+**And** a reconnect that keeps the epoch re-resolves Profiles, or a test documents why it need not (#5), and every Profile Map value is cleaned before the duplicate check (#6)
+
+### Story 5.5: Tighter import rules and Transition invariants (ADR-0011)
+
+As the builder,
+I want the architecture test to keep herdr's wire types and dependencies where the spine intends,
+So that drift is caught by CI rather than by review.
+
+**Acceptance Criteria:**
+
+**Given** ADR-0011, which only tightens the import rules
+**When** `arch_test.go` runs
+**Then** it fails on any import of `internal/herdr/gen` or `genwire` from outside `internal/herdr`, and on any non-standard import in `internal/herdr` and its gen packages
+**And** `core.NewTransition` rejects a `HerdrOrder` on a live or backfilled Transition with a sentinel error, covered by a test
+
+### Story 5.6: CI runs the Board's browser check
+
+As the builder,
+I want CI to run `internal/httpapi/web/check/board-browser.mjs` against headless Chrome,
+So that the Board's drawing (strips, dimming, recap rows, live updates, reconnect) cannot break with CI green.
+
+**Acceptance Criteria:**
+
+**Given** a pull request
+**When** CI runs on ubuntu-latest
+**Then** a job runs the browser check against the runner's Chrome, with no npm packages
+**And** removing the `.board--recaps` rule makes that job fail
+**And** CLAUDE.md no longer calls the check hand-run
+
+### Story 5.7: CI tests on macOS
+
+As the builder,
+I want the test suite to run on a macOS runner too,
+So that procenv's darwin reader and the launchd plist lint are exercised automatically.
+
+**Acceptance Criteria:**
+
+**Given** a pull request
+**When** CI runs
+**Then** a `macos-latest` job runs `go test ./...` and `TestLaunchdAgentLints` does not skip there
+**And** the existing ubuntu jobs are unchanged
+**And** CI vets, tests and runs `scripts/release-build.sh` under the release toolchain (Go 1.27.2) as well as go.mod's minimum (Epic 4 retro #1)
+**And** `TestReleaseBuild` asserts each binary carries the commit and a clean-tree build setting (#2)
+**And** on ubuntu, `TestSystemdUnitVerifies` fails rather than skips when `systemd-analyze` is missing (#3)
+
+### Story 5.8: Documents agents read match the code
+
+As the builder,
+I want CLAUDE.md, the spine and the configuration docs to state what the code does,
+So that a fresh session is not misled.
+
+**Acceptance Criteria:**
+
+**Given** the open documentation items in `deferred-work.md`
+**When** this story is done
+**Then** CLAUDE.md says what `go run` and a plain `go build` print for `version`, marks the Story 1.3 checkpoint closed without "live 0.8.2", names `golang.org/x/sys` and the exact `go` directive, and describes Epic 5's additions
+**And** the engine tunables are documented beside the configuration, and the spine's Deferred list no longer names them
+**And** the spine's AD-3 notes that a moved pane is a removal plus a new Agent, and `TestPaneMoved`'s comment agrees
+**And** every closed entry in `deferred-work.md` is marked resolved with where
+**And** the retrospectives' documentation items are applied: the spine's AD-3 says the epoch and terminal map are persisted (`server_state`) as engine state outside the append-only record (and ADR-0005 agrees), the Deferred list drops the milestone-2 column seed, "OS hostname" becomes the short hostname, the PRD glossary and spine describe the v4 layout instead of a flat Finished top zone, the spine's JSON omission rule matches the empty strings the API sends and names the packages owning wire shapes, and `docs/install.md`'s shell blocks stop on a failed checksum, an empty database path and wait for launchd to stop
+**And** the retrospectives' low-severity items are added to `deferred-work.md` with their reasons, and the process lessons (copy a deferral into its target story's criteria; give every spine Open item an owner; run new concurrency tests with `-race -count=50`; test record-derived state across a Daemon restart; force rollback tests to fail mid-transaction) are recorded where agents read them
+
+### Story 5.9: Decide whether acknowledgement is needed (PRD §8 Q1)
+
+As the operator,
+I want the acknowledgement question settled by what the record shows,
+So that the Board gets an acknowledgement feature only if it needs one.
+
+**Acceptance Criteria:**
+
+**Given** the date is 2026-11-03 or later
+**When** the record is queried for Agents that stayed Finished after the operator viewed the pane (a `done` never followed by `idle` while the operator was active, or `idle` and `done` disagreeing)
+**Then** if there are none, PRD §8 Q1 is closed as "not needed" with the query and its result
+**And** if there are some, the evidence is prepared for the operator and the story stops for their decision
+**And** before that date the story is skipped, not failed
+
+### Story 5.10: A new Agent in a reused pane starts fresh
+
+As the operator,
+I want a Claude session started again in the same pane to start with its own Waiting Time,
+So that it never shows as Finished with the previous session's wait after a Daemon restart.
+
+Source: Epic 2 retrospective F-1 and Epic 1 retrospective #19. Decided by the orchestrator under the
+operator's delegation (no schema change, no ADR): the record's key stays host, server, epoch and
+pane id; the Waiting Time fold starts over at an Agent's first row (a row with no previous Status)
+and when the saved `terminal_id` for the pane changes; AD-3 documents that one AgentKey can hold
+successive Agents separated by such a row.
+
+**Acceptance Criteria:**
+
+**Given** an Agent is quit and a new one starts in the same pane, and the Daemon then restarts keeping the epoch
+**When** the Daemon rebuilds Waiting Times from the record
+**Then** the new Agent's Attention Class and Waiting Time come only from rows since its first row
+**And** the same holds when a pane id comes back on a new terminal while the Daemon was down
+**And** restart and Retention-sweep tests cover both, with the test fake matching the store's behaviour
+**And** history for the Agent includes the Transition that began its current class (Epic 3 retro)
+
+### Story 5.11: The Board notices a hung Daemon
+
+As the operator,
+I want the Board to dim and say so when the Daemon stops sending, even if the connection stays open,
+So that I never act on stale Boxes that look live.
+
+**Acceptance Criteria:**
+
+**Given** the Daemon's event stream stays open but sends nothing, not even its keepalive, for longer than the keepalive interval allows
+**When** the Board checks the stream
+**Then** it treats the Daemon as lost (strip and dimming as for a dropped stream) and reconnects
+**And** the keepalive is something the page can observe, a skipped sequence number or a rejected `state` event triggers a fresh `/api/state` load, covered by `node --test`
+**And** the version strip says the version could not be read, rather than "below the supported minimum", when herdr's version is unknown
+**And** a Go test drives the SSE handler from the real engine and replays its publications through `applyEvent`, asserting the Board model equals the published view
+
+### Story 5.12: The engine treats repeated failures as a lost connection
+
+As the operator,
+I want the connection strip to say so when the Daemon can no longer get snapshots from herdr,
+So that a herdr that answers but cannot snapshot does not leave the Board looking current.
+
+**Acceptance Criteria:**
+
+**Given** snapshots keep failing after startup
+**When** the failures pass a bound set in `tunables.go`
+**Then** ConnectionTruth reports the connection lost and the Board shows it, and recovery clears it
+**And** a well-formed but unexpected lifecycle event leads to a resnapshot, not a full reconnect, covered by a test
+
+### Story 5.13: Board text and grouping are exact
+
+As the operator,
+I want each Box's text and workspace group to show exactly what herdr and Claude Code report,
+So that names are not mangled and groups are not merged.
+
+**Acceptance Criteria:**
+
+**Given** a Context Line or session name containing bidi control characters, or starting with `-`, `#` or an emoji
+**When** it is shown on the Board
+**Then** bidi controls are neutralised and the text is isolated, and only Claude Code's own glyph prefix is stripped
+**And** workspaces with no known position each get their own group with their own name, ordered after positioned ones
+
+
+### Story 5.14: A manual `/recap` reaches the Board, and local commands are not turns
+
+As the operator,
+I want the recap I ask for with `/recap` to show on the Box, and commands such as `/usage` to leave the Box alone,
+So that the Board shows the latest recap however it was made.
+
+Source: operator report, 2026-10-23. Running `/recap` in a pane did not update its Box. Evidence
+from this machine's transcripts (Claude Code 2.1.292): a manual `/recap` writes a `user` record whose
+content starts `<command-name>/recap</command-name>` (preceded by an `isMeta` user record holding
+`<local-command-caveat>`), then a `system` record with subtype `local_command`,
+`commandRun: {"command":"recap","args":""}` and content `<local-command-stdout>…</local-command-stdout>`.
+The decoder reads only `away_summary`, and both user records count as a new turn, which clears the
+recap and resets the turn state. A skill command such as `/vfkb:handoff` writes a user record that
+starts `<command-message>` and is followed by an `isMeta` user record and an assistant turn, so it
+is a real turn. Seen across transcripts: `/recap` 63, `/usage` 53, `/compact` 42, `/model` 20, `/rename` 12.
+
+**Acceptance Criteria:**
+
+**Given** recaps are on and the operator runs `/recap`
+**When** the `local_command` record with `commandRun.command` "recap" is read
+**Then** its stdout text (tags removed, same trimming and cap as `away_summary`) becomes the Box's recap within the Board's usual latency
+**And** a local command's own records (the caveat, the `<command-name>` user record and its `local_command` result) neither clear the recap nor mark a turn as started
+**And** a skill command that does start a model turn still clears the recap as a turn does
+**And** decoder and fold tests use record shapes copied from real transcripts, with no transcript text beyond what the test needs
+**And** with recaps off, neither record's content is read (ADR-0010 consent)
+
+### Story 5.15: Bash-mode commands are not turns either
+
+As the operator,
+I want a `!command` I run in Claude Code's bash mode to leave the Box's recap and turn state alone,
+So that the Board treats every local action the same way.
+
+Source: Story 5.14's deferred finding, confirmed by the orchestrator on 2026-10-23. This machine's
+transcripts hold 56 user records whose content starts `<bash-input>` and 56 starting
+`<bash-stdout>`; both count as a turn start today. `<local-command-stderr>` was also left unverified.
+
+**Acceptance Criteria:**
+
+**Given** the operator runs `!cmd` in bash mode, or a local command writes `<local-command-stderr>`
+**When** those records are read
+**Then** they neither clear the recap nor mark a turn as started, judged by structure only and verified against real record shapes
+**And** a prompt typed after them still starts a turn
+**And** Story 5.14's code gets the follow-up review its builder recommended, and its findings are fixed or deferred
+
+**Amended 2026-10-23 (built):** the verification this story asks for refuted its premise for bash mode.
+Claude Code sends a `!cmd`'s output to the model, which answers it: 54 of the 56 bash commands in
+this machine's transcripts were answered by a model turn with no prompt between
+(`docs/research/claude-code-bash-mode-2026-10-23.md`). Bash-mode records therefore stay turn starts
+and clear the recap, now pinned by tests; only the `<local-command-stderr>` half was changed. The
+title is kept for traceability. See `docs/implementation/spec-5-15-bash-mode-commands-are-not-turns-either.md`.
+
+### Story 5.16: A resumed subagent counts as background work
+
+As the operator,
+I want a subagent that Claude Code resumes to count as background work on its Box,
+So that a pane whose agent is waiting on resumed subagents does not look less busy than it is.
+
+Source: operator report, 2026-10-23. The orchestrator resumed two subagents with SendMessage; the
+transcript recorded a user record whose `toolUseResult` is
+`{"success":true,"message":"Resuming agent …","resumedAgentId":"<id>",…}`, which ADR-0009's decoder
+does not treat as a task start, so the Box counted 1 background task while 3 ran. The earlier
+"Finished while waiting" observation was correct: both subagents had sent completed notifications and
+nothing was running.
+
+**Acceptance Criteria:**
+
+**Given** a transcript where a `toolUseResult` with `success` true and a non-empty `resumedAgentId` appears
+**When** it is read
+**Then** that id is an open task until a notification for it closes it (completed, failed, killed or stopped), exactly like a launched subagent
+**And** a failed resume (`success` false or no id) opens nothing
+**And** tests use the record shape observed on Claude Code 2.1.292 with placeholder text, and ADR-0009 gets a dated amendment
+
+### Story 5.17: A released pane's next Agent starts fresh across a restart
+
+As the operator,
+I want a Claude session I start in a pane whose previous Agent had quit to start fresh, even if the Daemon was down when it started,
+So that it never shows as Finished with the previous Agent's wait.
+
+Source: independent review of Story 5.10, 2026-10-23, reproduced by a failing test. Agent A goes
+working→done live, herdr sends `agent_released` (the engine removes the pane, writes no row), the
+Daemon stops or loses herdr, B starts in the same pane and terminal, and the Daemon comes back keeping
+the epoch: B is seeded from A's history and shows Finished with A's wait. Decided by the orchestrator
+under the operator's delegation (extends vfkb aa3dcbf096bc; no stored-schema change, no ADR): the
+release is recorded in the engine's saved state outside the append-only record (`server_state`'s
+pane-to-terminal map, or an equivalent there), so a pane released before the restart is not seeded
+and B's first sight is written with no previous Status.
+
+**Acceptance Criteria:**
+
+**Given** the reviewer's scenario, both for a Daemon restart and for an in-run reconnect where B appears during the disconnect
+**When** the Daemon sees B
+**Then** B's first row has no previous Status and B shows Idle (or its live Status) from its own first row, never A's class or wait
+**And** a pane that was not released (A still running across the restart) is still seeded exactly as before
+**And** saved state written by 0.5.0 (no release information) still loads and seeds as before
+**And** AD-3's "Successive Agents on one AgentKey" paragraph states the case and the remaining residual
+
+### Story 5.18: A Profile hold always ends
+
+As the operator,
+I want an Agent's Box never to freeze while its Profile is being looked up,
+So that repeated detections or a hung lookup cannot stop its rows reaching the record and the Board.
+
+Source: follow-up review of Story 5.4, 2026-10-23, reproduced by a test (`profileTimeout` 200 ms, a
+blocked environment read, `agent_detected` every 50 ms: after 3 s and 61 lookups the row was still
+held). Each `agent_detected` or program change on a known pane calls `resolve`, which supersedes the
+lookup in flight, so while triggers keep arriving no lookup settles, `holdRows` stays true and
+`p.held` grows. Also: `readProfile`'s inner environment-read goroutine is neither tracked nor guarded,
+so a permanently hung read leaves 1 + `profileRetries` goroutines per trigger.
+
+**Acceptance Criteria:**
+
+**Given** triggers keep arriving while rows are held, or the environment read never returns
+**When** the hold has lasted its hard deadline (a tunable, at most a small multiple of `profileTimeout`)
+**Then** the held rows are released in order with the best Profile known (the old one for the old program, `unresolved` otherwise), and the Board shows the Agent's current state
+**And** a trigger arriving while rows are held does not move the hold's deadline
+**And** at most one environment read per pane is in flight, so a hung read cannot multiply goroutines
+**And** the reviewer's reproduction becomes a test that passes, alongside the existing Profile tests

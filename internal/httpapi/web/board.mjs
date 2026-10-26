@@ -81,10 +81,14 @@ function fillBox(box, view, now) {
   }
 
   // Always present, so an empty Context Line keeps its row. A recap takes
-  // the row in its place, up to two lines, the rest in the label.
+  // the row in its place, up to two lines, the rest in the label. The text
+  // is a pane's process's to set, so it sits in a <bdi>: whatever direction
+  // it takes cannot reorder the rest of the Box (the Daemon also drops bidi
+  // controls from the Context Line).
   const text = contextText(view);
-  const ctx = el("p", recapOf(view) ? "context recap" : "context line", text);
-  if (!text) ctx.setAttribute("aria-hidden", "true");
+  const ctx = el("p", recapOf(view) ? "context recap" : "context line");
+  if (text) ctx.appendChild(el("bdi", null, text));
+  else ctx.setAttribute("aria-hidden", "true");
 
   // Last row: the heading on the left, the class and Waiting Time on the
   // right, bold and never truncated.
@@ -285,12 +289,13 @@ function render() {
   }
 }
 
-// tick advances the Waiting Times and the snapshot age, and shows a lost
-// stream once its grace period has passed. Boxes hidden or shown follow only
-// the model, so tick never needs a full render.
+// tick advances the Waiting Times and the snapshot age, lets streamDecision
+// judge the stream's silence, and shows a lost stream once its grace period
+// has passed. Boxes hidden or shown follow only the model, so tick never
+// needs a full render.
 function tick() {
   const now = Date.now();
-  drawStatus(currentStatus(now));
+  step({ kind: "tick", now });
   for (const b of boxes.values()) {
     if (!b.wait) continue;
     const w = waitingLabel(b.view, now);
@@ -300,9 +305,10 @@ function tick() {
 }
 
 // The stream. board.mjs only executes streamDecision's decisions: which
-// events reach the model, and when to open a new source after one closes for
-// good (a non-200 reply, such as the 503 while the Daemon restarts).
-// EventSource retries a dropped stream by itself.
+// events reach the model, and when to give up on a source and open a new one:
+// after it closes for good (a non-200 reply, such as the 503 while the Daemon
+// restarts), falls silent (a hung Daemon), skips a publication or sends an
+// event the Board rejects. EventSource retries a dropped stream by itself.
 function step(input) {
   const before = st.model;
   const d = streamDecision(st, input);
@@ -313,7 +319,7 @@ function step(input) {
   st = d.st;
   if (d.warning) console.warn("herddash: " + d.warning);
   if (d.reopenAfter !== undefined) {
-    input.source.close();
+    if (d.close) d.close.close();
     setTimeout(open, d.reopenAfter);
   }
   if (st.model !== before) render();
@@ -322,9 +328,10 @@ function step(input) {
 
 function open() {
   const s = new EventSource("/events");
-  step({ kind: "open", source: s });
+  step({ kind: "open", source: s, now: Date.now() });
+  s.addEventListener("open", () => step({ kind: "connected", source: s, now: Date.now() }));
   for (const name of EVENT_NAMES) {
-    s.addEventListener(name, (e) => step({ kind: "event", source: s, name, data: e.data }));
+    s.addEventListener(name, (e) => step({ kind: "event", source: s, name, data: e.data, id: e.lastEventId, now: Date.now() }));
   }
   s.addEventListener("error", () => step({ kind: "error", source: s, closed: s.readyState === EventSource.CLOSED, now: Date.now() }));
 }

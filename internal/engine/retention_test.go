@@ -3,6 +3,9 @@ package engine
 import (
 	"errors"
 	"log/slog"
+	"math/rand/v2"
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 	"time"
@@ -429,5 +432,199 @@ func TestRetentionAppendFailedKeepsAll(t *testing.T) {
 	sw := st.sweepList()
 	if got := presentOf(sw[len(sw)-1]); got["w1:p1"] != 0 || got["w1:p2"] == 0 {
 		t.Errorf("present %v, want w1:p1 with Since 0 and w1:p2 unaffected", got)
+	}
+}
+
+// foldOf folds pane id's rows under epoch 3 in st.
+func foldOf(t *testing.T, st *fakeStore, id string) core.FoldResult {
+	t.Helper()
+	ts, err := st.History(t.Context(), core.AgentKey{Host: "mac", Server: "default", Epoch: 3, PaneID: id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return core.Fold(ts)
+}
+
+func TestRetentionReusedPaneAcrossRestarts(t *testing.T) {
+	// Agent A worked and finished in w1:p1 long ago; B began there with a
+	// row with no previous Status, never worked, and has been blocked since
+	// 120 days ago. The restart seeds B from its own rows; the sweep keeps
+	// only B's class start, not A's working row; a second restart folds the
+	// same, and B going idle is Idle (never worked), not Finished.
+	setRetentionInterval(t, time.Hour)
+	setReconcileInterval(t, time.Hour)
+	now := clockAt(0)
+	ago := func(days int64) int64 { return now - days*dayMs }
+	st := newFakeStore(nil)
+	st.seed(
+		stored(t, "w1:p1", "", core.StatusWorking, ago(200), core.ProvenanceLive),
+		stored(t, "w1:p1", core.StatusWorking, core.StatusDone, ago(199), core.ProvenanceLive),
+		stored(t, "w1:p1", "", core.StatusIdle, ago(150), core.ProvenanceSnapshot),
+		stored(t, "w1:p1", core.StatusIdle, core.StatusBlocked, ago(120), core.ProvenanceLive),
+	)
+	snap := twoAgents()
+	snap.Panes[0].Agent.Status = core.StatusBlocked
+	want := foldOf(t, st, "w1:p1")
+	if want.Class != core.ClassNeedsYou || want.Since != ago(120) || want.EverWorking {
+		t.Fatalf("fold %+v, want needs_you since 120 days ago, never working", want)
+	}
+	h := restartOn(t, snap, st, withRetention(&logSink{}))
+	h.rec.expect(t, "reconnected 0.9.5 epoch 3 kept", "agent w1:p1 claude blocked", "agent w1:p2 claude idle")
+	h.settle()
+	if got := presentOf(st.sweepList()[0]); got["w1:p1"] != ago(120) {
+		t.Fatalf("present %v, want w1:p1 since 120 days ago", got)
+	}
+	if got := rows(paneRows(st, "w1:p1")); !slices.Equal(got, []string{
+		`w1:p1 e3 idle->blocked live seq=- v="0.9.5" program="claude" profile="claude"`,
+	}) {
+		t.Fatalf("w1:p1 rows after the sweep %v, want only B's class start", got)
+	}
+	if got := foldOf(t, st, "w1:p1"); got != want {
+		t.Errorf("fold after the sweep %+v, want %+v", got, want)
+	}
+	h.stop()
+
+	n := len(st.rowList())
+	h2 := restartOn(t, snap, st, withRetention(&logSink{}))
+	h2.rec.expect(t, "reconnected 0.9.5 epoch 3 kept", "agent w1:p1 claude blocked", "agent w1:p2 claude idle")
+	h2.fake.awaitSubscribe("w1:p1")
+	h2.settle()
+	if len(st.rowList()) != n {
+		t.Errorf("rows %v, want nothing written by the second restart", rows(st.rowList()[n:]))
+	}
+	if a := agentByPane(t, h2.agents(), "w1:p1"); a.Class != ClassNeedsYou || a.WaitingSince != ago(120) {
+		t.Errorf("w1:p1 %s since %d, want needs_you since %d", a.Class, a.WaitingSince, ago(120))
+	}
+	h2.fake.statusSub("w1:p1").event(core.StatusEvent{PaneID: "w1:p1", Status: core.StatusIdle, AgentProgram: "claude"})
+	h2.rec.awaitCount(t, "transition w1:p1 claude blocked->idle live", 1)
+	if a := agentByPane(t, h2.agents(), "w1:p1"); a.Class != ClassWorking {
+		t.Errorf("w1:p1 idle is %s, want working (Idle): B never worked", a.Class)
+	}
+}
+
+func TestRetentionTerminalChangedAcrossRestarts(t *testing.T) {
+	// A's rows are old; w1:p1 came back on another terminal while the Daemon
+	// was down. B's first sight is a row with no previous Status, the sweep
+	// removes A's rows, and a second restart, on the terminal now saved,
+	// seeds B from its own row and writes nothing.
+	setRetentionInterval(t, time.Hour)
+	setReconcileInterval(t, time.Hour)
+	now := clockAt(0)
+	st := newFakeStore(nil)
+	st.seed(
+		stored(t, "w1:p1", "", core.StatusWorking, now-200*dayMs, core.ProvenanceLive),
+		stored(t, "w1:p1", core.StatusWorking, core.StatusDone, now-199*dayMs, core.ProvenanceLive),
+	)
+	h := terminalChangedRestart(t, st, core.StatusDone, terminalsOf(twoAgents()), withRetention(&logSink{}))
+	p1 := paneRows(st, "w1:p1")
+	if got := rows(p1); !slices.Equal(got, []string{
+		`w1:p1 e3 nil->done snapshot seq=7 v="0.9.5" program="claude" profile="claude"`,
+	}) {
+		t.Fatalf("w1:p1 rows after the sweep %v, want only B's first sight", got)
+	}
+	want := foldOf(t, st, "w1:p1")
+	if a := agentByPane(t, h.agents(), "w1:p1"); a.Class != want.Class || a.WaitingSince != want.Since || want.Since != p1[0].ObservedAt() {
+		t.Errorf("w1:p1 %s since %d, want %s since B's first sight at %d", a.Class, a.WaitingSince, want.Class, p1[0].ObservedAt())
+	}
+	h.stop()
+
+	snap := twoAgents()
+	snap.Panes[0].Agent.Status = core.StatusDone
+	snap.Panes[0].TerminalID = "other"
+	n := len(st.rowList())
+	h2 := restartOn(t, snap, st, withRetention(&logSink{}))
+	h2.rec.expect(t, "reconnected 0.9.5 epoch 3 kept", "agent w1:p1 claude done", "agent w1:p2 claude idle")
+	h2.settle()
+	if len(st.rowList()) != n {
+		t.Errorf("rows %v, want nothing written by the second restart", rows(st.rowList()[n:]))
+	}
+	if got := foldOf(t, st, "w1:p1"); got != want {
+		t.Errorf("fold after the second sweep %+v, want %+v", got, want)
+	}
+	if a := agentByPane(t, h2.agents(), "w1:p1"); a.Class != want.Class || a.WaitingSince != want.Since {
+		t.Errorf("w1:p1 %s since %d, want %s since %d", a.Class, a.WaitingSince, want.Class, want.Since)
+	}
+}
+
+func TestSweepFakeMatchesStore(t *testing.T) {
+	// The fake store applies the same Retention rule as the real one: random
+	// records of successive Agents, swept by both, leave the same rows.
+	dir := filepath.Join(t.TempDir(), "data")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	db, err := store.Open(filepath.Join(dir, "herddash.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	statuses := []core.Status{core.StatusWorking, core.StatusBlocked, core.StatusDone, core.StatusIdle, core.StatusUnknown}
+	ages := []int64{300, 250, 200, 150, 120, 100, 91, 90, 89, 50, 10}
+	now := clockAt(0)
+	cutoff := now - retentionDays*dayMs
+	r := rand.New(rand.NewPCG(5, 10))
+	for i := range 200 {
+		epoch := uint64(i + 1) // one epoch per round, so rounds never meet
+		keys := []core.AgentKey{
+			{Host: "mac", Server: "default", Epoch: epoch, PaneID: "w1:p1"},
+			{Host: "mac", Server: "default", Epoch: epoch, PaneID: "w1:p2"},
+		}
+		fake := newFakeStore(nil)
+		for range r.IntN(14) {
+			in := core.TransitionInput{Key: keys[r.IntN(len(keys))], AgentProgram: "claude", Profile: "claude",
+				New: statuses[r.IntN(len(statuses))], HerdrVersion: "0.9.5",
+				ObservedAt: now - ages[r.IntN(len(ages))]*dayMs, Provenance: core.ProvenanceLive}
+			if r.IntN(4) != 0 {
+				prev := statuses[r.IntN(len(statuses))]
+				in.Previous = &prev
+			}
+			tr, err := core.NewTransition(in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Append(tr); err != nil {
+				t.Fatal(err)
+			}
+			if err := fake.Append(tr); err != nil {
+				t.Fatal(err)
+			}
+		}
+		var present []store.Present
+		for _, k := range keys {
+			switch r.IntN(4) {
+			case 0: // absent
+			case 1:
+				present = append(present, store.Present{Key: k, Since: 0})
+			case 2:
+				ts, err := db.History(t.Context(), k)
+				if err != nil {
+					t.Fatal(err)
+				}
+				present = append(present, store.Present{Key: k, Since: core.Fold(ts).Since})
+			default:
+				present = append(present, store.Present{Key: k, Since: now - ages[r.IntN(len(ages))]*dayMs})
+			}
+		}
+		// The real store's counts also include earlier rounds' rows, which
+		// are no longer present; only the survivors are compared.
+		if _, err := db.Sweep(t.Context(), cutoff, present); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := fake.Sweep(t.Context(), cutoff, present); err != nil {
+			t.Fatal(err)
+		}
+		for _, k := range keys {
+			rt, err := db.History(t.Context(), k)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ft, _ := fake.History(t.Context(), k)
+			if got, want := rows(ft), rows(rt); !slices.Equal(got, want) {
+				t.Fatalf("round %d, %s: fake keeps\n %v\nreal keeps\n %v", i, k.PaneID, got, want)
+			}
+		}
 	}
 }

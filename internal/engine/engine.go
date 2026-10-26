@@ -116,6 +116,11 @@ type TranscriptFunc = func(t procenv.Tail, path string, line func([]byte)) (proc
 // panes it starts tracking (and every pane after a reconnect), so a pane herdr
 // keeps rejecting is subscribed again only by a resync, once per interval.
 // While connected and ready, a snapshot is also read every reconcileInterval.
+// A failed read once ready is read again after snapshotRetryDelay, and
+// snapshotFailuresBeforeLost failures in a row are a lost connection, handled
+// as a lost lifecycle stream is, so a herdr that answers nothing is never
+// shown as connected. A lifecycle line flagged unexpected (well-formed, but not
+// an event the engine can act on) ends nothing: the engine reads a snapshot.
 //
 // Version gate (FR-16, AD-11): every start decides the gate on the version
 // ping returns, before the lifecycle subscription. A refused herdr is observed
@@ -131,8 +136,34 @@ type TranscriptFunc = func(t procenv.Tail, path string, line func([]byte)) (proc
 // the Status silently, so the first report carries the latest one. Any
 // failure gives core.ProfileUnresolved. A program with no rule is its own
 // Profile, read from nothing. The Profile is resolved again when herdr detects
-// an agent in a tracked pane, or when an Agent's Agent Program changes; a
-// different result is reported to the Sink as a Profile change.
+// an agent in a tracked pane, when an Agent's Agent Program changes, and for
+// every Agent a reconnect that keeps the epoch finds again; a different result
+// is reported to the Sink as a Profile change.
+//
+// A transient failure (the lookup ran out of profileTimeout, or herdr's
+// foreground process call failed) is tried again up to profileRetries times,
+// after profileRetryWait, by a timer goroutine that sends a message; a rule
+// outcome or an unreadable environment never is. A transient failure for an
+// Agent that already holds a Profile resolved for its current program keeps
+// that Profile: a failure is no evidence it changed. While a reported Agent's
+// Profile is resolved again for one of the triggers above, its new
+// Transitions are held, not recorded or reported, until the first resolution
+// after the trigger settles, so each row carries the Profile resolved for its
+// program. A held row keeps its Status, previous Status, provenance and
+// observed_at; only its Profile is decided when it is released. Removal and
+// the run's end release held rows first, with the Profile held then for a row
+// of the program it was resolved for and core.ProfileUnresolved for any other.
+//
+// A hold always ends (Story 5.18): its deadline, profileHoldLimit() from its
+// start, is set when it starts and never moved by a later trigger, so a stream
+// of triggers each superseding the lookup in flight cannot hold rows forever.
+// At the deadline a timer goroutine sends a message and the held rows are
+// released as at removal; the pane then holds nothing more, and a row of a
+// program whose lookup has not settled is recorded at once with
+// core.ProfileUnresolved, until one of its lookups settles. At most one
+// lookup's reads run per pane, guarded by a one-slot semaphore: a lookup that
+// cannot take it within profileTimeout, because an earlier read hangs, fails as
+// a timeout, so a hung environment read never gains company.
 //
 // Background (FR-2, operator request 2026-10-21): the foreground process a
 // Profile resolution read is remembered as the Agent's process. While an
@@ -232,6 +263,13 @@ type Engine struct {
 	connected bool
 	ready     bool
 	everReady bool
+	// snapFailures counts consecutive failed snapshot reads once ready; a
+	// successful read or a disconnect clears it, and reaching
+	// snapshotFailuresBeforeLost loses the connection.
+	snapFailures int
+	// unexpectedWarned is set once this connection logged an unexpected
+	// lifecycle line at warn; later ones are logged at debug.
+	unexpectedWarned bool
 	// readyOnce is set once any connection of this run became ready, so a
 	// later one is a reconnect in the record. Unlike everReady, a saved state
 	// does not set it.
@@ -244,11 +282,19 @@ type Engine struct {
 	// terminals is every pane's terminal_id in the latest applied snapshot,
 	// Agent or not: the evidence the epoch rule compares across a reconnect.
 	terminals map[string]string
+	// released holds the panes whose Agent herdr released and whose next
+	// Agent's first row has not been recorded yet (Story 5.17). Such a pane
+	// is never seeded from the record: the record ends in its released
+	// Agent's rows. A mark only ever splits one Agent, never joins two. It is
+	// dropped when the epoch increments or a snapshot no longer shows the
+	// pane, and saved with the terminals.
+	released map[string]bool
 	// saved is set once the epoch and terminals have been saved or loaded;
-	// savedEpoch and savedTerminals are what the store holds.
+	// savedEpoch, savedTerminals and savedReleased are what the store holds.
 	saved          bool
 	savedEpoch     uint64
 	savedTerminals map[string]string
+	savedReleased  map[string]bool
 	panes          map[string]*pane
 	nextGen        uint64
 	// snapSeq numbers snapshot reads; it is the number of the latest one started.
@@ -344,9 +390,12 @@ type pane struct {
 	// Transition since.
 	fold core.FoldResult
 	// seedHistory is set for a pane first tracked by the first snapshot of a
-	// connection whose epoch was loaded or kept: only its first sight reads the
-	// record. A pane tracked later, or after a terminal replacement, is a new
-	// Agent even when it reuses a pane id.
+	// connection whose epoch was loaded or kept, unless the terminal_id held
+	// for it before that snapshot differs from the one it shows, or its last
+	// Agent was released (Engine.released): only its first sight reads the
+	// record. A pane tracked later, after a terminal replacement, on a changed
+	// terminal or after a release is a new Agent even when it reuses a pane
+	// id, and its first row has no previous Status (AD-3).
 	seedHistory bool
 	// unrecorded is set once the record may not hold this Agent's fold: a
 	// History read for its first sight or an Append of one of its Transitions
@@ -364,6 +413,36 @@ type pane struct {
 	profile   string
 	resolved  bool
 	resolving uint64
+	// profileProgram is the Agent Program the Profile was resolved for.
+	// profileTries counts the transient failures in a row since the last
+	// trigger; retryGen tags the retry timer waiting for the pane, 0 when
+	// none.
+	profileProgram core.AgentProgram
+	profileTries   int
+	retryGen       uint64
+	// holdRows is set from a trigger that resolves a reported Agent's Profile
+	// again until that resolution settles; meanwhile its Transitions wait in
+	// held, validated, their Profile decided when they are released. While
+	// held, status already says the latest held row's Status, so Agents
+	// shows it, but the published view keeps what was last released.
+	holdRows bool
+	held     []core.TransitionInput
+	// holdGen tags the deadline timer of the hold under way, 0 when none; the
+	// deadline is set when a hold starts and never moved. holdExpired is set
+	// when a hold ran out, and stops the pane holding again until one of its
+	// lookups settles.
+	holdGen     uint64
+	holdExpired bool
+	// profileSlot lets at most one Profile lookup's reads run for the pane
+	// at a time: a lookup holds it while its reads run, past its timeout if
+	// a read hangs. profileLatest is the generation of the pane's latest
+	// lookup, stored by startResolve on the engine goroutine: a lookup that
+	// takes the slot after a later one started gives it back at once without
+	// reading, since its result would be ignored, so a superseded lookup
+	// never delays or starves the current one. Both are created by the first
+	// lookup.
+	profileSlot   chan struct{}
+	profileLatest *atomic.Uint64
 	// pid is the Agent's process: the foreground process its latest Profile
 	// resolution read, 0 when not known. It is cleared when the Agent Program
 	// changes.
@@ -509,6 +588,20 @@ type (
 		err     error
 		// pid is the foreground process read, 0 when none was.
 		pid int
+		// transient is set when err may pass: the lookup ran out of time, or
+		// herdr's foreground process call failed.
+		transient bool
+	}
+	// profileRetryMsg says the wait before retrying a pane's Profile lookup
+	// is over.
+	profileRetryMsg struct {
+		paneID string
+		gen    uint64
+	}
+	// profileHoldMsg says a pane's hold of its rows reached its deadline.
+	profileHoldMsg struct {
+		paneID string
+		gen    uint64
 	}
 	// backgroundMsg is the outcome of one read of a pane's Agent process's
 	// children: whether one is a background task, or why the read failed.
@@ -561,6 +654,7 @@ func New(o Options) *Engine {
 		inbox:            make(chan any),
 		stopped:          make(chan struct{}),
 		panes:            map[string]*pane{},
+		released:         map[string]bool{},
 		epoch:            firstEpoch,
 	}
 	if e.clock == nil {
@@ -601,6 +695,8 @@ func (e *Engine) Run(ctx context.Context) {
 	runCtx, cancel := context.WithCancel(ctx)
 	e.runCtx = runCtx
 	defer func() {
+		// Held rows are recorded before the run ends (no row is lost).
+		e.releaseAll()
 		e.stopPublishing()
 		e.closeAll()
 		cancel()
@@ -741,8 +837,10 @@ func (e *Engine) retry(cause error) {
 	e.awaitConnect(wait)
 }
 
-// lost handles a health signal on the lifecycle stream once started: the
-// engine can no longer trust it has seen every event, so it starts again. A
+// lost handles a health signal on the lifecycle stream once started, after
+// which the engine can no longer trust it has seen every event, or snapshot
+// reads failing snapshotFailuresBeforeLost times in a row, after which it can
+// no longer read herdr's state. Either way it starts again. A
 // loss counts into the backoff like a failed start, unless the connection had
 // stayed up for reconnectStableAfter, so a herdr that drops right after each
 // start is not hammered.
@@ -753,7 +851,7 @@ func (e *Engine) lost(h error) {
 	e.failures++
 	e.disconnect()
 	wait := reconnectDelay(e.failures)
-	e.log.Info("lifecycle stream lost; reconnecting", "cause", h.Error(), "retry_in", wait.String())
+	e.log.Info("connection to herdr lost; reconnecting", "cause", h.Error(), "retry_in", wait.String())
 	e.awaitConnect(wait)
 }
 
@@ -787,6 +885,8 @@ func (e *Engine) disconnect() {
 	}
 	e.connected = false
 	e.ready = false
+	e.snapFailures = 0
+	e.unexpectedWarned = false
 	t := e.truth
 	t.Connected = false
 	e.setTruth(t)
@@ -915,6 +1015,10 @@ func (e *Engine) handle(m any) {
 		m.reply <- e.agents()
 	case profileMsg:
 		e.onProfile(m)
+	case profileRetryMsg:
+		e.onProfileRetry(m)
+	case profileHoldMsg:
+		e.onProfileHold(m)
 	case backgroundMsg:
 		e.onBackground(m)
 	case sessionMsg:
@@ -930,6 +1034,19 @@ func (e *Engine) onLifecycle(d herdr.Delivery[core.LifecycleEvent]) {
 		} else {
 			e.lost(err)
 		}
+		return
+	}
+	if d.Unexpected != nil {
+		// A well-formed line the engine cannot act on, perhaps from a newer
+		// herdr: the stream goes on, and a snapshot reads whatever it was
+		// about. The error names only the event, never its payload.
+		if !e.unexpectedWarned {
+			e.unexpectedWarned = true
+			e.log.Warn("unexpected lifecycle event; reading a snapshot", "error", d.Unexpected)
+		} else {
+			e.log.Debug("unexpected lifecycle event; reading a snapshot", "error", d.Unexpected)
+		}
+		e.requestSnapshot()
 		return
 	}
 	e.noteEvent()
@@ -950,6 +1067,16 @@ func (e *Engine) onLifecycle(d herdr.Delivery[core.LifecycleEvent]) {
 			}
 		}
 		e.remove(ev.PaneID, string(ev.Kind))
+		// The pane's next Agent is another one, even if it starts in the
+		// same terminal while herddash is away: never seed it from the
+		// record, which ends in this Agent's rows. Saved now, since no
+		// snapshot need follow before the Daemon stops; also before a
+		// connection's first snapshot, once a state is saved: the epoch and
+		// terminals saved with it are then the ones already held.
+		e.released[ev.PaneID] = true
+		if e.ready || e.saved {
+			e.saveState()
+		}
 		e.resyncSettle()
 	case core.LifecycleClosed, core.LifecycleExited:
 		e.remove(ev.PaneID, string(ev.Kind))
@@ -969,6 +1096,9 @@ func (e *Engine) onLifecycle(d herdr.Delivery[core.LifecycleEvent]) {
 		// subscription's confirmation.
 		p := e.track(ev.PaneID)
 		p.removableFrom = math.MaxUint64
+		// The detection names the program, so a status event that beats the
+		// snapshot and names none still reports the Agent under it.
+		p.program = ev.AgentProgram
 		e.subscribe(p)
 	case core.LifecycleMoved, core.LifecycleContextChanged:
 		e.requestSnapshot()
@@ -1101,12 +1231,18 @@ func (e *Engine) onSnapshot(m snapshotMsg) {
 			e.retry(fmt.Errorf("engine: snapshot: %w", m.err))
 			return
 		}
-		e.log.Warn("snapshot failed; reading again", "error", m.err, "retry_in", snapshotRetryDelay.String())
+		e.snapFailures++
+		if e.snapFailures >= snapshotFailuresBeforeLost {
+			e.lost(fmt.Errorf("engine: %d snapshot reads failed in a row: %w", e.snapFailures, m.err))
+			return
+		}
+		e.log.Warn("snapshot failed; reading again", "error", m.err, "failures", e.snapFailures, "lost_at", snapshotFailuresBeforeLost, "retry_in", snapshotRetryDelay.String())
 		e.removedDuring = nil
 		e.again = false
 		e.schedule(snapshotRetryDelay)
 		return
 	}
+	e.snapFailures = 0
 	first := !e.ready
 	// The first connection of the run to become ready starts Retention.
 	firstOfRun := first && !e.readyOnce
@@ -1140,9 +1276,18 @@ func (e *Engine) onSnapshot(m snapshotMsg) {
 	if reconcile {
 		e.reconcileFrom = 0
 	}
+	// before is the evidence this snapshot replaces: apply compares it so
+	// that a pane whose terminal changed is not seeded from the record.
+	before := e.terminals
 	e.terminals = make(map[string]string, len(m.snap.Panes))
 	for _, obs := range m.snap.Panes {
 		e.terminals[obs.PaneID] = obs.TerminalID
+	}
+	// A released pane that is gone will hold no next Agent: drop its mark.
+	for id := range e.released {
+		if _, shown := e.terminals[id]; !shown {
+			delete(e.released, id)
+		}
 	}
 	// Persist the epoch and terminals before this snapshot records anything,
 	// so no row is keyed by an epoch the store does not hold.
@@ -1162,7 +1307,7 @@ func (e *Engine) onSnapshot(m snapshotMsg) {
 	t := e.truth
 	t.Connected, t.LastSnapshotAt = true, e.now()
 	e.setTruth(t)
-	unsubscribed, changed := e.apply(m.seq, m.snap, first)
+	unsubscribed, changed := e.apply(m.seq, m.snap, first, before)
 	if reconcile && changed {
 		e.mark(store.ReasonReconcile, "")
 	}
@@ -1225,6 +1370,8 @@ func (e *Engine) decideEpoch(s core.Snapshot) bool {
 	for _, id := range ids {
 		e.remove(id, "herdr restarted")
 	}
+	// Under the new epoch no pane has a record to be seeded from.
+	clear(e.released)
 	e.epoch = next
 	return false
 }
@@ -1236,8 +1383,12 @@ func (e *Engine) decideEpoch(s core.Snapshot) bool {
 // no live or pending subscription is left to a resync: apply returns that
 // pane's cause, or the zero cause when there is none. changed reports whether
 // the snapshot disagreed with what the engine held: a snapshot Transition, an
-// Agent seen first in it, or an Agent removed.
-func (e *Engine) apply(seq uint64, s core.Snapshot, resubscribe bool) (unsubscribed cause, changed bool) {
+// Agent seen first in it, or an Agent removed. before is every pane's
+// terminal_id as the engine held it before this snapshot (saved or last
+// applied): a pane it shows on another non-empty terminal than the one now
+// seen holds another Agent than the record's last one, so its first sight is
+// not seeded from the record.
+func (e *Engine) apply(seq uint64, s core.Snapshot, resubscribe bool, before map[string]string) (unsubscribed cause, changed bool) {
 	present := map[string]bool{}
 	for _, obs := range s.Panes {
 		a := obs.Agent
@@ -1266,7 +1417,22 @@ func (e *Engine) apply(seq uint64, s core.Snapshot, resubscribe bool) (unsubscri
 			}
 			p = e.track(obs.PaneID)
 			p.removableFrom = seq + 1
-			p.seedHistory = resubscribe && e.historic && !replaced
+			seed := resubscribe && e.historic && !replaced
+			if was := before[obs.PaneID]; seed && was != "" && obs.TerminalID != "" && was != obs.TerminalID {
+				// The pane id came back on another terminal while the
+				// engine was not watching: a new Agent, never joined to
+				// the record's.
+				e.log.Info("terminal changed since the record; not seeding from it", "pane", obs.PaneID,
+					"terminal_id", obs.TerminalID, "recorded_terminal_id", was)
+				seed = false
+			}
+			if seed && e.released[obs.PaneID] {
+				// The pane's last Agent was released: this is its next one,
+				// never joined to the record's.
+				e.log.Info("agent released since the record; not seeding from it", "pane", obs.PaneID)
+				seed = false
+			}
+			p.seedHistory = seed
 			fresh = true
 		}
 		if p.context.PaneTitle != obs.Context.PaneTitle {
@@ -1289,8 +1455,18 @@ func (e *Engine) apply(seq uint64, s core.Snapshot, resubscribe bool) (unsubscri
 		if wasKnown && p.liveDuring != seq && a.Status.Valid() {
 			p.herdr = a.Status // as onStatus: before a program change settles
 		}
-		if had := p.program; e.setProgram(p, a.AgentProgram) && had != "" {
+		had := p.program
+		programChanged := e.setProgram(p, a.AgentProgram)
+		if programChanged && had != "" {
 			changed = true // herdr names another program than the engine held
+		}
+		if wasKnown && resubscribe && !programChanged && p.resolving == 0 {
+			// A reconnect that kept the epoch: the Agent may have been
+			// restarted under another Profile while herddash was away. A
+			// program change has already resolved it again, and a lookup
+			// still in flight answers for it: superseding it would restart
+			// the wait of any rows held for it.
+			e.resolve(p)
 		}
 		switch {
 		case !wasKnown:
@@ -1574,6 +1750,7 @@ func (e *Engine) remove(id, reason string) {
 	if !ok {
 		return
 	}
+	e.release(p, "", "")
 	delete(e.panes, id)
 	delete(e.resyncPending, id) // the caller settles the resync
 	e.stopBackground(p)
@@ -1647,24 +1824,81 @@ func (e *Engine) setProgram(p *pane, program core.AgentProgram) bool {
 	return true
 }
 
-// resolve starts resolving p's Profile, superseding any resolution in flight.
-// A program with no rule is its own Profile, settled now without reading
-// anything; otherwise the reads run in a goroutine and the result arrives as
-// a profileMsg.
+// resolve starts resolving p's Profile for a trigger, superseding any
+// resolution in flight and any retry waiting. A program with no rule is its
+// own Profile, settled now without reading anything; otherwise the reads run
+// in a goroutine and the result arrives as a profileMsg, and a reported
+// Agent's Transitions are held until it settles.
 func (e *Engine) resolve(p *pane) {
+	p.profileTries, p.retryGen = 0, 0
 	rule, ok := e.profiles[p.program]
 	if !ok {
 		p.resolving = 0
 		e.settleProfile(p, profileMsg{paneID: p.id, profile: core.ResolveProfile(p.program, nil, "", false)})
 		return
 	}
+	if p.known {
+		e.hold(p)
+	}
+	e.startResolve(p, rule)
+}
+
+// hold starts holding p's new rows, unless a hold is under way or p's last
+// hold ran out and none of its lookups has settled since. A new hold arms its
+// deadline: a timer goroutine sends a profileHoldMsg after
+// profileHoldLimit(), and a later trigger never moves it.
+func (e *Engine) hold(p *pane) {
+	if p.holdRows || p.holdExpired {
+		return
+	}
+	p.holdRows = true
 	e.nextGen++
-	p.resolving = e.nextGen
-	id, gen, program := p.id, p.resolving, p.program
+	p.holdGen = e.nextGen
+	id, gen, limit := p.id, p.holdGen, profileHoldLimit()
 	e.wg.Add(1)
 	go func() {
 		defer e.wg.Done()
-		m := e.readProfile(id, program, rule)
+		t := time.NewTimer(limit)
+		defer t.Stop()
+		select {
+		case <-t.C:
+			e.send(profileHoldMsg{paneID: id, gen: gen})
+		case <-e.runCtx.Done():
+		}
+	}()
+}
+
+// onProfileHold ends a hold that reached its deadline: the held rows are
+// released with the best Profile known, the one held for a row of the program
+// it was resolved for and core.ProfileUnresolved for any other, and the pane
+// holds nothing more until one of its lookups settles.
+func (e *Engine) onProfileHold(m profileHoldMsg) {
+	p, ok := e.panes[m.paneID]
+	if !ok || m.gen == 0 || p.holdGen != m.gen || !p.holdRows {
+		return // for a pane gone since, or a hold already ended
+	}
+	e.log.Warn("profile hold ran out", "pane", p.id, "agent_program", p.program,
+		"held", len(p.held), "limit", profileHoldLimit().String())
+	p.holdExpired = true
+	e.release(p, "", "")
+	e.noteView(p)
+}
+
+// startResolve starts the reads of one Profile lookup for p under rule, in a
+// goroutine, tagged with a new generation.
+func (e *Engine) startResolve(p *pane, rule core.ProfileRule) {
+	e.nextGen++
+	p.resolving = e.nextGen
+	if p.profileSlot == nil {
+		p.profileSlot = make(chan struct{}, 1)
+		p.profileLatest = new(atomic.Uint64)
+	}
+	p.profileLatest.Store(p.resolving)
+	id, gen, program, slot, latest := p.id, p.resolving, p.program, p.profileSlot, p.profileLatest
+	e.wg.Add(1)
+	go func() {
+		defer e.wg.Done()
+		m := e.readProfile(id, program, rule, slot, latest, gen)
 		m.paneID, m.gen = id, gen
 		e.send(m)
 	}()
@@ -1672,18 +1906,36 @@ func (e *Engine) resolve(p *pane) {
 
 // readProfile reads the foreground process of a pane and the rule's variable
 // from that process's environment, and applies the rule, within
-// profileTimeout. Every failure gives core.ProfileUnresolved, with the reason.
-func (e *Engine) readProfile(paneID string, program core.AgentProgram, rule core.ProfileRule) profileMsg {
+// profileTimeout. Every failure gives core.ProfileUnresolved, with the reason;
+// running out of time and a failed foreground process call are transient.
+// The reads run only while holding the pane's slot, so a hung read never has
+// company: a lookup that cannot take the slot within profileTimeout runs out
+// of time. A lookup that takes the slot after a later lookup (latest) started
+// frees it at once and reads nothing: its result is stale.
+func (e *Engine) readProfile(paneID string, program core.AgentProgram, rule core.ProfileRule,
+	slot chan struct{}, latest *atomic.Uint64, gen uint64) profileMsg {
 	ctx, cancel := context.WithTimeout(e.runCtx, profileTimeout)
 	defer cancel()
+	select {
+	case slot <- struct{}{}:
+	case <-ctx.Done():
+		return profileMsg{profile: core.ProfileUnresolved, transient: true,
+			err: fmt.Errorf("engine: profile not resolved within %s, an earlier lookup's read still running: %w", profileTimeout, ctx.Err())}
+	}
+	if latest.Load() != gen {
+		<-slot
+		return profileMsg{profile: core.ProfileUnresolved, err: errors.New("engine: profile lookup superseded")}
+	}
 	// The environment read cannot be cancelled, so the reads run apart and
-	// a read that outlives the timeout is abandoned; done is buffered so it
-	// never blocks.
+	// a read that outlives the timeout is abandoned, keeping the slot until
+	// it returns; done is buffered so it never blocks. The reading goroutine
+	// is not tracked in e.wg: a hung read must not hang Run's end.
 	done := make(chan profileMsg, 1)
 	go func() {
+		defer func() { <-slot }()
 		fp, err := e.client.ForegroundProcess(ctx, paneID)
 		if err != nil {
-			done <- profileMsg{err: fmt.Errorf("engine: foreground process: %w", err)}
+			done <- profileMsg{err: fmt.Errorf("engine: foreground process: %w", err), transient: true}
 			return
 		}
 		value, set, err := e.environ(fp.PID, rule.Variable)
@@ -1704,7 +1956,7 @@ func (e *Engine) readProfile(paneID string, program core.AgentProgram, rule core
 		}
 		return m
 	case <-ctx.Done():
-		return profileMsg{profile: core.ProfileUnresolved,
+		return profileMsg{profile: core.ProfileUnresolved, transient: true,
 			err: fmt.Errorf("engine: profile not resolved within %s: %w", profileTimeout, ctx.Err())}
 	}
 }
@@ -1715,7 +1967,67 @@ func (e *Engine) onProfile(m profileMsg) {
 		return // for a pane gone since, or a resolution superseded
 	}
 	p.resolving = 0
+	p.holdExpired = false // a lookup settled: the pane may hold again
+	if !m.transient {
+		p.profileTries = 0
+		e.settleProfile(p, m)
+		return
+	}
+	p.profileTries++
+	if p.profileTries <= profileRetries {
+		wait := profileRetryWait(p.profileTries)
+		e.log.Info("profile lookup failed; retrying", "pane", p.id, "agent_program", p.program,
+			"attempt", p.profileTries, "retry_in", wait.String(), "error", m.err.Error())
+		e.retryProfile(p, wait)
+	} else {
+		e.log.Warn("profile lookup failed; not retrying until the next trigger", "pane", p.id, "agent_program", p.program,
+			"attempts", p.profileTries, "error", m.err.Error())
+	}
+	if p.known && p.resolved && p.profileProgram == p.program {
+		// The Agent holds a Profile resolved for this program, and a failure
+		// is no evidence it changed: the Profile and process stay.
+		e.log.Debug("profile resolved", "pane", p.id, "agent_program", p.program, "profile", p.profile,
+			"error", m.err.Error(), "kept", true)
+		e.release(p, "", "")
+		e.noteView(p)
+		return
+	}
 	e.settleProfile(p, m)
+}
+
+// retryProfile retries p's Profile lookup after wait: a timer goroutine sends
+// a profileRetryMsg tagged with a new generation, which a trigger meanwhile
+// makes stale.
+func (e *Engine) retryProfile(p *pane, wait time.Duration) {
+	e.nextGen++
+	p.retryGen = e.nextGen
+	id, gen := p.id, p.retryGen
+	e.wg.Add(1)
+	go func() {
+		defer e.wg.Done()
+		t := time.NewTimer(wait)
+		defer t.Stop()
+		select {
+		case <-t.C:
+			e.send(profileRetryMsg{paneID: id, gen: gen})
+		case <-e.runCtx.Done():
+		}
+	}()
+}
+
+// onProfileRetry starts the retry a profileRetryMsg is for, unless the pane
+// is gone or a trigger superseded it. A retry holds no rows.
+func (e *Engine) onProfileRetry(m profileRetryMsg) {
+	p, ok := e.panes[m.paneID]
+	if !ok || m.gen == 0 || p.retryGen != m.gen {
+		return
+	}
+	p.retryGen = 0
+	rule, ok := e.profiles[p.program]
+	if !ok {
+		return
+	}
+	e.startResolve(p, rule)
 }
 
 // settleProfile records a resolved Profile for p: an Agent not yet reported is
@@ -1732,8 +2044,13 @@ func (e *Engine) settleProfile(p *pane, m profileMsg) {
 		attrs = append(attrs, "error", m.err.Error())
 	}
 	e.log.Debug("profile resolved", attrs...)
+	p.holdExpired = false
 	previous, had := p.profile, p.resolved
-	p.profile, p.resolved = m.profile, true
+	var previousProgram core.AgentProgram
+	if had {
+		previousProgram = p.profileProgram
+	}
+	p.profile, p.resolved, p.profileProgram = m.profile, true, p.program
 	if m.pid != p.pid && (m.pid != 0 || m.err == nil) {
 		// Another process: its children are read afresh. A failed read keeps
 		// the process already known, so one slow lookup does not end the watch.
@@ -1747,7 +2064,59 @@ func (e *Engine) settleProfile(p *pane, m profileMsg) {
 	case had && previous != m.profile:
 		e.log.Info("profile changed", "pane", p.id, "agent_program", p.program, "profile", m.profile, "previous", previous)
 		e.sink.Profile(e.agent(p), previous, e.now())
+		e.release(p, previous, previousProgram)
 		e.noteView(p)
+	default:
+		e.release(p, previous, previousProgram)
+		e.noteView(p)
+	}
+}
+
+// release ends p's hold, if any, and records its held Transitions in order:
+// a row of the program p's Profile was resolved for carries that Profile, a
+// row of oldProgram (the program oldProfile was resolved for, "" for none)
+// carries oldProfile, and any other core.ProfileUnresolved. Each row is
+// reported with the Agent's Status, Class and Waiting Time as they were after
+// it; the Agent's program and Profile are the current ones, the row's own are
+// on the Transition.
+func (e *Engine) release(p *pane, oldProfile string, oldProgram core.AgentProgram) {
+	if !p.holdRows {
+		return
+	}
+	rows := p.held
+	p.holdRows, p.held, p.holdGen = false, nil, 0
+	final := p.status
+	for _, in := range rows {
+		switch {
+		case p.resolved && in.AgentProgram == p.profileProgram:
+			in.Profile = p.profile
+		case oldProgram != "" && in.AgentProgram == oldProgram:
+			in.Profile = oldProfile
+		default:
+			in.Profile = core.ProfileUnresolved
+		}
+		t, err := core.NewTransition(in)
+		if err != nil {
+			e.log.Warn("transition not recorded", "pane", p.id, "error", err)
+			continue
+		}
+		p.status = in.New
+		e.commit(p, t)
+	}
+	p.status = final
+}
+
+// releaseAll releases every pane's held rows, as the run ends.
+func (e *Engine) releaseAll() {
+	ids := make([]string, 0, len(e.panes))
+	for id, p := range e.panes {
+		if p.holdRows {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		e.release(e.panes[id], "", "")
 	}
 }
 
@@ -2082,6 +2451,13 @@ func (e *Engine) readSession(ctx context.Context, busy *atomic.Bool, pid int, di
 // readTranscript tails the transcript the session record s names under dir
 // from tail, folding its markers into tasks, and returns where it read to and
 // what it says. A read that restarted from the bound starts tasks afresh.
+//
+// The path follows the record's session id, so another id is another path,
+// and the tail restarts there. That is what /clear does: the same process's
+// record names a new session id at once (Claude Code 2.1.292, observed
+// 2026-10-23; ADR-0009 as amended by Story 5.3), so the old transcript's open
+// tasks and recap go and the old file is not read again. A command still
+// running across /clear is then left to the process check.
 func (e *Engine) readTranscript(dir string, s procenv.Session, tail procenv.Tail,
 	tasks core.BackgroundTasks) (procenv.Tail, core.BackgroundTasks, error) {
 	path, err := procenv.ClaudeTranscriptPath(dir, s.CWD, s.SessionID)
@@ -2230,9 +2606,21 @@ func (e *Engine) transitionAt(p *pane, next core.Status, prov core.Provenance, o
 		Provenance:   prov,
 		ObservedBy:   by,
 	}
+	// A row with no previous Status is an Agent's first (AD-3): the fold
+	// starts over there. When the Status is not known but the fold is, this
+	// Agent already has rows, so the fold's last Status is the previous one.
 	if p.status.Valid() {
 		prev := p.status
 		in.Previous = &prev
+	} else if p.fold.Known {
+		prev := p.fold.Status
+		in.Previous = &prev
+	}
+	mismatch := p.known && p.resolved && p.profileProgram != p.program
+	if mismatch && p.holdExpired {
+		// The pane's hold ran out before its program's lookup settled: the
+		// row is recorded now, with no Profile resolved for its program.
+		in.Profile = core.ProfileUnresolved
 	}
 	t, err := core.NewTransition(in)
 	if err != nil {
@@ -2240,9 +2628,26 @@ func (e *Engine) transitionAt(p *pane, next core.Status, prov core.Provenance, o
 		return
 	}
 	p.status = next
-	p.fold = p.fold.Add(t)
 	p.lastAt = t.ObservedAt()
 	e.followBackground(p)
+	if mismatch {
+		// A program change whose resolution has not started yet (a session
+		// verdict it ends is recorded first), or has not settled: the row
+		// waits for it too, so it never carries the old program's Profile.
+		e.hold(p)
+	}
+	if p.holdRows {
+		// Its Profile is being resolved again: the row waits for it.
+		p.held = append(p.held, in)
+		return
+	}
+	e.commit(p, t)
+}
+
+// commit folds, records and reports one Transition of p's, which p.status
+// already shows.
+func (e *Engine) commit(p *pane, t core.Transition) {
+	p.fold = p.fold.Add(t)
 	e.record(t)
 	e.sink.Transition(t, e.agent(p))
 	if p.known {
@@ -2269,12 +2674,17 @@ func (e *Engine) seen(p *pane, status core.Status, prov core.Provenance, order *
 // history: if the Status and Agent Program seen are the ones last recorded,
 // nothing is written and the class keeps its start, exact if it began live;
 // otherwise the change is recorded with the last stored Status as previous.
-// Otherwise the first sight is a Transition with no previous Status, so the
-// record holds every Agent's current Status (FR-7): snapshot provenance when a
-// snapshot showed it, live when a status event did, at the time it was
-// observed. reportedAt is the fallback when that is unknown. Without a Store
-// nothing is recorded, but the fold is seeded the same way. It reports whether
-// it deliberately recorded nothing: the record matched, or the run is ending.
+// Otherwise (a new Agent, a terminal replaced or changed, a released pane's
+// next Agent, or an unseeded first snapshot) the first sight is a Transition
+// with no previous Status, the boundary where the fold and Retention start
+// over for a reused AgentKey (AD-3). Recording that row clears the pane's
+// released mark, and saves the change; a row not recorded (a failed Append,
+// the run ending) keeps it, so the next start still does not seed. Either way
+// the record holds every Agent's current Status (FR-7): snapshot provenance
+// when a snapshot showed it, live when a status event did, at the time it was
+// observed. reportedAt is the fallback when that is unknown. Without a Store nothing is recorded, but the fold is seeded the
+// same way. It reports whether it deliberately recorded nothing: the record
+// matched, or the run is ending.
 func (e *Engine) firstSight(p *pane, reportedAt int64) (skipped bool) {
 	prov, observedAt := p.seenBy, p.seenAt
 	if prov == "" {
@@ -2325,6 +2735,12 @@ func (e *Engine) firstSight(p *pane, reportedAt int64) (skipped bool) {
 		return true
 	}
 	e.record(t)
+	if _, hasPrev := t.Previous(); !hasPrev && !p.unrecorded && e.released[p.id] {
+		// The released pane's next Agent now begins the record's rows for
+		// the pane: later starts may seed from them.
+		delete(e.released, p.id)
+		e.saveState()
+	}
 	return false
 }
 
@@ -2333,7 +2749,7 @@ func (e *Engine) key(paneID string) core.AgentKey {
 }
 
 func (e *Engine) agent(p *pane) Agent {
-	a := Agent{Key: e.key(p.id), AgentProgram: p.program, Profile: p.profile, Status: p.status, Context: p.context,
+	a := Agent{Key: e.key(p.id), AgentProgram: p.program, Profile: shownProfile(p), Status: p.status, Context: p.context,
 		Class: core.ClassUnknown}
 	if p.fold.Known {
 		a.Class = p.fold.Class

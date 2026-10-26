@@ -27,3 +27,6 @@ a new ADR that supersedes it and say so in both.
 | [0007](0007-read-only-loopback-http-surface.md) | A read-only HTTP surface on loopback | Accepted |
 | [0008](0008-claude-code-session-record-as-status-authority.md) | Claude Code's session record as a second authority for Needs you | Accepted |
 | [0009](0009-background-work-from-claude-code-transcripts.md) | Background work from Claude Code's session transcripts | Accepted |
+| [0010](0010-claude-code-recap-on-the-board.md) | Claude Code's session recap on the Board | Accepted; amends one rule of 0009 |
+| [0011](0011-tighter-import-rules-for-herdr.md) | Tighter import rules for herdr's wire types | Accepted |
+| [0012](0012-an-observable-keepalive-on-the-event-stream.md) | An observable keepalive on the event stream | Accepted; amends 0007 |

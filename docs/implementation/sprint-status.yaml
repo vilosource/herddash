@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 10-16-2026 09:40
-last_updated: 10-21-2026 10:56
+last_updated: 10-23-2026 09:00
 project: herddash
 project_key: NOKEY
 tracking_system: file-system
@@ -45,7 +45,7 @@ development_status:
   1-7-resync-when-the-stream-cannot-be-trusted: done
   1-8-refuse-unsupported-herdr-with-a-dogfooding-override: done
   1-9-know-which-profile-each-agent-runs-under: done
-  epic-1-retrospective: optional
+  epic-1-retrospective: done
 
   epic-2: done
   2-1-a-local-database-herddash-owns: done
@@ -54,7 +54,7 @@ development_status:
   2-4-waiting-time-that-survives-restarts: done
   2-5-retention-keeps-the-database-bounded: done
   2-6-import-the-plugin-s-log-as-history: done
-  epic-2-retrospective: optional
+  epic-2-retrospective: done
 
   epic-3: done
   3-1-each-agent-s-view-context-line-and-order: done
@@ -66,13 +66,34 @@ development_status:
   3-7-the-board-renders-every-agent: done
   3-8-the-board-stays-live: done
   3-9-connection-and-version-strips: done
-  epic-3-retrospective: optional
+  epic-3-retrospective: done
 
   epic-4: done
   4-1-clean-shutdown: done
   4-2-start-with-my-session-on-macos-and-linux: done
   4-3-release-binaries-for-every-host: done
-  epic-4-retrospective: optional
+  epic-4-retrospective: done
+
+  epic-5: in-progress
+  5-1-retrospectives-for-epics-1-to-4: done
+  5-2-a-resumed-session-does-not-keep-finished-background-tasks: done
+  5-3-clear-drops-the-previous-session-s-background-tasks: done
+  5-4-retry-a-profile-lookup-that-failed-transiently: done
+  5-5-tighter-import-rules-and-transition-invariants-adr-0011: done
+  5-6-ci-runs-the-board-s-browser-check: done
+  5-7-ci-tests-on-macos: done
+  5-8-documents-agents-read-match-the-code: done
+  5-9-decide-whether-acknowledgement-is-needed: backlog
+  5-10-a-new-agent-in-a-reused-pane-starts-fresh: done
+  5-11-the-board-notices-a-hung-daemon: done
+  5-12-the-engine-treats-repeated-failures-as-a-lost-connection: done
+  5-13-board-text-and-grouping-are-exact: done
+  5-14-a-manual-recap-reaches-the-board: done
+  5-15-bash-mode-commands-are-not-turns-either: done
+  5-16-a-resumed-subagent-counts-as-background-work: done
+  5-17-a-released-pane-s-next-agent-starts-fresh-across-a-restart: done
+  5-18-a-profile-hold-always-ends: done
+  epic-5-retrospective: optional
 
 # Operator checkpoints and story-size notes carried from epics validation
 # (docs/planning/epics-validation.md, T-2..T-4 and S-4..S-7).
@@ -101,3 +122,11 @@ action_items:
     action: "Story 4.3: operator confirms a day of dogfooding and approves merging release-please PR #2 at 0.x"
     owner: "operator"
     status: done
+  - epic: 5
+    action: "When Epic 5 is done, ask the operator once; on their OK ship it as one PR and one release (vfkb c56d5199f84c)"
+    owner: "operator"
+    status: open
+  - epic: 5
+    action: "Story 5.9 runs on or after 2026-11-03; it asks the operator only if the record shows Finished Agents that never cleared"
+    owner: "dev"
+    status: open
