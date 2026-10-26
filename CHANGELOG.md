@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/vilosource/herddash/compare/v0.6.0...v0.7.0) (2026-10-26)
+
+
+### Features
+
+* **board:** a title bar with a text logo and a summary (Story 5.19, ADR-0013) ([86d61de](https://github.com/vilosource/herddash/commit/86d61de85d5080103ad61083e89e3409e280c50d))
+
 ## [0.6.0](https://github.com/vilosource/herddash/compare/v0.5.0...v0.6.0) (2026-10-26)
 
 
