@@ -183,6 +183,19 @@ launchctl print gui/$(id -u)/io.github.vilosource.herddash | grep -E 'state|pid|
 launchctl kickstart -k gui/$(id -u)/io.github.vilosource.herddash
 ```
 
+After a new binary, expect the Board to be down for about 30 seconds. The binaries are only
+ad-hoc signed, and launchd refuses the first start of a changed one: `last exit reason =
+OS_REASON_CODESIGNING`, with `Launch Constraint Violation` in the system log. It then holds off
+its 30-second respawn throttle, records the new binary and starts it. Nothing needs doing; wait
+for `state = running` before deciding it failed:
+
+```bash
+until launchctl print gui/$(id -u)/io.github.vilosource.herddash | grep -q 'state = running'; do sleep 2; done
+```
+
+*Seen on macOS 26.5.1 on 2026-10-26, at each of three binary changes, from `/usr/bin/log show`
+(launchd: "Requesting LWCR update on next spawn", then running 30 s later).*
+
 **Stop it.**
 
 ```bash
