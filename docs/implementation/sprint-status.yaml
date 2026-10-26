@@ -126,7 +126,7 @@ action_items:
   - epic: 5
     action: "When Epic 5 is done, ask the operator once; on their OK ship it as one PR and one release (vfkb c56d5199f84c)"
     owner: "operator"
-    status: open
+    status: done  # PR #55, released as v0.6.0 on 2026-10-26
   - epic: 5
     action: "Story 5.9 runs on or after 2026-11-03; it asks the operator only if the record shows Finished Agents that never cleared"
     owner: "dev"
