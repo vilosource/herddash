@@ -656,6 +656,9 @@ browser never reaches the herdr socket.
   label is the group heading, which carries that group's working, finished and idle counts, and
   the Needs you zone has a plain heading. Both are labels for the zones, not a control, an excerpt
   or a second data type per Box, so they need no ADR.
+  *Amended 2026-10-26 (operator decision, ADR-0013):* the Board also carries one title bar: a
+  text logo and a summary that restates the Needs you count and herdr's connection, no control
+  and no new fact.
 - **SM-C2: herdr load.** The Daemon issues no on-demand herdr reads to serve a page view; snapshot
   frequency is bounded by the reconcile timer. Counterbalances SM-2.
 

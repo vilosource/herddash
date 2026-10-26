@@ -241,6 +241,35 @@ export function documentTitle(views) {
   return n > 0 ? "(" + n + ") " + BOARD_TITLE + " · Needs you" : BOARD_TITLE;
 }
 
+// titleBar is what the title bar's summary shows (ADR-0013): {needs,
+// needsText, link, linkText}. needs counts the Agents that need you, 0 while
+// the Boxes are hidden, as documentTitle's. link is the summary's connection
+// tone: "lost" (the Daemon's stream), "down" (herdr disconnected), "bad" (the
+// gate hides the Boxes), "warn" (advisory), "none" (no state yet) or "ok"; linkText names herdr and
+// its version, or what is wrong. It repeats the strips' facts, never adds one.
+export function titleBar(views, connection, lost, status) {
+  const needs = status.hideBoxes ? 0 : views.filter((v) => v.attention_class === "needs_you").length;
+  const needsText = needs > 0 ? needs + (needs === 1 ? " needs you" : " need you") : "Nothing needs you";
+  const c = isObject(connection) ? connection : null;
+  const v = c && typeof c.herdr_version === "string" && c.herdr_version ? "herdr " + c.herdr_version : "herdr";
+  let link = "ok";
+  let linkText = v;
+  if (lost) {
+    link = "lost";
+    linkText = "Reconnecting…";
+  } else if (c && c.connected !== true) {
+    link = "down";
+    linkText = "herdr disconnected";
+  } else if (!c) {
+    link = "none";
+  } else if (status.hideBoxes) {
+    link = "bad";
+  } else if (c && c.gate === "advisory") {
+    link = "warn";
+  }
+  return { needs, needsText, link, linkText };
+}
+
 // layout splits views into what the Board draws: the top zone (Needs you
 // alone) and the lower zone's workspace groups (Finished, Idle, Background,
 // Working, Unknown), each in Board order with its header label and counts.

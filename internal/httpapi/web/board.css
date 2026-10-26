@@ -91,6 +91,52 @@ body {
 /* ---- Strips: thin, full width, stuck to the top, only when needed ---- */
 /* The header holds the strips' live region; it is what sticks. */
 .strips-bar { position: sticky; top: 0; z-index: 2; }
+/* ---- Title bar (ADR-0013): the wordmark, then a summary of what the strips and Boxes say ---- */
+.titlebar {
+  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  padding: var(--space-2) var(--space-4);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+.wordmark {
+  display: flex; align-items: center; gap: 0.55rem;
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-where);
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+}
+/* The mark: the Board's three lights, red, amber and green, as three bars. */
+.wordmark-mark {
+  flex: none;
+  width: 1.125rem; height: 1.125rem;
+  background:
+    linear-gradient(var(--needs-bg), var(--needs-bg)) 0 100% / 0.25rem 100% no-repeat,
+    linear-gradient(var(--idle-edge), var(--idle-edge)) 50% 100% / 0.25rem 70% no-repeat,
+    linear-gradient(var(--working-edge), var(--working-edge)) 100% 100% / 0.25rem 45% no-repeat;
+}
+.wordmark-herd { font-weight: 800; color: var(--ink); }
+.wordmark-dash { font-weight: 400; color: var(--ink-muted); }
+.summary {
+  display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-4);
+  margin: 0;
+  font-size: var(--text-meta);
+  color: var(--ink-muted);
+}
+.summary-item { display: inline-flex; align-items: center; gap: 0.4rem; white-space: nowrap; }
+.summary-item::before {
+  content: ""; flex: none;
+  width: 0.5rem; height: 0.5rem; border-radius: 50%;
+  background: var(--ink-faint);
+}
+.summary-needs--on { color: var(--ink); font-weight: 700; }
+.summary-needs--on::before { background: var(--needs-bg); }
+.summary-link--ok::before   { background: var(--working-edge); }
+.summary-link--warn::before { background: var(--idle-edge); }
+.summary-link--bad::before  { background: var(--needs-bg); }
+.summary-link--down, .summary-link--lost { color: var(--ink); font-weight: 600; }
+
 .strip {
   margin: 0;
   padding: var(--space-2) var(--space-4);
