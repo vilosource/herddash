@@ -548,7 +548,14 @@ async function main() {
     check("no console warnings or exceptions", unexpected.length === 0, browser.warnings);
   } finally {
     await browser.close();
-    rmSync(root, { recursive: true, force: true, maxRetries: 5 });
+    // Chrome's helper processes can outlive the main one and still write to
+    // the profile, so removal can race them. A leftover temporary directory
+    // is not what this check is about: warn, do not fail.
+    try {
+      rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+    } catch (e) {
+      console.warn(`warn   could not remove ${root}: ${e.code || e.message}`);
+    }
   }
 }
 
