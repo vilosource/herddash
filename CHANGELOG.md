@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.6.0](https://github.com/vilosource/herddash/compare/v0.5.0...v0.6.0) (2026-10-26)
+
+
+### Features
+
+* **engine:** retry a Profile lookup that failed transiently (Story 5.4) ([4b3564e](https://github.com/vilosource/herddash/commit/4b3564eee5b598918e3124039fd219577b7fb45b))
+
+
+### Bug Fixes
+
+* **board:** exact Box text and one group per unlisted workspace (Story 5.13) ([4b3564e](https://github.com/vilosource/herddash/commit/4b3564eee5b598918e3124039fd219577b7fb45b))
+* **board:** notice a hung Daemon, a skipped publication and a rejected event ([4b3564e](https://github.com/vilosource/herddash/commit/4b3564eee5b598918e3124039fd219577b7fb45b))
+* **core:** a local-command stderr result is not a turn; bash mode stays one ([4b3564e](https://github.com/vilosource/herddash/commit/4b3564eee5b598918e3124039fd219577b7fb45b))
+* **core:** a manual /recap reaches the Board, and local commands are not turns ([4b3564e](https://github.com/vilosource/herddash/commit/4b3564eee5b598918e3124039fd219577b7fb45b))
+* **core:** a resumed Claude Code session's stopped tasks close (Story 5.2) ([4b3564e](https://github.com/vilosource/herddash/commit/4b3564eee5b598918e3124039fd219577b7fb45b))
+* **core:** a resumed subagent counts as background work (Story 5.16) ([4b3564e](https://github.com/vilosource/herddash/commit/4b3564eee5b598918e3124039fd219577b7fb45b))
+* **engine:** a new Agent in a reused pane starts fresh ([4b3564e](https://github.com/vilosource/herddash/commit/4b3564eee5b598918e3124039fd219577b7fb45b))
+* **engine:** a Profile hold always ends (Story 5.18) ([4b3564e](https://github.com/vilosource/herddash/commit/4b3564eee5b598918e3124039fd219577b7fb45b))
+* **engine:** a released pane's next Agent starts fresh across a restart ([4b3564e](https://github.com/vilosource/herddash/commit/4b3564eee5b598918e3124039fd219577b7fb45b))
+* **engine:** treat repeated snapshot failures as a lost connection (Story 5.12) ([4b3564e](https://github.com/vilosource/herddash/commit/4b3564eee5b598918e3124039fd219577b7fb45b))
+
+
+### Documentation
+
+* **adr:** ADR-0012, an observable keepalive on the event stream ([4b3564e](https://github.com/vilosource/herddash/commit/4b3564eee5b598918e3124039fd219577b7fb45b))
+* retrospectives for Epics 1 to 4, and documents agents read match the code (Story 5.8) ([4b3564e](https://github.com/vilosource/herddash/commit/4b3564eee5b598918e3124039fd219577b7fb45b))
+
 ## [0.5.0](https://github.com/vilosource/herddash/compare/v0.4.0...v0.5.0) (2026-10-22)
 
 
