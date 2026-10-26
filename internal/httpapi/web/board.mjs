@@ -30,10 +30,13 @@ import {
   stripsKey,
   waitingLabel,
   tabLabel,
+  titleBar,
 } from "./order.mjs";
 
 const board = document.getElementById("board");
 const stripsEl = document.getElementById("strips");
+const summaryNeeds = document.getElementById("summary-needs");
+const summaryLink = document.getElementById("summary-link");
 
 // st is the stream state streamDecision keeps: the model among it.
 let st = streamState();
@@ -199,6 +202,7 @@ let stripTick = null;
 // replaces an announced node.
 function drawStatus(status) {
   board.classList.toggle("board--stale", status.dimmed);
+  drawTitleBar(status);
   const k = stripsKey(status.strips);
   if (k !== drawnStrips) {
     drawnStrips = k;
@@ -227,8 +231,21 @@ function drawStatus(status) {
   if (tick && stripTick && stripTick.textContent !== tick.text) stripTick.textContent = tick.text;
 }
 
+// drawTitleBar draws the title bar's summary (ADR-0013): the Needs you count
+// and herdr's connection, the facts the strips and the browser title already
+// carry, so it is not a live region.
+function drawTitleBar(status) {
+  const t = titleBar(modelViews(st.model), st.model.connection, status.lost, status);
+  if (summaryNeeds.textContent !== t.needsText) summaryNeeds.textContent = t.needsText;
+  summaryNeeds.classList.toggle("summary-needs--on", t.needs > 0);
+  if (summaryLink.textContent !== t.linkText) summaryLink.textContent = t.linkText;
+  const cls = "summary-item summary-link summary-link--" + t.link;
+  if (summaryLink.className !== cls) summaryLink.className = cls;
+}
+
 function currentStatus(now) {
-  return boardStatus(st.model.connection, streamLost(st, now), now);
+  const lost = streamLost(st, now);
+  return { ...boardStatus(st.model.connection, lost, now), lost };
 }
 
 // hiddenFocus is the keyId of the Box that had focus when the Boxes were

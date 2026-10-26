@@ -17,6 +17,7 @@ import {
   STREAM_SILENCE_MS,
   applyEvent,
   boardStatus,
+  titleBar,
   boxLabel,
   anyRecap,
   contextText,
@@ -1397,4 +1398,27 @@ test("golden fixture: recap as the Daemon sent it", () => {
     assert.equal(contextText(i.view), i.recap);
   }
   assert.equal(anyRecap(fixture.input.map((i) => i.view)), true);
+});
+
+// The title bar's summary (ADR-0013, Story 5.19) restates the Needs you count
+// and herdr's connection.
+test("titleBar: the Needs you count, 0 while the Boxes are hidden", () => {
+  const conn = { connected: true, gate: "ok", herdr_version: "0.9.5", herdr_minimum: "0.9.5" };
+  const v = (c) => ({ attention_class: c });
+  const at = (views, c, lost) => titleBar(views, c, lost, boardStatus(c, lost, 0));
+  assert.deepEqual(at([], conn, false), { needs: 0, needsText: "Nothing needs you", link: "ok", linkText: "herdr 0.9.5" });
+  assert.equal(at([v("needs_you"), v("working")], conn, false).needsText, "1 needs you");
+  assert.equal(at([v("needs_you"), v("needs_you")], conn, false).needsText, "2 need you");
+  const refused = { ...conn, herdr_version: "0.8.2", gate: "refused" };
+  assert.deepEqual(at([v("needs_you")], refused, false), { needs: 0, needsText: "Nothing needs you", link: "bad", linkText: "herdr 0.8.2" });
+});
+
+test("titleBar: herdr's connection, in the strips' order of precedence", () => {
+  const conn = { connected: true, gate: "ok", herdr_version: "0.9.5", herdr_minimum: "0.9.5" };
+  const at = (c, lost) => titleBar([], c, lost, boardStatus(c, lost, 0));
+  assert.deepEqual([at({ ...conn, gate: "advisory", herdr_version: "0.9.2" }, false).link, at({ ...conn, gate: "advisory", herdr_version: "0.9.2" }, false).linkText], ["warn", "herdr 0.9.2"]);
+  assert.deepEqual([at({ ...conn, connected: false }, false).link, at({ ...conn, connected: false }, false).linkText], ["down", "herdr disconnected"]);
+  assert.deepEqual([at({ ...conn, connected: false }, true).link, at({ ...conn, connected: false }, true).linkText], ["lost", "Reconnecting…"]);
+  assert.deepEqual([at(null, false).link, at(null, false).linkText], ["none", "herdr"]);
+  assert.deepEqual([at({ ...conn, herdr_version: "" }, false).linkText], ["herdr"]);
 });

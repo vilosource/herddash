@@ -218,6 +218,11 @@ const SNAP = `JSON.stringify({
   strips: [...document.querySelectorAll("#strips .strip")].map((s) => ({ kind: s.className, text: s.textContent })),
   stale: document.getElementById("board").classList.contains("board--stale"),
   boxes: document.querySelectorAll("#board .box").length,
+  logo: document.querySelector(".titlebar h1")?.textContent,
+  needs: document.getElementById("summary-needs")?.textContent,
+  needsOn: !!document.querySelector(".summary-needs--on"),
+  link: document.getElementById("summary-link")?.textContent,
+  linkKind: document.getElementById("summary-link")?.className,
 })`;
 
 // Each Box in document order: where it sits and what its four rows say.
@@ -251,6 +256,15 @@ async function main() {
     await browser.open("http://" + addr + "/");
     let s = await until("a Box", async () => ((await snap()).boxes > 0 ? snap() : null));
     check("connected: no strip, Boxes not dimmed", s.strips.length === 0 && !s.stale, s);
+    s = await until("the title bar's Needs you count", async () => {
+      const x = await snap();
+      return x.needs === "1 needs you" ? x : null;
+    });
+    check(
+      "title bar: logo, Needs you count and herdr's version (ADR-0013)",
+      s.logo === "herddash" && s.needsOn && s.link === "herdr 0.9.5" && s.linkKind.includes("summary-link--ok"),
+      s,
+    );
 
     const b = await until("both Boxes", async () => {
       const x = JSON.parse(await browser.eval(BOXES));
@@ -457,6 +471,7 @@ async function main() {
       kinds(s).join() === "disconnected" && s.stale && s.boxes > 0 && s.strips[0].text.startsWith("Disconnected from herdr. Last snapshot"),
       s,
     );
+    check("herdr stopped: the title bar says so", s.link === "herdr disconnected" && s.linkKind.includes("summary-link--down"), s);
     await herdr.start();
     s = await until("the strip to clear", async () => {
       const x = await snap();
@@ -484,6 +499,7 @@ async function main() {
           Date.now() - hungAt >= STREAM_SILENCE_MS - 15000,
         s,
       );
+      check("serve hung: the title bar says it is reconnecting", s.link === "Reconnecting…" && s.linkKind.includes("summary-link--lost"), s);
     } finally {
       d.signal("SIGCONT");
     }

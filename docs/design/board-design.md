@@ -162,9 +162,28 @@ Empty states:
 - With no Agent needing you, the Needs you zone and its heading are not drawn, and the first
   workspace heading draws no rule.
 - With no other Agent, nothing is drawn below the Needs you zone.
-- With zero Agents, the Board is bare: just the page background and any strip. The spec admits
+- With zero Agents, the Board is bare: just the title bar and any strip. The spec admits
   no other element, so there is no "no agents" message. **That is a deliberate choice for the
   operator to confirm.**
+
+## Title bar
+
+Added 2026-10-26 (ADR-0013, Story 5.19), approved by the operator from the Board rendered with
+their live data. One bar, `--surface` with a `--border` rule below it, sticky at the top with the
+strips beneath it:
+
+- **Left, the text logo:** a mark of three bottom-aligned bars, `--needs-bg`, `--idle-edge` and
+  `--working-edge` at full, 70% and 45% height, then `herddash` in `--font-mono` at
+  `--text-where`, `herd` 800 in `--ink`, `dash` 400 in `--ink-muted`. It is the page's `h1`.
+- **Right, the summary** at `--text-meta`, each item led by an 8px dot:
+  - the Needs you count: "1 needs you" or "N need you", bold `--ink` with a `--needs-bg` dot,
+    or "Nothing needs you" muted with an `--ink-faint` dot. It is 0 while the Boxes are hidden,
+    as the browser title's is.
+  - herdr: `herdr <version>` with a `--working-edge` dot, `--idle-edge` when the gate is advisory
+    and `--needs-bg` when it hides the Boxes; "herdr disconnected" or "Reconnecting…", semibold
+    with an `--ink-faint` dot, while the disconnected strip shows.
+- The summary restates what the strips and the browser title say. It is not a live region and
+  holds no control. On a narrow screen it wraps under the logo.
 
 ## Strips
 
@@ -216,7 +235,7 @@ width.
 
 ## Accessibility
 
-DOM order is the reading order: strips (a polite live region), then the Needs you zone, then the
+DOM order is the reading order: the title bar, the strips (a polite live region), then the Needs you zone, then the
 workspace groups. The Needs you heading is visible; the lower zone has a visually hidden heading,
 and workspace labels are headings.
 Each Box is focusable and shows a 3px `--focus` outline offset outside it, and the review
@@ -231,6 +250,6 @@ text, not only colour.
 The Board has no controls: no focus, send, kill or open-in-terminal action, no filters, no
 search and no settings. It shows no pane output, excerpts or scrollback, and no second data type
 per Box: no history or charts. The only counts are each workspace group's heading counts
-(amended 2026-10-21). It has no title bar, logo or footer. The Board is Boxes, the Needs you and
-workspace headings and the two strips. Anything more needs an ADR superseding
+(amended 2026-10-21). It has no footer. The Board is the title bar (ADR-0013, 2026-10-26), Boxes,
+the Needs you and workspace headings and the two strips. Anything more needs an ADR superseding
 ADR-0003.

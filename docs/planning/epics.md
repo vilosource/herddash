@@ -131,7 +131,8 @@ The deferred-work list and the PRD's open question on acknowledgement are closed
 tracking stays correct across resumed and cleared sessions, CI checks what only a developer's Mac
 or a hand-run browser checked before, and the documents agents read stop contradicting the code.
 Planned on 2026-10-23 with the operator's decisions taken up front (vfkb c56d5199f84c, 1e89662f83af).
-**FRs covered:** none new; hardens ADR-0009, FR-10, FR-1/2 (Board drawing) and PRD §8 Q1
+**FRs covered:** none new; hardens ADR-0009, FR-10, FR-1/2 (Board drawing) and PRD §8 Q1.
+Added 2026-10-26 after 0.6.0: Story 5.19, the Board's title bar (ADR-0013), at the operator's request.
 
 ## Epic 1: See every agent's status, live, from the terminal
 
@@ -1147,3 +1148,21 @@ so a permanently hung read leaves 1 + `profileRetries` goroutines per trigger.
 **And** a trigger arriving while rows are held does not move the hold's deadline
 **And** at most one environment read per pane is in flight, so a hung read cannot multiply goroutines
 **And** the reviewer's reproduction becomes a test that passes, alongside the existing Profile tests
+
+### Story 5.19: A title bar on the Board
+
+As the operator,
+I want a standard title bar with a text logo at the top of the Board,
+So that the page says what it is, and whether anything needs me and herdr is connected, at a glance.
+
+Source: operator request, 2026-10-26; the Board design forbade a title bar, so ADR-0013 amends
+ADR-0003 and SM-C1. Design approved by the operator from the Board rendered with their live data.
+
+**Acceptance Criteria:**
+
+**Given** the Board is open
+**Then** a title bar, sticky above the strips, shows the text logo `herddash` with its three-bar mark, and a summary of the Needs you count and herdr's version
+**And** the summary's rules are a pure function in `order.mjs` (`titleBar`), tested with `node --test`: the count is 0 while the Boxes are hidden, and the herdr item reads "Reconnecting…" when the stream is lost, "herdr disconnected" when herdr is, and otherwise `herdr <version>` with a tone of ok, warn (advisory) or bad (Boxes hidden)
+**And** the summary is not a live region and holds no control; the strips are unchanged
+**And** the browser check asserts the title bar's text in the connected, needs-you and disconnected states
+**And** the design doc, SM-C1 and the ADR index record the change
