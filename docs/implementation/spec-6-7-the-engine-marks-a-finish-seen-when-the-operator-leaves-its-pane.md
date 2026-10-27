@@ -187,7 +187,10 @@ rule removed (`TestFocusFromSnapshot`), `FinishHasRow` forced false
 `missedTurn` keeping the row (`TestFocusMarkAcrossRestartAndMissedTurn`), the disconnect drop
 removed, and it with the ready check (`TestFocusEventBeforeFirstSnapshot`).
 
-### 2026-10-27 — Review findings triaged
+### 2026-10-27 — Review round 1 findings triaged
+
+Fixed 1, deferred 1, rejected 0.
+
 
 - `[low]` `[fixed]` A snapshot read newer than a `pane_focused` still on its way (separate
   connections) moved focus without a leave, and the event then counted as a repeat, so a real
@@ -199,7 +202,8 @@ removed, and it with the ready check (`TestFocusEventBeforeFirstSnapshot`).
 - `[low]` `[defer]` `in_view` toggling redraws a Finished Box whole, recreating its Seen pill, so a
   keyboard-focused pill (or a Vimium hint on it) is lost on every herdr focus move into or out of
   that pane. Story 6.8 draws `in_view` and adds `Mark unseen`; its acceptance criteria now require
-  a redraw to keep focus on the same control.
+  a redraw to keep focus on the same control (`docs/planning/epics.md`, committed in 8102984).
+- Rejected: none.
 
 ## Verification
 
