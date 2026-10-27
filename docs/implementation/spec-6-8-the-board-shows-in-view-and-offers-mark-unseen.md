@@ -151,6 +151,16 @@ operator's dogfooding with live data (Story 6.9).
   `docs/config.example.toml`, and `serve` logs a warning whenever it is set, so a Daemon running
   with it says so in its log.
 
+### 2026-10-27 — Review round 1
+- `[low]` `[patch]` No check read Mark unseen's `disabled` while the Boxes were dimmed, an
+  acceptance criterion: Story 6.4's dim check runs where no Box is Seen. `board-browser.mjs`
+  section 5 now makes 2: beta Seen by a Board mark if its leave did not, and after `serve` stops
+  checks every Mark unseen pill is disabled; with `button.unack` dropped from `syncControls` it
+  fails, tried.
+- `[low]` `[defer]` The in-view tag's title promises a mark on leaving even for a finish that
+  already has an acknowledgement row, which the leave check never marks. Fixing it changes
+  ADR-0015's view contract or its wording; recorded in `deferred-work.md`.
+
 ## Design Notes
 
 The tag and both pills follow from `boxKind`, so they cannot disagree with the class label, the
