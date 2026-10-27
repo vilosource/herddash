@@ -24,6 +24,9 @@ import (
 // workspace's position in the snapshot's workspace list, which is herdr's order,
 // and the pane's position in its tab, from the tab's layout rectangles
 // (core.PanePositions).
+//
+// The snapshot's focused_pane_id is mapped to FocusedPaneID, "" when absent or
+// null (ADR-0015).
 func mapSnapshot(s gen.SessionSnapshot) core.Snapshot {
 	type workspace struct {
 		label    string
@@ -69,6 +72,9 @@ func mapSnapshot(s gen.SessionSnapshot) core.Snapshot {
 		}
 	}
 	out := core.Snapshot{HerdrVersion: s.Version, Panes: make([]core.PaneObservation, 0, len(s.Panes))}
+	if s.FocusedPaneID != nil {
+		out.FocusedPaneID = *s.FocusedPaneID
+	}
 	seen := make(map[string]bool, len(s.Panes))
 	for _, p := range s.Panes {
 		seen[p.PaneID] = true
@@ -136,12 +142,24 @@ func mapForegroundProcess(pi gen.PaneProcessInfo) (core.ForegroundProcess, error
 // its kind's type is undecodable and ends the stream.
 var errUnexpectedEvent = errors.New("unexpected event")
 
+// errSkipEvent is returned by a decoder for a line the subscription drops
+// without any delivery: neither an event nor an unexpected line. herdr sends
+// workspace_focused and tab_focused with every pane_focused, which carries
+// everything they do (ADR-0015); herddash does not subscribe to them, and
+// should herdr send them anyway they must not count as unexpected, which
+// would make the engine read a snapshot on every focus move.
+var errSkipEvent = errors.New("skipped event")
+
 // decodeLifecycle decodes one line of the lifecycle subscription, whose envelope
 // is {event, data} with underscored event names.
 func decodeLifecycle(line []byte) (core.LifecycleEvent, error) {
 	var env gen.EventEnvelope
 	if err := json.Unmarshal(line, &env); err != nil {
 		return core.LifecycleEvent{}, fmt.Errorf("decode lifecycle envelope: %w", err)
+	}
+	if env.Event == gen.EventKindWorkspaceFocused || env.Event == gen.EventKindTabFocused {
+		// Dropped whatever they carry: pane_focused says all they say.
+		return core.LifecycleEvent{}, errSkipEvent
 	}
 	if len(env.Data) == 0 {
 		return core.LifecycleEvent{}, fmt.Errorf("%w: lifecycle line has no data", errUnexpectedEvent)
@@ -191,6 +209,12 @@ func decodeLifecycle(line []byte) (core.LifecycleEvent, error) {
 		// Only a signal to read again: the snapshot is the truth for context, so
 		// the payload is not decoded.
 		return core.LifecycleEvent{Kind: core.LifecycleContextChanged}, nil
+	case gen.EventKindPaneFocused:
+		var d gen.EventDataPaneFocused
+		if err := decodeData(env, &d); err != nil {
+			return core.LifecycleEvent{}, err
+		}
+		return lifecycle(core.LifecycleEvent{Kind: core.LifecycleFocused, PaneID: d.PaneID, WorkspaceID: d.WorkspaceID})
 	}
 	return core.LifecycleEvent{}, fmt.Errorf("%w: lifecycle event %q", errUnexpectedEvent, env.Event)
 }

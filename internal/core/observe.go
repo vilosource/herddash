@@ -12,6 +12,10 @@ type Snapshot struct {
 	// HerdrVersion is the version string the snapshot reported, for example "0.9.5".
 	HerdrVersion string
 	Panes        []PaneObservation
+	// FocusedPaneID is the pane herdr reports focused (ADR-0015), "" when the
+	// snapshot named none. herdr names one even with no terminal client
+	// attached, so it does not mean someone is looking at that pane.
+	FocusedPaneID string
 }
 
 // Pane returns the pane with the given pane id and true, or the zero value and
@@ -95,13 +99,17 @@ const (
 	// renamed, moved or reordered, or that a pane was updated. It carries no
 	// detail: it is only a signal that tracked context may be stale.
 	LifecycleContextChanged LifecycleKind = "context_changed"
+	// LifecycleFocused is herdr reporting that a client, or an API focus call,
+	// landed on a pane (ADR-0015). It can repeat for the pane already focused,
+	// and names no client, previous pane or time. herddash only reads it.
+	LifecycleFocused LifecycleKind = "focused"
 )
 
 // Valid reports whether k is one of the lifecycle kinds.
 func (k LifecycleKind) Valid() bool {
 	switch k {
 	case LifecycleCreated, LifecycleClosed, LifecycleMoved, LifecycleExited, LifecycleAgentDetected, LifecycleAgentReleased,
-		LifecycleContextChanged:
+		LifecycleContextChanged, LifecycleFocused:
 		return true
 	}
 	return false
@@ -115,8 +123,9 @@ type LifecycleEvent struct {
 	PaneID string
 	// PreviousPaneID is the pane's id before a move; "" for every other kind.
 	PreviousPaneID string
-	// TerminalID, WorkspaceID and TabID are the pane's, for created and moved
-	// events; "" for every other kind.
+	// TerminalID and TabID are the pane's, for created and moved events; ""
+	// for every other kind. WorkspaceID is the pane's for created, moved and
+	// focused events; "" for every other kind.
 	TerminalID  string
 	WorkspaceID string
 	TabID       string

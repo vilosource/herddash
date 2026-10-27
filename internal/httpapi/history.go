@@ -36,6 +36,9 @@ type wireAcknowledgement struct {
 	FinishedSince int64 `json:"finished_since"`
 	Seen          bool  `json:"seen"`
 	ObservedAt    int64 `json:"observed_at"`
+	// Source is where the row came from, "board" or "herdr_focus"
+	// (ADR-0015); always sent.
+	Source core.AckSource `json:"source"`
 }
 
 // parseHistoryPath returns the AgentKey a request URL's history path names,
@@ -133,7 +136,8 @@ func (h *Handler) serveHistory(w http.ResponseWriter, r *http.Request, key core.
 		out.Transitions[i] = newWireTransition(t)
 	}
 	for i, a := range acks {
-		out.Acknowledgements[i] = wireAcknowledgement{FinishedSince: a.FinishedSince(), Seen: a.Seen(), ObservedAt: a.ObservedAt()}
+		out.Acknowledgements[i] = wireAcknowledgement{FinishedSince: a.FinishedSince(), Seen: a.Seen(), ObservedAt: a.ObservedAt(),
+			Source: a.Source()}
 	}
 	body, err := json.Marshal(out)
 	if err != nil {

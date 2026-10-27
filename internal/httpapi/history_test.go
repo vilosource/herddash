@@ -8,12 +8,14 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/vilosource/herddash/internal/core"
 	"github.com/vilosource/herddash/internal/engine"
+	"github.com/vilosource/herddash/internal/store"
 )
 
 // noHistory is a History with no rows for any key.
@@ -228,7 +230,7 @@ func TestHistoryOrder(t *testing.T) {
 
 func mustAck(t *testing.T, key core.AgentKey, since int64, seen bool, at int64) core.Acknowledgement {
 	t.Helper()
-	a, err := core.NewAcknowledgement(core.AcknowledgementInput{Key: key, FinishedSince: since, Seen: seen, ObservedAt: at})
+	a, err := core.NewAcknowledgement(core.AcknowledgementInput{Source: core.AckSourceBoard, Key: key, FinishedSince: since, Seen: seen, ObservedAt: at})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,7 +263,7 @@ func TestHistoryAcknowledgements(t *testing.T) {
 	if len(got.Transitions) != 3 {
 		t.Errorf("%d transitions, want 3", len(got.Transitions))
 	}
-	want := `[{"finished_since":1000,"seen":true,"observed_at":5000},{"finished_since":1000,"seen":false,"observed_at":4000},{"finished_since":3000,"seen":true,"observed_at":6000}]`
+	want := `[{"finished_since":1000,"seen":true,"observed_at":5000,"source":"board"},{"finished_since":1000,"seen":false,"observed_at":4000,"source":"board"},{"finished_since":3000,"seen":true,"observed_at":6000,"source":"board"}]`
 	if string(got.Acknowledgements) != want {
 		t.Errorf("acknowledgements %s, want %s", got.Acknowledgements, want)
 	}
@@ -270,6 +272,56 @@ func TestHistoryAcknowledgements(t *testing.T) {
 	w = do(newHistoryHandler(f, nil), http.MethodGet, "/api/agents/mac/a%2Fb/2/w1:p1/history", "localhost", nil)
 	if w.Code != http.StatusOK || !strings.HasSuffix(w.Body.String(), `,"acknowledgements":[]}`) {
 		t.Errorf("no rows: status %d, body %s", w.Code, w.Body)
+	}
+}
+
+// TestHistoryAcknowledgementSource reads an Agent with a board row and a
+// herdr_focus row, written directly through a real store (ADR-0015): each
+// history item carries its source, always sent.
+func TestHistoryAcknowledgementSource(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "data", "herddash.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	for _, in := range []core.TransitionInput{
+		{Key: liveKey, AgentProgram: "claude", Profile: "work", New: core.StatusWorking, ObservedAt: 1000, Provenance: core.ProvenanceLive},
+		{Key: liveKey, AgentProgram: "claude", Profile: "work", Previous: statusPtr(core.StatusWorking), New: core.StatusDone,
+			ObservedAt: 2000, Provenance: core.ProvenanceLive},
+	} {
+		if err := st.Append(mustTransition(t, in)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	row := func(seen bool, at int64, src core.AckSource) core.Acknowledgement {
+		t.Helper()
+		a, err := core.NewAcknowledgement(core.AcknowledgementInput{Key: liveKey, FinishedSince: 2000, Seen: seen, ObservedAt: at, Source: src})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return a
+	}
+	if err := st.AppendAcknowledgements(context.Background(), []core.Acknowledgement{
+		row(true, 3000, core.AckSourceHerdrFocus), row(false, 4000, core.AckSourceBoard),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	v := testView()
+	h := New(Options{View: func() engine.View { return v }, Subscribe: noSubscribe, History: st.History, Acknowledge: noAcknowledge,
+		Acknowledgements: st.Acknowledgements})
+	w := do(h, http.MethodGet, "/api/agents/mac/default/2/w1:p1/history", "localhost", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d, body %s", w.Code, w.Body)
+	}
+	var got struct {
+		Acknowledgements json.RawMessage `json:"acknowledgements"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	want := `[{"finished_since":2000,"seen":true,"observed_at":3000,"source":"herdr_focus"},{"finished_since":2000,"seen":false,"observed_at":4000,"source":"board"}]`
+	if string(got.Acknowledgements) != want {
+		t.Errorf("acknowledgements %s, want %s", got.Acknowledgements, want)
 	}
 }
 

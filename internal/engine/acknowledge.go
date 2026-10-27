@@ -176,7 +176,8 @@ func (e *Engine) acknowledge(req AckRequest) ([]core.AgentView, error) {
 		if !write[i] {
 			continue
 		}
-		in := core.AcknowledgementInput{Key: it.Key, FinishedSince: it.WaitingSince, Seen: req.Seen, ObservedAt: now}
+		in := core.AcknowledgementInput{Key: it.Key, FinishedSince: it.WaitingSince, Seen: req.Seen, ObservedAt: now,
+			Source: core.AckSourceBoard}
 		if p := panes[i]; p.herdr == p.status {
 			// herdr's order for the Status acknowledged, when a snapshot
 			// has read it since it last changed: a restart compares it with

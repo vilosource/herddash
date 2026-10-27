@@ -3,11 +3,12 @@ package core
 import (
 	"errors"
 	"testing"
+	"time"
 )
 
 func ack(t *testing.T, since int64, seen bool, at int64) Acknowledgement {
 	t.Helper()
-	a, err := NewAcknowledgement(AcknowledgementInput{
+	a, err := NewAcknowledgement(AcknowledgementInput{Source: AckSourceBoard,
 		Key: AgentKey{Host: "mac", Server: "default", Epoch: 1, PaneID: "w1:p1"}, FinishedSince: since, Seen: seen, ObservedAt: at,
 	})
 	if err != nil {
@@ -17,14 +18,19 @@ func ack(t *testing.T, since int64, seen bool, at int64) Acknowledgement {
 }
 
 func TestNewAcknowledgement(t *testing.T) {
-	good := AcknowledgementInput{Key: AgentKey{Host: "mac", Server: "default", Epoch: 2, PaneID: "w1:p1"},
+	good := AcknowledgementInput{Source: AckSourceBoard, Key: AgentKey{Host: "mac", Server: "default", Epoch: 2, PaneID: "w1:p1"},
 		FinishedSince: 100, Seen: true, ObservedAt: 200}
 	a, err := NewAcknowledgement(good)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if a.Key() != good.Key || a.FinishedSince() != 100 || !a.Seen() || a.ObservedAt() != 200 {
-		t.Errorf("accessors %+v %d %v %d, want the input", a.Key(), a.FinishedSince(), a.Seen(), a.ObservedAt())
+	if a.Key() != good.Key || a.FinishedSince() != 100 || !a.Seen() || a.ObservedAt() != 200 || a.Source() != AckSourceBoard {
+		t.Errorf("accessors %+v %d %v %d %q, want the input", a.Key(), a.FinishedSince(), a.Seen(), a.ObservedAt(), a.Source())
+	}
+	auto := good
+	auto.Source = AckSourceHerdrFocus
+	if a, err := NewAcknowledgement(auto); err != nil || a.Source() != AckSourceHerdrFocus || !a.Seen() {
+		t.Errorf("herdr focus mark: source %q seen %v, %v; want a herdr_focus mark", a.Source(), a.Seen(), err)
 	}
 	undo := good
 	undo.Seen = false
@@ -40,6 +46,9 @@ func TestNewAcknowledgement(t *testing.T) {
 		"negative finished since": func(in *AcknowledgementInput) { in.FinishedSince = -1 },
 		"zero observed at":        func(in *AcknowledgementInput) { in.ObservedAt = 0 },
 		"negative observed at":    func(in *AcknowledgementInput) { in.ObservedAt = -5 },
+		"empty source":            func(in *AcknowledgementInput) { in.Source = "" },
+		"unknown source":          func(in *AcknowledgementInput) { in.Source = "other" },
+		"undo from herdr focus":   func(in *AcknowledgementInput) { in.Seen, in.Source = false, AckSourceHerdrFocus },
 	} {
 		in := good
 		mutate(&in)
@@ -175,7 +184,7 @@ func TestAgentViewSeen(t *testing.T) {
 }
 
 func TestAcknowledgementHerdrOrder(t *testing.T) {
-	in := AcknowledgementInput{Key: AgentKey{Host: "mac", Server: "default", Epoch: 2, PaneID: "w1:p1"},
+	in := AcknowledgementInput{Source: AckSourceBoard, Key: AgentKey{Host: "mac", Server: "default", Epoch: 2, PaneID: "w1:p1"},
 		FinishedSince: 100, Seen: true, ObservedAt: 200}
 	a, err := NewAcknowledgement(in)
 	if err != nil {
@@ -214,7 +223,7 @@ func TestSeenAt(t *testing.T) {
 	}
 	ackAt := func(since int64, seen bool, at int64, order *uint64) Acknowledgement {
 		t.Helper()
-		a, err := NewAcknowledgement(AcknowledgementInput{Key: key, FinishedSince: since, Seen: seen, ObservedAt: at, HerdrOrder: order})
+		a, err := NewAcknowledgement(AcknowledgementInput{Source: AckSourceBoard, Key: key, FinishedSince: since, Seen: seen, ObservedAt: at, HerdrOrder: order})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -255,5 +264,54 @@ func TestSeenAt(t *testing.T) {
 				t.Errorf("SeenAt %v, want %v", got, c.want)
 			}
 		})
+	}
+}
+
+func TestAckSourceValid(t *testing.T) {
+	for s, want := range map[AckSource]bool{
+		AckSourceBoard: true, AckSourceHerdrFocus: true, "": false, "other": false, "Board": false, "herdr-focus": false,
+	} {
+		if got := s.Valid(); got != want {
+			t.Errorf("AckSource(%q).Valid() = %v, want %v", s, got, want)
+		}
+	}
+}
+
+// SeenOnLeave is ADR-0015's rule, with no I/O and no clock: true only for a
+// Finished, non-Background, unseen view with a known waiting_since, no row
+// for the finish and a dwell at or above the minimum.
+func TestSeenOnLeave(t *testing.T) {
+	const min = 3 * time.Second
+	finished := AgentView{Class: ClassFinished, Status: StatusDone, WaitingSince: 1000}
+	base := LeaveInput{View: finished, Dwell: min, MinDwell: min}
+	with := func(mutate func(*LeaveInput)) LeaveInput {
+		in := base
+		mutate(&in)
+		return in
+	}
+	for _, tt := range []struct {
+		name string
+		in   LeaveInput
+		want bool
+	}{
+		{"finished, dwell exactly the minimum", base, true},
+		{"finished, dwell above the minimum", with(func(in *LeaveInput) { in.Dwell = time.Hour }), true},
+		{"finished idle (done to idle within the finish)", with(func(in *LeaveInput) { in.View.Status = StatusIdle }), true},
+		{"dwell the minimum minus 1 ms", with(func(in *LeaveInput) { in.Dwell = min - time.Millisecond }), false},
+		{"no dwell", with(func(in *LeaveInput) { in.Dwell = 0 }), false},
+		{"finish has a row (Mark unseen sticks)", with(func(in *LeaveInput) { in.FinishHasRow = true }), false},
+		{"needs you", with(func(in *LeaveInput) { in.View.Class, in.View.Status = ClassNeedsYou, StatusBlocked }), false},
+		{"idle (class working)", with(func(in *LeaveInput) { in.View.Class, in.View.Status = ClassWorking, StatusIdle }), false},
+		{"working", with(func(in *LeaveInput) { in.View.Class, in.View.Status = ClassWorking, StatusWorking }), false},
+		{"unknown", with(func(in *LeaveInput) { in.View.Class, in.View.Status = ClassUnknown, StatusUnknown }), false},
+		{"background", with(func(in *LeaveInput) { in.View.Background, in.View.BackgroundTasks = true, 1 }), false},
+		{"already seen", with(func(in *LeaveInput) { in.View.Seen = true }), false},
+		{"waiting_since unknown", with(func(in *LeaveInput) { in.View.WaitingSince = 0 }), false},
+		{"zero minimum still needs everything else", with(func(in *LeaveInput) { in.Dwell, in.MinDwell, in.FinishHasRow = 0, 0, true }), false},
+		{"zero minimum, zero dwell", with(func(in *LeaveInput) { in.Dwell, in.MinDwell = 0, 0 }), true},
+	} {
+		if got := SeenOnLeave(tt.in); got != tt.want {
+			t.Errorf("%s: SeenOnLeave = %v, want %v", tt.name, got, tt.want)
+		}
 	}
 }

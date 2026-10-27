@@ -531,7 +531,7 @@ func TestAckInRunReconnect(t *testing.T) {
 // seedAck adds an acknowledgement as if a previous run had recorded it.
 func seedAck(t *testing.T, st *fakeStore, key core.AgentKey, since int64, seen bool, at int64) {
 	t.Helper()
-	a, err := core.NewAcknowledgement(core.AcknowledgementInput{Key: key, FinishedSince: since, Seen: seen, ObservedAt: at})
+	a, err := core.NewAcknowledgement(core.AcknowledgementInput{Source: core.AckSourceBoard, Key: key, FinishedSince: since, Seen: seen, ObservedAt: at})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -920,7 +920,7 @@ func TestAckRestartMissedTurn(t *testing.T) {
 				done = snapRow(t, 200, 5)
 			}
 			st.seed(stored(t, "w1:p1", "", core.StatusWorking, 100, core.ProvenanceLive), done)
-			a, err := core.NewAcknowledgement(core.AcknowledgementInput{Key: key, FinishedSince: 200, Seen: true, ObservedAt: 300, HerdrOrder: c.ackOrder})
+			a, err := core.NewAcknowledgement(core.AcknowledgementInput{Source: core.AckSourceBoard, Key: key, FinishedSince: 200, Seen: true, ObservedAt: 300, HerdrOrder: c.ackOrder})
 			if err != nil {
 				t.Fatal(err)
 			}

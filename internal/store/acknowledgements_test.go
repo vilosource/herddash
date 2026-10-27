@@ -15,7 +15,7 @@ import (
 
 func mustAck(t *testing.T, key core.AgentKey, since int64, seen bool, at int64) core.Acknowledgement {
 	t.Helper()
-	a, err := core.NewAcknowledgement(core.AcknowledgementInput{Key: key, FinishedSince: since, Seen: seen, ObservedAt: at})
+	a, err := core.NewAcknowledgement(core.AcknowledgementInput{Source: core.AckSourceBoard, Key: key, FinishedSince: since, Seen: seen, ObservedAt: at})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,6 +221,18 @@ func TestAcknowledgementChecks(t *testing.T) {
 	}
 	if err := insert(1, 1, 0); err != nil {
 		t.Errorf("a valid undo refused: %v", err)
+	}
+	for _, src := range []string{"board", "herdr_focus"} {
+		if _, err := s.db.Exec(`INSERT INTO acknowledgements (host, server, epoch, pane_id, finished_since, seen, observed_at, source)
+			VALUES ('h', 's', 1, 'w1:p1', 1, 1, 1, ?)`, src); err != nil {
+			t.Errorf("source %q refused: %v", src, err)
+		}
+	}
+	for _, src := range []any{"other", "", "Board", nil} {
+		if _, err := s.db.Exec(`INSERT INTO acknowledgements (host, server, epoch, pane_id, finished_since, seen, observed_at, source)
+			VALUES ('h', 's', 1, 'w1:p1', 1, 1, 1, ?)`, src); err == nil {
+			t.Errorf("source %v accepted", src)
+		}
 	}
 	for name, r := range map[string][3]int{
 		"epoch 0":          {0, 1, 1},
@@ -443,9 +455,10 @@ func TestAcknowledgementsSurviveReopen(t *testing.T) {
 }
 
 // TestUpgradeFromSchema5: a database an Epic 6 -dev build left at schema 5,
-// with acknowledgements, is migrated to 6 with every row unchanged and its
-// acknowledgements read back with no herdr order; a new row's order round
-// trips; a binary that knows only schema 5 then refuses the database.
+// with acknowledgements, is migrated to 7 with every row unchanged and its
+// acknowledgements read back with no herdr order and source board; a new
+// row's order round trips; a binary that knows only schema 5 then refuses the
+// database.
 func TestUpgradeFromSchema5(t *testing.T) {
 	path := dbPath(t)
 	ms, err := migrations()
@@ -486,11 +499,11 @@ func TestUpgradeFromSchema5(t *testing.T) {
 			t.Errorf("%s changed by the upgrade:\n got %s\nwant %s", table, got, before[table])
 		}
 	}
-	if got, want := dumpTable(t, s.db, "acknowledgements"), strings.ReplaceAll(before["acknowledgements"], "\n", " <nil>\n"); got != want {
-		t.Errorf("acknowledgements after the upgrade:\n got %s\nwant %s (each row with a NULL herdr_order)", got, want)
+	if got, want := dumpTable(t, s.db, "acknowledgements"), strings.ReplaceAll(before["acknowledgements"], "\n", " <nil> board\n"); got != want {
+		t.Errorf("acknowledgements after the upgrade:\n got %s\nwant %s (each row with a NULL herdr_order and source board)", got, want)
 	}
 	order := uint64(42)
-	a, err := core.NewAcknowledgement(core.AcknowledgementInput{Key: keyP1, FinishedSince: 20, Seen: true, ObservedAt: 40, HerdrOrder: &order})
+	a, err := core.NewAcknowledgement(core.AcknowledgementInput{Source: core.AckSourceBoard, Key: keyP1, FinishedSince: 20, Seen: true, ObservedAt: 40, HerdrOrder: &order})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -507,6 +520,9 @@ func TestUpgradeFromSchema5(t *testing.T) {
 	if _, ok := acks[0].HerdrOrder(); ok {
 		t.Error("the schema-5 row reads back with a herdr order")
 	}
+	if src := acks[0].Source(); src != core.AckSourceBoard {
+		t.Errorf("the schema-5 row reads back with source %q, want board", src)
+	}
 	if got, ok := acks[1].HerdrOrder(); !ok || got != 42 {
 		t.Errorf("the new row's herdr order %d %v, want 42", got, ok)
 	}
@@ -521,7 +537,205 @@ func TestUpgradeFromSchema5(t *testing.T) {
 	defer raw.Close()
 	raw.SetMaxOpenConns(1)
 	err = (&Store{db: raw}).prepare(context.Background(), path, ms[:5])
-	if !errors.Is(err, ErrSchemaNewer) || !strings.Contains(err.Error(), "version 6") || !strings.Contains(err.Error(), "up to 5") {
-		t.Errorf("schema-5 binary on a schema-6 database: %v, want ErrSchemaNewer naming 6 and 5", err)
+	if !errors.Is(err, ErrSchemaNewer) || !strings.Contains(err.Error(), fmt.Sprintf("version %d", schemaVersion)) || !strings.Contains(err.Error(), "up to 5") {
+		t.Errorf("schema-5 binary on a schema-%d database: %v, want ErrSchemaNewer naming %d and 5", schemaVersion, err, schemaVersion)
+	}
+}
+
+// rawAt opens a database at path migrated only to the first n migrations, as
+// an older binary leaves it, and returns its handle.
+func rawAt(t *testing.T, path string, n int) *sql.DB {
+	t.Helper()
+	ms, err := migrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := sql.Open("sqlite", (&url.URL{Scheme: "file", Path: path}).String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw.SetMaxOpenConns(1)
+	if err := (&Store{db: raw}).prepare(context.Background(), path, ms[:n]); err != nil {
+		t.Fatal(err)
+	}
+	if v := userVersion(t, raw); v != n {
+		t.Fatalf("old database at %d, want %d", v, n)
+	}
+	return raw
+}
+
+// TestUpgradeFromSchema6: the operator's database, which the installed -dev
+// build (0.8.0-dev) left at schema 6 with acknowledgements, marks and undos,
+// with and without herdr's order, is migrated to 7 with every row of every
+// table unchanged but for the new source column, which reads board for each
+// earlier row; a binary that knows only schema 6 then refuses the database.
+func TestUpgradeFromSchema6(t *testing.T) {
+	path := dbPath(t)
+	raw := rawAt(t, path, 6)
+	old := &Store{db: raw}
+	liveAt(t, old, keyP1, "", core.StatusWorking, 10)
+	liveAt(t, old, keyP1, core.StatusWorking, core.StatusDone, 20)
+	if err := old.SaveServerState("mac", "default", ServerState{Epoch: 1, Terminals: map[string]string{"w1:p1": "t1"}}); err != nil {
+		t.Fatal(err)
+	}
+	// Schema 6's own INSERT, which names no source.
+	if _, err := raw.Exec(`INSERT INTO acknowledgements (host, server, epoch, pane_id, finished_since, seen, observed_at, herdr_order)
+		VALUES ('mac', 'default', 1, 'w1:p1', 20, 1, 30, 7), ('mac', 'default', 1, 'w1:p1', 20, 0, 31, NULL),
+		('mac', 'default', 1, 'w1:p1', 20, 1, 32, 7)`); err != nil {
+		t.Fatal(err)
+	}
+	before := map[string]string{}
+	for _, table := range append(slices.Clone(recordTables), "acknowledgements") {
+		before[table] = dumpTable(t, raw, table)
+	}
+	raw.Close()
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := userVersion(t, s.db); v != 7 {
+		t.Errorf("user_version %d, want 7", v)
+	}
+	for _, table := range recordTables {
+		if got := dumpTable(t, s.db, table); got != before[table] {
+			t.Errorf("%s changed by the upgrade:\n got %s\nwant %s", table, got, before[table])
+		}
+	}
+	if got, want := dumpTable(t, s.db, "acknowledgements"), strings.ReplaceAll(before["acknowledgements"], "\n", " board\n"); got != want {
+		t.Errorf("acknowledgements after the upgrade:\n got %s\nwant %s (each row with source board)", got, want)
+	}
+	acks, err := s.Acknowledgements(context.Background(), keyP1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var desc []string
+	for _, a := range acks {
+		o, _ := a.HerdrOrder()
+		desc = append(desc, fmt.Sprintf("%d:%v@%d#%d/%s", a.FinishedSince(), a.Seen(), a.ObservedAt(), o, a.Source()))
+	}
+	if got, want := strings.Join(desc, " "), "20:true@30#7/board 20:false@31#0/board 20:true@32#7/board"; got != want {
+		t.Errorf("acknowledgements read back %s, want %s", got, want)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err = sql.Open("sqlite", (&url.URL{Scheme: "file", Path: path}).String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+	raw.SetMaxOpenConns(1)
+	ms, err := migrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = (&Store{db: raw}).prepare(context.Background(), path, ms[:6])
+	if !errors.Is(err, ErrSchemaNewer) || !strings.Contains(err.Error(), "version 7") || !strings.Contains(err.Error(), "up to 6") {
+		t.Errorf("schema-6 binary on a schema-7 database: %v, want ErrSchemaNewer naming 7 and 6", err)
+	}
+}
+
+// TestUpgradeFromSchema6RollsBack: 0007 runs in the same transaction as any
+// migration after it, so a failing one leaves the database at schema 6 with
+// no source column and its rows unchanged.
+func TestUpgradeFromSchema6RollsBack(t *testing.T) {
+	path := dbPath(t)
+	raw := rawAt(t, path, 6)
+	if _, err := raw.Exec(`INSERT INTO acknowledgements (host, server, epoch, pane_id, finished_since, seen, observed_at)
+		VALUES ('mac', 'default', 1, 'w1:p1', 20, 1, 30)`); err != nil {
+		t.Fatal(err)
+	}
+	before := dumpTable(t, raw, "acknowledgements")
+	ms, err := migrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bad := append(ms[:7:7], migration{version: 8, name: "0008_bad.sql", sql: "CREATE TABLE nope ("})
+	if err := (&Store{db: raw}).prepare(context.Background(), path, bad); err == nil {
+		t.Fatal("a failing migration after 0007 was accepted")
+	}
+	if v := userVersion(t, raw); v != 6 {
+		t.Errorf("user_version %d after the failed upgrade, want 6", v)
+	}
+	for _, c := range tableInfo(t, raw, "acknowledgements") {
+		if c.name == "source" {
+			t.Error("the source column survived the rolled-back upgrade")
+		}
+	}
+	if got := dumpTable(t, raw, "acknowledgements"); got != before {
+		t.Errorf("acknowledgements changed by the failed upgrade:\n got %s\nwant %s", got, before)
+	}
+	raw.Close()
+}
+
+func mustAckFrom(t *testing.T, src core.AckSource, since int64, at int64) core.Acknowledgement {
+	t.Helper()
+	a, err := core.NewAcknowledgement(core.AcknowledgementInput{Key: keyP1, FinishedSince: since, Seen: true, ObservedAt: at, Source: src})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return a
+}
+
+// TestAcknowledgementSources: a batch mixing board and herdr_focus rows is
+// written in one transaction, so an abort forced on its second insert, after
+// the first row was written, leaves none of it; without the abort every row
+// reads back with its source, across a close and reopen.
+func TestAcknowledgementSources(t *testing.T) {
+	path := dbPath(t)
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	batch := []core.Acknowledgement{
+		mustAckFrom(t, core.AckSourceBoard, 100, 110),
+		mustAckFrom(t, core.AckSourceHerdrFocus, 200, 210),
+		mustAckFrom(t, core.AckSourceBoard, 300, 310),
+	}
+	if _, err := s.db.Exec(`CREATE TRIGGER boom BEFORE INSERT ON acknowledgements
+		WHEN NEW.source = 'herdr_focus' AND (SELECT count(*) FROM acknowledgements WHERE source = 'board') = 1
+		BEGIN SELECT RAISE(ABORT, 'boom'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AppendAcknowledgements(ctx, batch); err == nil || !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("error %v, want the trigger's", err)
+	}
+	if n := ackCount(t, s.db); n != 0 {
+		t.Errorf("%d acknowledgements after a failed batch, want none", n)
+	}
+	if _, err := s.db.Exec(`DROP TRIGGER boom`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AppendAcknowledgements(ctx, batch); err != nil {
+		t.Fatal(err)
+	}
+	read := func() string {
+		t.Helper()
+		acks, err := s.Acknowledgements(ctx, keyP1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var desc []string
+		for _, a := range acks {
+			desc = append(desc, fmt.Sprintf("%d/%s", a.FinishedSince(), a.Source()))
+		}
+		return strings.Join(desc, " ")
+	}
+	const want = "100/board 200/herdr_focus 300/board"
+	if got := read(); got != want {
+		t.Errorf("before the reopen %s, want %s", got, want)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if s, err = Open(path); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	if got := read(); got != want {
+		t.Errorf("after the reopen %s, want %s", got, want)
 	}
 }

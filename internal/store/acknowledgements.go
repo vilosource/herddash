@@ -9,10 +9,10 @@ import (
 )
 
 // insertAcknowledgement is the one INSERT of an acknowledgement (ADR-0014),
-// every column bound.
+// every column bound, its source (ADR-0015) included.
 const insertAcknowledgement = `INSERT INTO acknowledgements
-	(host, server, epoch, pane_id, finished_since, seen, observed_at, herdr_order)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+	(host, server, epoch, pane_id, finished_since, seen, observed_at, herdr_order, source)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 // AppendAcknowledgements inserts acknowledgements, in the order given, in one
 // transaction: every row is written or none is. None is a no-op. Rows are
@@ -47,7 +47,8 @@ func (s *Store) AppendAcknowledgements(ctx context.Context, acks []core.Acknowle
 				return err
 			}
 		}
-		if _, err := stmt.ExecContext(ctx, k.Host, k.Server, epoch, k.PaneID, a.FinishedSince(), seen, a.ObservedAt(), order); err != nil {
+		if _, err := stmt.ExecContext(ctx, k.Host, k.Server, epoch, k.PaneID, a.FinishedSince(), seen, a.ObservedAt(), order,
+			string(a.Source())); err != nil {
 			return fmt.Errorf("store: append acknowledgement for %s at %d: %w", k.PaneID, a.FinishedSince(), err)
 		}
 	}
@@ -69,7 +70,7 @@ func (s *Store) Acknowledgements(ctx context.Context, key core.AgentKey) ([]core
 	if err != nil {
 		return nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id, finished_since, seen, observed_at, herdr_order
+	rows, err := s.db.QueryContext(ctx, `SELECT id, finished_since, seen, observed_at, herdr_order, source
 		FROM acknowledgements WHERE host = ? AND server = ? AND epoch = ? AND pane_id = ?
 		ORDER BY id`, key.Host, key.Server, epoch, key.PaneID)
 	if err != nil {
@@ -81,10 +82,12 @@ func (s *Store) Acknowledgements(ctx context.Context, key core.AgentKey) ([]core
 		var id, since, observedAt int64
 		var seen bool
 		var order sql.NullInt64
-		if err := rows.Scan(&id, &since, &seen, &observedAt, &order); err != nil {
+		var source string
+		if err := rows.Scan(&id, &since, &seen, &observedAt, &order, &source); err != nil {
 			return nil, fmt.Errorf("store: acknowledgements of %s: %w", key.PaneID, err)
 		}
-		in := core.AcknowledgementInput{Key: key, FinishedSince: since, Seen: seen, ObservedAt: observedAt}
+		in := core.AcknowledgementInput{Key: key, FinishedSince: since, Seen: seen, ObservedAt: observedAt,
+			Source: core.AckSource(source)}
 		if order.Valid {
 			if order.Int64 < 0 {
 				return nil, fmt.Errorf("store: acknowledgements of %s: row %d: negative herdr order %d", key.PaneID, id, order.Int64)

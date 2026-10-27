@@ -1062,6 +1062,12 @@ func (e *Engine) onLifecycle(d herdr.Delivery[core.LifecycleEvent]) {
 		e.requestSnapshot()
 		return
 	}
+	if d.Event.Kind == core.LifecycleFocused {
+		// Focus is not a sign that tracked state is stale (ADR-0015): it
+		// neither counts as an event during a snapshot read nor requests
+		// one. Story 6.7 gives it meaning; until then it is ignored.
+		return
+	}
 	e.noteEvent()
 	ev := d.Event
 	switch ev.Kind {

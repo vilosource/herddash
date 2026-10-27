@@ -876,6 +876,13 @@ func (h *harness) lifecycle(ev core.LifecycleEvent) {
 	h.fake.lifecycleSub().event(ev)
 }
 
+// focus sends herdr's pane_focused for paneID, as internal/herdr delivers
+// it, once the lifecycle subscription exists (ADR-0015).
+func (h *harness) focus(paneID, workspaceID string) {
+	h.t.Helper()
+	h.lifecycle(core.LifecycleEvent{Kind: core.LifecycleFocused, PaneID: paneID, WorkspaceID: workspaceID})
+}
+
 var errBoom = errors.New("boom")
 
 // TestMain removes the snapshot floor and shortens the retry, reconnect and
