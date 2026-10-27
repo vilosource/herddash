@@ -349,6 +349,7 @@ func TestAgentViewJSON(t *testing.T) {
 		`"sort_key":[1,9007199254740991,4,9007199254740991,"mac/default/2/w1:p1"]`,
 		`"pane_position":""`,
 		`"background":false`,
+		`"seen":false`,
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("JSON %s lacks %s", s, want)
@@ -366,7 +367,7 @@ func TestAgentViewJSON(t *testing.T) {
 		t.Errorf("sort_key = %#v, want an array of five", m["sort_key"])
 	}
 	for _, f := range []string{"key", "agent_program", "profile", "heading", "directory", "workspace", "tab",
-		"pane_position", "status", "attention_class", "waiting_exact", "pane_title", "context_line", "recap", "background", "background_tasks", "sort_key"} {
+		"pane_position", "status", "attention_class", "waiting_exact", "pane_title", "context_line", "recap", "background", "background_tasks", "seen", "sort_key"} {
 		if _, ok := m[f]; !ok {
 			t.Errorf("JSON lacks %q", f)
 		}
@@ -406,6 +407,9 @@ type boardFixture struct {
 		// Recap is the latest session recap the transcript shows
 		// (ADR-0010), applied after Tasks and TurnEnded.
 		Recap string `json:"recap"`
+		// Seen is the operator's acknowledgement of the current finish
+		// (ADR-0014).
+		Seen bool `json:"seen"`
 		// View is the expected AgentView, as NewAgentView serialises it.
 		View json.RawMessage `json:"view"`
 	} `json:"input"`
@@ -444,7 +448,7 @@ func loadBoard(t *testing.T) ([]AgentView, boardFixture) {
 			Key: in.Key, AgentProgram: in.AgentProgram, Profile: in.Profile, Status: in.Status, Fold: f,
 			Context: PaneContext{ProjectDir: in.Directory, WorkspaceLabel: in.Workspace, TabLabel: in.Tab,
 				WorkspaceID: in.WorkspaceID, WorkspacePosition: in.WorkspacePosition, PaneTitle: in.PaneTitle, PanePosition: in.PanePosition},
-			Home: fx.Home, Background: in.Background, Transcript: tr,
+			Home: fx.Home, Background: in.Background, Transcript: tr, Seen: in.Seen,
 		}))
 	}
 	return views, fx

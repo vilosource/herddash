@@ -20,8 +20,9 @@ type Present struct {
 
 // SweepResult counts the rows one Sweep deleted.
 type SweepResult struct {
-	Transitions   int64
-	ResyncMarkers int64
+	Transitions      int64
+	ResyncMarkers    int64
+	Acknowledgements int64
 }
 
 // presentRow is one Present as the sweep's statement reads it through
@@ -64,13 +65,30 @@ const sweepTransitions = `DELETE FROM transitions AS t
 // They go by age alone.
 const sweepMarkers = `DELETE FROM resync_markers WHERE observed_at < ?1`
 
+// sweepAcknowledgements deletes the acknowledgements observed before the
+// cutoff (?1), except, for an Agent in the present set (?2, as for
+// sweepTransitions), those naming a finish at or after its class start (all
+// of them when that is unknown, 0). An acknowledgement in force names exactly
+// the present class start, so it is never swept (ADR-0014). Rows of any other
+// key go by age alone.
+const sweepAcknowledgements = `DELETE FROM acknowledgements AS a
+	WHERE a.observed_at < ?1
+	AND NOT EXISTS (
+		SELECT 1 FROM json_each(?2) AS p
+		WHERE p.value ->> 'h' = a.host AND p.value ->> 's' = a.server
+		AND p.value ->> 'e' = a.epoch AND p.value ->> 'p' = a.pane_id
+		AND (p.value ->> 'since' = 0 OR a.finished_since >= p.value ->> 'since'))`
+
 // Sweep applies Retention (FR-9, AD-4) in one transaction: it deletes every
 // Transition observed before cutoff (UTC Unix ms) that no present Agent still
-// needs, and every resync marker observed before cutoff. For a key in present
-// it keeps every row observed at or after its Since, and the current Agent's
-// latest working row: none from before the key's last row with no previous
-// Status, which began that Agent (AD-3). It is the only delete in the
-// codebase, and only the engine calls it.
+// needs, every resync marker observed before cutoff, and every acknowledgement
+// observed before cutoff that no present Agent's current finish needs
+// (ADR-0014). For a key in present it keeps every row observed at or after its
+// Since, and the current Agent's latest working row: none from before the
+// key's last row with no previous Status, which began that Agent (AD-3); and
+// every acknowledgement naming a finish at or after its Since. A present Since
+// of 0 keeps all of the key's rows. It is the only delete in the codebase, and
+// only the engine calls it.
 func (s *Store) Sweep(ctx context.Context, cutoff int64, present []Present) (SweepResult, error) {
 	ps := make([]presentRow, 0, len(present))
 	for _, p := range present {
@@ -103,6 +121,13 @@ func (s *Store) Sweep(ctx context.Context, cutoff int64, present []Present) (Swe
 	}
 	if r.ResyncMarkers, err = res.RowsAffected(); err != nil {
 		return SweepResult{}, fmt.Errorf("store: sweep resync markers: %w", err)
+	}
+	res, err = tx.ExecContext(ctx, sweepAcknowledgements, cutoff, string(b))
+	if err != nil {
+		return SweepResult{}, fmt.Errorf("store: sweep acknowledgements: %w", err)
+	}
+	if r.Acknowledgements, err = res.RowsAffected(); err != nil {
+		return SweepResult{}, fmt.Errorf("store: sweep acknowledgements: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return SweepResult{}, fmt.Errorf("store: sweep: %w", err)

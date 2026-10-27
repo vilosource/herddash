@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/vilosource/herddash/internal/core"
@@ -317,4 +318,141 @@ func TestSweepBoundaryInHistoryOrder(t *testing.T) {
 	}
 	sweep(t, s, Present{Key: k, Since: before.Since})
 	expectDays(t, s, k, "working@140", "blocked@120")
+}
+
+// ackAt records one acknowledgement of key's finish that began finishedAgo
+// days before sweepNow, observed daysAgo days before it.
+func ackAt(t *testing.T, s *Store, key core.AgentKey, finishedAgo int64, seen bool, daysAgo int64) {
+	t.Helper()
+	if err := s.AppendAcknowledgements(context.Background(), []core.Acknowledgement{
+		mustAck(t, key, sweepNow-finishedAgo*day, seen, sweepNow-daysAgo*day),
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// acksOf lists key's remaining acknowledgements as "<finish days ago>:<seen>",
+// in recording order.
+func acksOf(t *testing.T, s *Store, key core.AgentKey) string {
+	t.Helper()
+	as, err := s.Acknowledgements(context.Background(), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := []string{}
+	for _, a := range as {
+		out = append(out, fmt.Sprintf("%d:%v", (sweepNow-a.FinishedSince())/day, a.Seen()))
+	}
+	return fmt.Sprint(out)
+}
+
+// TestSweepAcknowledgements: past the cutoff, a present Agent keeps the
+// acknowledgements of its current finish, and loses those of an older one; an
+// absent Agent loses all of them; a recent row stays whatever it names.
+func TestSweepAcknowledgements(t *testing.T) {
+	s, _ := openTemp(t)
+	here, gone := keyOf("w1:here"), keyOf("w1:gone")
+	appendAt(t, s, here, "", core.StatusWorking, 300)
+	appendAt(t, s, here, core.StatusWorking, core.StatusDone, 250) // an older finish
+	appendAt(t, s, here, core.StatusDone, core.StatusWorking, 210)
+	appendAt(t, s, here, core.StatusWorking, core.StatusDone, 200) // the current finish
+	ackAt(t, s, here, 250, true, 249)
+	ackAt(t, s, here, 200, true, 199)
+	ackAt(t, s, here, 200, false, 150)
+	ackAt(t, s, here, 200, true, 120)
+	ackAt(t, s, gone, 300, true, 299)
+	ackAt(t, s, gone, 300, false, 10) // recent: kept by age
+	f := folded(t, s, here)
+	if f.Since != sweepNow-200*day {
+		t.Fatalf("present Since %d, want the current finish", f.Since)
+	}
+	if !core.Seen(f, mustAcks(t, s, here)) {
+		t.Fatal("the current finish is not seen before the sweep")
+	}
+
+	r := sweep(t, s, Present{Key: here, Since: f.Since})
+	if got, want := acksOf(t, s, here), "[200:true 200:false 200:true]"; got != want {
+		t.Errorf("present acknowledgements %s, want %s", got, want)
+	}
+	if got, want := acksOf(t, s, gone), "[300:false]"; got != want {
+		t.Errorf("absent acknowledgements %s, want %s", got, want)
+	}
+	if r.Acknowledgements != 2 {
+		t.Errorf("result %+v, want 2 acknowledgements swept", r)
+	}
+	if !core.Seen(folded(t, s, here), mustAcks(t, s, here)) {
+		t.Error("the acknowledgement in force did not survive the sweep")
+	}
+}
+
+func mustAcks(t *testing.T, s *Store, key core.AgentKey) []core.Acknowledgement {
+	t.Helper()
+	as, err := s.Acknowledgements(context.Background(), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return as
+}
+
+// TestSweepAcknowledgementsUnknownSinceKeepsAll: a present Agent whose class
+// start is unknown keeps every acknowledgement; the key is matched whole.
+func TestSweepAcknowledgementsUnknownSinceKeepsAll(t *testing.T) {
+	s, _ := openTemp(t)
+	here := keyOf("w1:here")
+	otherEpoch := core.AgentKey{Host: here.Host, Server: here.Server, Epoch: here.Epoch + 1, PaneID: here.PaneID}
+	ackAt(t, s, here, 250, true, 249)
+	ackAt(t, s, here, 200, true, 199)
+	ackAt(t, s, otherEpoch, 200, true, 199)
+	r := sweep(t, s, Present{Key: here, Since: 0})
+	if got, want := acksOf(t, s, here), "[250:true 200:true]"; got != want {
+		t.Errorf("acknowledgements %s, want %s", got, want)
+	}
+	if got := acksOf(t, s, otherEpoch); got != "[]" {
+		t.Errorf("another epoch's acknowledgements %s, want swept", got)
+	}
+	if r.Acknowledgements != 1 {
+		t.Errorf("result %+v, want 1 acknowledgement swept", r)
+	}
+}
+
+// TestSweepAcknowledgementsRollsBack: the transitions and markers deletes
+// run, then the acknowledgements delete fails: the sweep errors and no table
+// changes.
+func TestSweepAcknowledgementsRollsBack(t *testing.T) {
+	s, _ := openTemp(t)
+	gone := keyOf("w1:gone")
+	appendAt(t, s, gone, "", core.StatusWorking, 200)
+	appendAt(t, s, gone, core.StatusWorking, core.StatusDone, 199)
+	appendMarkerAt(t, s, 200)
+	ackAt(t, s, gone, 199, true, 198)
+	// Witnesses that the earlier deletes ran inside the sweep: each one's
+	// trigger counts it, and the rollback takes the counts back with it, so
+	// the abort's condition checks them before it raises.
+	if _, err := s.db.Exec(`CREATE TABLE deleted (what TEXT);
+		CREATE TRIGGER t_deleted AFTER DELETE ON transitions BEGIN INSERT INTO deleted VALUES ('transition'); END;
+		CREATE TRIGGER m_deleted AFTER DELETE ON resync_markers BEGIN INSERT INTO deleted VALUES ('marker'); END;
+		CREATE TRIGGER no_ack_delete BEFORE DELETE ON acknowledgements
+			WHEN (SELECT count(*) FROM deleted WHERE what = 'transition') = 2
+			AND (SELECT count(*) FROM deleted WHERE what = 'marker') = 1
+			BEGIN SELECT RAISE(ABORT, 'acknowledgements locked'); END`); err != nil {
+		t.Fatal(err)
+	}
+	_, err := s.Sweep(context.Background(), sweepCutoff, nil)
+	if err == nil || !strings.Contains(err.Error(), "acknowledgements locked") {
+		t.Fatalf("sweep error %v, want the acknowledgements delete's", err)
+	}
+	expectDays(t, s, gone, "working@200", "done@199")
+	var markers, witnessed int
+	if err := s.db.QueryRow(`SELECT count(*) FROM resync_markers`).Scan(&markers); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.db.QueryRow(`SELECT count(*) FROM deleted`).Scan(&witnessed); err != nil {
+		t.Fatal(err)
+	}
+	if markers != 1 || witnessed != 0 {
+		t.Errorf("%d markers, %d witnessed deletes left; want the marker kept and nothing witnessed", markers, witnessed)
+	}
+	if got, want := acksOf(t, s, gone), "[199:true]"; got != want {
+		t.Errorf("acknowledgements %s, want %s", got, want)
+	}
 }

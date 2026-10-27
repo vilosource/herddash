@@ -1,0 +1,86 @@
+package store
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/vilosource/herddash/internal/core"
+)
+
+// insertAcknowledgement is the one INSERT of an acknowledgement (ADR-0014),
+// every column bound.
+const insertAcknowledgement = `INSERT INTO acknowledgements
+	(host, server, epoch, pane_id, finished_since, seen, observed_at)
+	VALUES (?, ?, ?, ?, ?, ?, ?)`
+
+// AppendAcknowledgements inserts acknowledgements, in the order given, in one
+// transaction: every row is written or none is. None is a no-op. Rows are
+// never updated; an undo is a row with Seen clear. Only the engine calls it.
+func (s *Store) AppendAcknowledgements(ctx context.Context, acks []core.Acknowledgement) error {
+	if len(acks) == 0 {
+		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("store: append acknowledgements: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // a no-op after Commit
+	stmt, err := tx.PrepareContext(ctx, insertAcknowledgement)
+	if err != nil {
+		return fmt.Errorf("store: append acknowledgements: %w", err)
+	}
+	defer stmt.Close()
+	for _, a := range acks {
+		k := a.Key()
+		epoch, err := toInt64("epoch", k.Epoch)
+		if err != nil {
+			return err
+		}
+		seen := 0
+		if a.Seen() {
+			seen = 1
+		}
+		if _, err := stmt.ExecContext(ctx, k.Host, k.Server, epoch, k.PaneID, a.FinishedSince(), seen, a.ObservedAt()); err != nil {
+			return fmt.Errorf("store: append acknowledgement for %s at %d: %w", k.PaneID, a.FinishedSince(), err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: append acknowledgements: %w", err)
+	}
+	return nil
+}
+
+// Acknowledgements returns one Agent's acknowledgements in recording order:
+// by observed_at, then by id, the order they were appended. Each row is
+// rebuilt through core.NewAcknowledgement, so a row that no longer validates
+// is an error. core.Seen reads them in this order.
+func (s *Store) Acknowledgements(ctx context.Context, key core.AgentKey) ([]core.Acknowledgement, error) {
+	epoch, err := toInt64("epoch", key.Epoch)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT id, finished_since, seen, observed_at
+		FROM acknowledgements WHERE host = ? AND server = ? AND epoch = ? AND pane_id = ?
+		ORDER BY observed_at, id`, key.Host, key.Server, epoch, key.PaneID)
+	if err != nil {
+		return nil, fmt.Errorf("store: acknowledgements of %s: %w", key.PaneID, err)
+	}
+	defer rows.Close()
+	var out []core.Acknowledgement
+	for rows.Next() {
+		var id, since, observedAt int64
+		var seen bool
+		if err := rows.Scan(&id, &since, &seen, &observedAt); err != nil {
+			return nil, fmt.Errorf("store: acknowledgements of %s: %w", key.PaneID, err)
+		}
+		a, err := core.NewAcknowledgement(core.AcknowledgementInput{Key: key, FinishedSince: since, Seen: seen, ObservedAt: observedAt})
+		if err != nil {
+			return nil, fmt.Errorf("store: acknowledgements of %s: row %d: %w", key.PaneID, id, err)
+		}
+		out = append(out, a)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: acknowledgements of %s: %w", key.PaneID, err)
+	}
+	return out, nil
+}

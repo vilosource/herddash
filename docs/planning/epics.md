@@ -1284,7 +1284,9 @@ first sight, and every reseed), the engine reads `Acknowledgements` for the key 
 `core.Seen`; any fold change that moves the class or `Since` clears it without a read; a read
 failure is logged and leaves the Agent unseen. Each write is logged at info (pane, since, seen),
 nothing else. Retention needs no change beyond Story 6.1's sweep (its `Present.Since` already is
-the fold's).
+the fold's), except that its `retention sweep` log line also reports the acknowledgements swept,
+`SweepResult.Acknowledgements` (deferred from Story 6.1, which added the count and changed no engine
+code).
 
 **Acceptance Criteria:**
 
@@ -1319,6 +1321,10 @@ the fold's).
 **Given** 8 goroutines sending marks, undos and bulk requests while the fake herdr sends status events for the same panes
 **When** the test runs under `go test -race -count=50` (and `-cpu=1,4,8`)
 **Then** it never races, hangs or deadlocks, every reply is either the resulting views or one of the typed errors, and after it settles each Agent's `seen` equals `core.Seen` of its record
+
+**Given** a Retention sweep that deletes acknowledgements
+**When** the engine logs it
+**Then** the `retention sweep` line carries `acknowledgements` with `SweepResult.Acknowledgements` beside `transitions` and `resync_markers` (deferred from Story 6.1)
 
 **And** `go vet ./...`, `go test -race ./...`, `gofmt -l .`, `arch_test.go` and `callsite_test.go` pass
 

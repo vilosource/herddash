@@ -81,6 +81,17 @@ test("golden fixture: order equals the fixture's", () => {
   assert.deepEqual(sorted.map((v) => v.sort_key[4]), fixture.order);
 });
 
+test("golden fixture: a seen Agent sorts between its group's Finished and older Idle Agents", () => {
+  // ADR-0014, Story 6.1: the Daemon ranks a seen, non-Background Agent 2,
+  // Idle's, most recent first; the Board orders by the sort key as sent.
+  const sorted = sortViews(fixture.input.map((i) => i.view));
+  const docs = sorted.filter((v) => v.workspace === "docs");
+  assert.deepEqual(docs.map((v) => v.key.pane_id), ["w4:p1", "w4:p2", "w4:p3"]);
+  assert.deepEqual(docs.map((v) => v.seen), [false, true, false]);
+  assert.equal(docs[1].attention_class, "finished");
+  assert.equal(docs[1].sort_key[2], 2);
+});
+
 test("golden fixture: headers equal the fixture's", () => {
   const sorted = sortViews(fixture.input.map((i) => i.view));
   assert.deepEqual(workspaceHeaders(sorted), fixture.headers);

@@ -119,6 +119,10 @@ type AgentViewInput struct {
 	// its Claude Code transcript shows them (ADR-0009, ADR-0010); the zero
 	// value when it is not read.
 	Transcript BackgroundTasks
+	// Seen is set when the operator acknowledged the Agent's current finish,
+	// as Seen decides from the record (ADR-0014). The view shows it only
+	// while the class is finished.
+	Seen bool
 }
 
 // AgentView is how every surface (the API, the event stream and the Board)
@@ -165,8 +169,13 @@ type AgentView struct {
 	// shell the process check finds that no open command accounts for. It
 	// is shown on a Working Box ("WORKING · 2 bg") and a Background one,
 	// and is 0 for Needs you and Unknown.
-	BackgroundTasks int     `json:"background_tasks"`
-	SortKey         SortKey `json:"sort_key"`
+	BackgroundTasks int `json:"background_tasks"`
+	// Seen is set when the operator acknowledged this finish (ADR-0014): only
+	// with class finished, which it leaves unchanged. It moves the Box down
+	// among the Idle ones (the sort key's class rank 2) unless the Box is
+	// Background, which still takes precedence. Never omitted.
+	Seen    bool    `json:"seen"`
+	SortKey SortKey `json:"sort_key"`
 }
 
 // NewAgentView builds the view of one Agent. The Attention Class comes from
@@ -177,6 +186,7 @@ func NewAgentView(in AgentViewInput) AgentView {
 		class = ClassOf(in.Status, in.Fold.EverWorking)
 	}
 	tasks, background := backgroundOf(in, class)
+	seen := in.Seen && class == ClassFinished
 	var since int64
 	var exact bool
 	if in.Fold.Known && in.Fold.Since > 0 {
@@ -202,8 +212,9 @@ func NewAgentView(in AgentViewInput) AgentView {
 		Background:   background,
 
 		BackgroundTasks: tasks,
+		Seen:            seen,
 	}
-	v.SortKey = newSortKey(class, in.Status, background, in.Context.WorkspacePosition, in.Context.WorkspaceID, since, in.Key)
+	v.SortKey = newSortKey(class, in.Status, background, seen, in.Context.WorkspacePosition, in.Context.WorkspaceID, since, in.Key)
 	return v
 }
 
@@ -260,7 +271,8 @@ func shownRecap(in AgentViewInput, class AttentionClass, background bool) string
 //     would merge two); a pane with no workspace id at all sorts last as
 //     SortUnknown.
 //   - ClassRank is needs_you 0; then, inside a workspace group, finished 1,
-//     Idle (class working with a Status other than working) 2, Background
+//     Idle (class working with a Status other than working) 2, and a seen
+//     finished Agent with it (ADR-0014), Background
 //     (finished, Idle, or Working with its main turn over, waiting on
 //     background work; ADR-0009) 3, Working (Status
 //     working) 4, unknown 5: what to deal with first comes first (operator
@@ -301,13 +313,15 @@ func UnpositionedGroup(workspaceID string) int64 {
 	return unpositionedBase + int64(h.Sum64()%uint64(unpositionedBase-1))
 }
 
-func newSortKey(class AttentionClass, status Status, background bool, workspacePosition int, workspaceID string, since int64, key AgentKey) SortKey {
+func newSortKey(class AttentionClass, status Status, background, seen bool, workspacePosition int, workspaceID string, since int64, key AgentKey) SortKey {
 	k := SortKey{Key: key, Start: since}
 	switch {
 	case class == ClassNeedsYou:
 		k.ClassRank = 0
 	case background:
 		k.ClassRank = 3
+	case seen:
+		k.ClassRank = 2 // with Idle, newest first (ADR-0014)
 	case class == ClassFinished:
 		k.ClassRank = 1
 	case class == ClassWorking && status == StatusWorking:
