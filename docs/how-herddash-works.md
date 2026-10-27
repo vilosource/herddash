@@ -18,7 +18,8 @@ figure comes from a recorded history and survives restarts.
 
 It changes nothing in herdr. It has no terminal, no prompt box, and no way to focus, close or type
 into a pane; herdr already does those. Its one control is herddash's own note that you have read a
-finished agent's result, **Seen** (below). For a full browser client, see
+finished agent's result, **Seen** (below), which it also makes for you when you read the result in
+herdr and move on to another pane. For a full browser client, see
 [devswha/herdr-web-ui](https://github.com/devswha/herdr-web-ui), which herddash is designed to run
 beside.
 
@@ -45,7 +46,8 @@ graph LR
 herddash is one program, the **daemon**, that you run on the machine where herdr runs.
 
 - **The herdr client** holds its own connection to herdr's socket and subscribes to every agent's
-  status. It sees every change whether or not you have a terminal attached.
+  status. It sees every change whether or not you have a terminal attached. It also follows which
+  pane herdr has focused, by reading herdr's focus events; it never sets focus.
 - **The profile reader** works out which profile each agent runs under. For Claude Code it reads
   `CLAUDE_CONFIG_DIR` from the agent's process environment and maps it to a name you choose in the
   config file. Other agent programs show their program name until a rule for them is added. A
@@ -96,7 +98,9 @@ A 404 means herddash holds no record for that agent: it was never seen, or its r
 than the retention period and have been deleted. Retention never deletes the change that started
 an agent's current state, so an agent on the board always has at least that row. The body also
 carries `acknowledgements`: the agent's Seen marks and their undos, in the order they were made,
-each `{"finished_since", "seen", "observed_at"}` (`[]` when there are none).
+each `{"finished_since", "seen", "observed_at", "source"}` (`[]` when there are none). `source` is
+`board` for a press of a button on the board and `herdr_focus` for a mark herddash made when you
+left the pane in herdr (below).
 
 ## Marking a finished agent Seen
 
@@ -135,6 +139,50 @@ What it does not do:
   `"seen": true`; only its place on the board and its colour change.
 - A box that needs you, or is idle, working or running background work, cannot be marked.
 
+### Seen when you leave the pane in herdr
+
+Most results are read in herdr, not on the board: you switch to the pane, read, and switch away.
+So herddash marks the finish Seen for you when, after the agent finished, its pane was focused in
+herdr for at least 3 seconds and focus then moved to another pane. The row it records has source
+`herdr_focus`; everything else about it is the same as a mark made on the board, and a press of
+`✓ Seen` still marks at once, wherever herdr's focus is.
+
+- While you are in the pane, its finished box shows `● in view`. Leaving it within 3 seconds
+  marks nothing, so flicking through panes leaves every box as it was.
+- If you prompt the agent while you are there, it is working, not finished; when that turn ends
+  while you are elsewhere the box is finished and waits for you.
+- If you stay and watch several turns, each finish shows `in view`, and leaving marks the last one.
+- A finish into the pane you have focused while you are away from the keyboard stays finished,
+  `in view`, until you come back and leave that pane.
+- A box that needs you is never marked, and a box running background work stays Background.
+- A seen box offers `Mark unseen`, with the same Undo bar. Once you have marked or unmarked a
+  finish yourself, herddash never marks it again on its own, across leaves and restarts: your
+  choice wins for that finish.
+- A new turn, a question for you, or a new agent in the pane ends the mark, as for any Seen.
+- A restart of herddash keeps every mark, since they are rows in the database. It forgets where
+  focus was and starts counting again from what herdr reports at start, so a leave within
+  3 seconds of a restart does not mark, and focus moves made while herddash was stopped are simply
+  missed.
+
+herddash only **reads** focus: herdr's `pane_focused` events and the focused pane its snapshot
+names. It never calls a focus function, so reading focus changes nothing in herdr. herdr's own
+`done` and `idle` are not used for this, because herdr counts a finish seen as soon as any
+attached terminal shows the pane's tab, reports `idle` for every finish while no terminal is
+attached, and goes straight to `idle` for a finish into the focused pane.
+
+What this cannot know:
+
+- **Whether anyone is looking.** herdr names a focused pane even with no terminal attached, and
+  nothing herddash may read says whether one is. So on a detached herdr `● in view` shows on the
+  pane last focused. That never marks anything by itself: a mark needs a leave herddash saw, and
+  with no terminal attached focus does not move.
+- **Which terminal moved.** With several terminals attached to one herdr, each has its own view,
+  and herdr's focus events do not say which terminal sent them. Moving in one can mark Seen a pane
+  you are still reading in another, and `in view` follows whichever terminal moved last. With one
+  attached terminal the rule is exact. `Mark unseen` is the remedy for a wrong mark.
+- **Who moved focus.** Another program that calls herdr's focus functions looks exactly like you
+  moving, even on a detached herdr, so it can mark a box Seen.
+
 ## Why the waiting time can be trusted
 
 Every box shows how long the agent has been in its current state. herddash records the moment it
@@ -149,7 +197,8 @@ live box's time.
 ## What it will never do
 
 - **Never focus a pane.** herdr marks a finished agent as seen when it is focused. herddash's herdr
-  client has no focus function at all, so it cannot clear a completion you have not looked at.
+  client has no focus function at all, so it cannot clear a completion you have not looked at. It
+  reads which pane is focused, and that read changes nothing in herdr.
 - **Never read pane output.** No excerpts, no scrollback. The client has no output-reading function,
   so prompts and secrets on your screen never reach herddash's database.
 - **Never accept a change over the web but an acknowledgement, and only from its own page.** Every
@@ -191,6 +240,7 @@ needs no runtime, no package manager and no root, and it requires herdr 0.9.5 or
 
 The binding design rules are the
 [architecture spine](planning/architecture/architecture-herddash-2026-10-14/ARCHITECTURE-SPINE.md).
-The decisions behind them are [ADR-0004 to ADR-0014](adr/README.md), acknowledgement being
-[ADR-0014](adr/0014-acknowledging-a-finished-agent.md), and what herddash must do is
+The decisions behind them are [ADR-0004 to ADR-0015](adr/README.md), acknowledgement being
+[ADR-0014](adr/0014-acknowledging-a-finished-agent.md) and Seen on leaving a pane
+[ADR-0015](adr/0015-seen-when-you-leave-the-pane.md), and what herddash must do is
 the [PRD](prd.md).

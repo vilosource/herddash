@@ -18,8 +18,10 @@ different question: **what is every agent doing right now, and which ones are wa
 - Every status change recorded, so "waiting 40 minutes" is a fact that survives a restart.
 - Read-only apart from one thing: you can mark a finished agent's result as seen, which
   herddash records for itself and never tells herdr
-  ([ADR-0014](docs/adr/0014-acknowledging-a-finished-agent.md)). No terminal, no prompts, no
-  pane control: herdr already does those.
+  ([ADR-0014](docs/adr/0014-acknowledging-a-finished-agent.md)); it also marks it for you when
+  you read it in herdr and leave the pane, by reading herdr's focus, never setting it
+  ([ADR-0015](docs/adr/0015-seen-when-you-leave-the-pane.md)). No terminal, no prompts, no pane
+  control: herdr already does those.
 
 Status: **pre-release, being dogfooded.** The recorder, the API and the Board work; the API is
 read-only except for the acknowledgement routes the Board's Seen buttons use, which accept
