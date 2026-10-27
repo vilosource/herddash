@@ -34,10 +34,12 @@ type fakeHerdr struct {
 	path       string
 	openSubs   atomic.Int32 // subscriptions the client has not closed
 	statusSubs atomic.Int32 // status subscriptions ever started
-	// push makes every open status subscription send one change to blocked,
-	// which later snapshots then report too.
+	// push makes every open status subscription send one change to blocked
+	// (or to pushTo's status when set), which later snapshots then report
+	// too while blocked is set.
 	push    chan struct{}
 	blocked atomic.Bool
+	pushTo  atomic.Value
 	// instance is prefixed to every terminal id; a restart changes it.
 	instance atomic.Int32
 	// version is what ping answers; unset means 0.9.5.
@@ -165,7 +167,7 @@ func (f *fakeHerdr) serve(t *testing.T, conn net.Conn) {
 		f.snapshots.Add(1)
 		snap := strings.ReplaceAll(fakeSnapshot, `"terminal_id":"t`, fmt.Sprintf(`"terminal_id":"i%d-t`, f.instance.Load()))
 		if f.blocked.Load() {
-			snap = strings.ReplaceAll(snap, `"agent":"claude","agent_status":"working"`, `"agent":"claude","agent_status":"blocked"`)
+			snap = strings.ReplaceAll(snap, `"agent":"claude","agent_status":"working"`, `"agent":"claude","agent_status":"`+f.pushed()+`"`)
 		}
 		reply(snap)
 	case "pane.process_info":
@@ -195,7 +197,7 @@ func (f *fakeHerdr) serve(t *testing.T, conn net.Conn) {
 			select {
 			case <-f.push:
 				f.blocked.Store(true)
-				conn.Write([]byte(`{"data":{"agent":"claude","agent_status":"blocked","pane_id":"w1:p1","workspace_id":"w1"},"event":"pane.agent_status_changed"}` + "\n"))
+				conn.Write([]byte(`{"data":{"agent":"claude","agent_status":"` + f.pushed() + `","pane_id":"w1:p1","workspace_id":"w1"},"event":"pane.agent_status_changed"}` + "\n"))
 			case <-closed:
 			}
 		}
@@ -204,6 +206,14 @@ func (f *fakeHerdr) serve(t *testing.T, conn net.Conn) {
 	default:
 		t.Errorf("fake herdr: unexpected method %q", req.Method)
 	}
+}
+
+// pushed is the status a push sends: pushTo's, or blocked.
+func (f *fakeHerdr) pushed() string {
+	if s, _ := f.pushTo.Load().(string); s != "" {
+		return s
+	}
+	return "blocked"
 }
 
 // syncBuffer is a bytes.Buffer safe for one writer and concurrent readers.
@@ -1552,6 +1562,124 @@ func TestServeHistory(t *testing.T) {
 
 	if code, body := get("/api/agents/testhost/test/1/w9:p9/history"); code != http.StatusNotFound || !strings.Contains(string(body), `"not_found"`) {
 		t.Errorf("unknown key: status %d, body %s", code, body)
+	}
+
+	cancel()
+	if code := <-done; code != 0 {
+		t.Fatalf("exit code %d, stderr %q", code, stderr.String())
+	}
+}
+
+// TestServeAcknowledge shows serve's wiring of the write routes (ADR-0014):
+// Options.Acknowledge reaches the engine, which records into the store, and
+// Options.Acknowledgements reads the store back for the history route. The
+// fake herdr's Agent finishes; a same-origin POST marks it seen, the state
+// shows it and the history holds the row; a POST without Origin is refused
+// and records nothing.
+func TestServeAcknowledge(t *testing.T) {
+	hermeticEnv(t)
+	f := startFakeHerdr(t)
+	f.pushTo.Store("done")
+	dataDir := filepath.Join(t.TempDir(), "data")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var stdout, stderr syncBuffer
+	done := make(chan int, 1)
+	go func() { done <- run(ctx, serveArgs(f, dataDir), &stdout, &stderr) }()
+	addr := listenAddr(t, dataDir)
+	waitFor(t, "the status subscription", func() bool { return f.statusSubs.Load() >= 1 })
+	waitFor(t, "the read after the subscription", func() bool { return f.snapshots.Load() >= 2 })
+	select {
+	case f.push <- struct{}{}:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the fake herdr did not take the push")
+	}
+
+	tr := &http.Transport{DisableKeepAlives: true}
+	defer tr.CloseIdleConnections()
+	client := &http.Client{Transport: tr, Timeout: 5 * time.Second}
+	type agentView struct {
+		Key          core.AgentKey `json:"key"`
+		Status       string        `json:"status"`
+		Class        string        `json:"attention_class"`
+		WaitingSince int64         `json:"waiting_since"`
+		Seen         bool          `json:"seen"`
+	}
+	state := func() agentView {
+		resp, err := client.Get("http://" + addr + "/api/state")
+		if err != nil {
+			return agentView{}
+		}
+		defer resp.Body.Close()
+		var s struct {
+			Agents []agentView `json:"agents"`
+		}
+		if json.NewDecoder(resp.Body).Decode(&s) != nil || len(s.Agents) != 1 {
+			return agentView{}
+		}
+		return s.Agents[0]
+	}
+	var finished agentView
+	waitFor(t, "the Agent finished in /api/state", func() bool {
+		finished = state()
+		return finished.Status == "done" && finished.Class == "finished" && finished.WaitingSince > 0
+	})
+	write := func(origin bool) (int, []byte) {
+		t.Helper()
+		body := fmt.Sprintf(`{"agents":[{"key":{"host":"testhost","server":"test","epoch":1,"pane_id":"w1:p1"},"waiting_since":%d}]}`, finished.WaitingSince)
+		req, err := http.NewRequest(http.MethodPost, "http://"+addr+"/api/seen", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if origin {
+			req.Header.Set("Origin", "http://"+addr)
+		}
+		req.Header.Set("X-Herddash-Write", "1")
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, b
+	}
+	if code, body := write(false); code != http.StatusForbidden || !strings.Contains(string(body), `"origin_not_allowed"`) {
+		t.Errorf("no Origin: status %d, body %s", code, body)
+	}
+	history := func() []byte {
+		t.Helper()
+		resp, err := client.Get("http://" + addr + "/api/agents/testhost/test/1/w1%3Ap1/history")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("history: status %d, body %s", resp.StatusCode, b)
+		}
+		return b
+	}
+	if b := history(); !strings.Contains(string(b), `"acknowledgements":[]`) {
+		t.Errorf("history after a refused write: %s, want no acknowledgement", b)
+	}
+	// The Profile lookup may still hold the pane's rows: that is stale, and
+	// passes once it ends.
+	var code int
+	var body []byte
+	waitFor(t, "the mark accepted", func() bool {
+		code, body = write(true)
+		return code != http.StatusConflict
+	})
+	if code != http.StatusOK || !strings.Contains(string(body), `"seen":true`) {
+		t.Fatalf("mark: status %d, body %s", code, body)
+	}
+	if a := state(); !a.Seen || a.WaitingSince != finished.WaitingSince {
+		t.Errorf("state after the mark %+v, want seen", a)
+	}
+	want := fmt.Sprintf(`"acknowledgements":[{"finished_since":%d,"seen":true,"observed_at":`, finished.WaitingSince)
+	if b := history(); !strings.Contains(string(b), want) {
+		t.Errorf("history %s, want it to hold %s", b, want)
 	}
 
 	cancel()

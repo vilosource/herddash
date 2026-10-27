@@ -54,7 +54,7 @@ func testView() engine.View {
 func newHandler(t *testing.T) (http.Handler, engine.View) {
 	t.Helper()
 	v := testView()
-	return New(Options{View: func() engine.View { return v }, Subscribe: noSubscribe, History: noHistory}), v
+	return New(Options{View: func() engine.View { return v }, Subscribe: noSubscribe, History: noHistory, Acknowledge: noAcknowledge, Acknowledgements: noAcknowledgements}), v
 }
 
 func do(h http.Handler, method, target, host string, hdr map[string]string) *httptest.ResponseRecorder {
@@ -159,7 +159,7 @@ func TestState(t *testing.T) {
 // no herdr client or store, so no request can reach either.
 func TestStateReadsEachRequest(t *testing.T) {
 	var seq uint64
-	h := New(Options{View: func() engine.View { seq++; return engine.View{Seq: seq} }, Subscribe: noSubscribe, History: noHistory})
+	h := New(Options{View: func() engine.View { seq++; return engine.View{Seq: seq} }, Subscribe: noSubscribe, History: noHistory, Acknowledge: noAcknowledge, Acknowledgements: noAcknowledgements})
 	for want := uint64(1); want <= 2; want++ {
 		w := do(h, http.MethodGet, "/api/state", "localhost", nil)
 		var v struct {
@@ -255,7 +255,7 @@ func TestNewNilViewPanics(t *testing.T) {
 			t.Errorf("recovered %v, want a panic naming the nil View", r)
 		}
 	}()
-	New(Options{Subscribe: noSubscribe, History: noHistory})
+	New(Options{Subscribe: noSubscribe, History: noHistory, Acknowledge: noAcknowledge, Acknowledgements: noAcknowledgements})
 }
 
 func TestNewNilSubscribePanics(t *testing.T) {
@@ -264,7 +264,7 @@ func TestNewNilSubscribePanics(t *testing.T) {
 			t.Errorf("recovered %v, want a panic naming the nil Subscribe", r)
 		}
 	}()
-	New(Options{View: func() engine.View { return engine.View{} }, History: noHistory})
+	New(Options{View: func() engine.View { return engine.View{} }, History: noHistory, Acknowledge: noAcknowledge, Acknowledgements: noAcknowledgements})
 }
 
 // noSubscribe is a Subscribe whose subscription never delivers anything.

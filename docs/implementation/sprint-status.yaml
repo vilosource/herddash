@@ -101,7 +101,7 @@ development_status:
   epic-6: in-progress
   6-1-acknowledgements-in-the-record: done
   6-2-the-engine-acknowledges-a-finish: done
-  6-3-write-routes-guarded-against-cross-site-requests: backlog
+  6-3-write-routes-guarded-against-cross-site-requests: done
   6-4-the-board-s-seen-control-bulk-mark-and-undo: backlog
   6-5-documents-and-the-build-the-operator-dogfoods: backlog
   epic-6-retrospective: optional

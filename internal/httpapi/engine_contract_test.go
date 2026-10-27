@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,6 +23,7 @@ import (
 	"github.com/vilosource/herddash/internal/engine"
 	"github.com/vilosource/herddash/internal/herdr"
 	"github.com/vilosource/herddash/internal/procenv"
+	"github.com/vilosource/herddash/internal/store"
 )
 
 // The contract between the engine, the SSE handler and the Board (Story
@@ -217,10 +220,16 @@ func TestEngineContract(t *testing.T) {
 		t.Skip("node is not on PATH")
 	}
 
+	// A real store: an acknowledgement is refused while nothing is recorded.
+	st, err := store.Open(filepath.Join(t.TempDir(), "data", "herddash.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
 	fc := &scriptClient{status: map[string]*scriptSub[core.StatusEvent]{}}
 	fc.setSnapshot(contractSnapshot(contractPane("w1:p1", "t-1", core.StatusWorking), contractPane("w1:p2", "t-2", core.StatusIdle), shellPane("t-shell")))
 	e := engine.New(engine.Options{
-		Host: "mac", Server: "default", Client: fc, Sink: nopSink{},
+		Host: "mac", Server: "default", Client: fc, Sink: nopSink{}, Store: st,
 		Environ: contractEnviron, Children: contractChildren, Session: contractSession, Transcript: contractTranscript})
 
 	// Every publication, as the engine itself publishes it.
@@ -236,7 +245,7 @@ func TestEngineContract(t *testing.T) {
 		}
 	}()
 
-	h := New(Options{View: e.View, Subscribe: e.Subscribe, History: noHistory})
+	h := New(Options{View: e.View, Subscribe: e.Subscribe, History: st.History, Acknowledge: e.Acknowledge, Acknowledgements: st.Acknowledgements})
 	h.keepalive = 20 * time.Millisecond
 	srv, _ := eventsServer(t, h)
 	s := openStream(t, srv, nil)
@@ -338,6 +347,81 @@ func TestEngineContract(t *testing.T) {
 		a, ok := agent(v, "w1:p2")
 		return ok && a.Directory == "/src/elsewhere" && a.PaneTitle == "new title"
 	})
+	// Acknowledgement (ADR-0014): w1:p4 finishes, is marked seen through the
+	// write route as the Board marks it, is undone, then goes working. Each
+	// is a publication the stream must carry.
+	fc.statusSub(t, "w1:p4").in <- herdr.Delivery[core.StatusEvent]{Event: core.StatusEvent{PaneID: "w1:p4", Status: core.StatusDone, AgentProgram: "claude"}}
+	n = await("w1:p4 done", n, func(v engine.View) bool {
+		a, ok := agent(v, "w1:p4")
+		return ok && a.Status == core.StatusDone && a.Class == core.ClassFinished && a.WaitingSince > 0
+	})
+	done4, _ := agent(e.View(), "w1:p4")
+	write := func(route string) {
+		t.Helper()
+		body := fmt.Sprintf(`{"waiting_since":%d}`, done4.WaitingSince)
+		deadline := time.Now().Add(15 * time.Second)
+		for {
+			req, err := http.NewRequest(http.MethodPost, srv.URL+"/api/agents/mac/default/1/w1%3Ap4/"+route, strings.NewReader(body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Header.Set("Origin", srv.URL)
+			req.Header.Set("X-Herddash-Write", "1")
+			req.Header.Set("Content-Type", "application/json")
+			resp, err := srv.Client().Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			b, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				return
+			}
+			// A Profile hold still in progress refuses it as stale: try again.
+			if resp.StatusCode != http.StatusConflict || !strings.Contains(string(b), codeStaleView) || time.Now().After(deadline) {
+				t.Fatalf("%s: status %d, body %s", route, resp.StatusCode, b)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	write(segmentSeen)
+	n = await("w1:p4 seen", n, func(v engine.View) bool {
+		a, ok := agent(v, "w1:p4")
+		return ok && a.Seen && a.Class == core.ClassFinished && a.SortKey.ClassRank == 2
+	})
+	write(segmentUnseen)
+	n = await("w1:p4 not seen", n, func(v engine.View) bool {
+		a, ok := agent(v, "w1:p4")
+		return ok && !a.Seen && a.Status == core.StatusDone && a.SortKey.ClassRank == 1
+	})
+	write(segmentSeen)
+	n = await("w1:p4 seen again", n, func(v engine.View) bool { a, ok := agent(v, "w1:p4"); return ok && a.Seen })
+	fc.statusSub(t, "w1:p4").in <- herdr.Delivery[core.StatusEvent]{Event: core.StatusEvent{PaneID: "w1:p4", Status: core.StatusWorking, AgentProgram: "claude"}}
+	n = await("w1:p4 working", n, func(v engine.View) bool {
+		a, ok := agent(v, "w1:p4")
+		return ok && a.Status == core.StatusWorking && !a.Seen
+	})
+	// The record holds each write, in order, and the history route sends it.
+	hist, err := srv.Client().Get(srv.URL + "/api/agents/mac/default/1/w1%3Ap4/history")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hb, _ := io.ReadAll(hist.Body)
+	hist.Body.Close()
+	var hgot struct {
+		Acknowledgements []struct {
+			FinishedSince int64 `json:"finished_since"`
+			Seen          bool  `json:"seen"`
+		} `json:"acknowledgements"`
+	}
+	if err := json.Unmarshal(hb, &hgot); err != nil || hist.StatusCode != http.StatusOK {
+		t.Fatalf("history: status %d, body %s: %v", hist.StatusCode, hb, err)
+	}
+	if a := hgot.Acknowledgements; len(a) != 3 || !a[0].Seen || a[1].Seen || !a[2].Seen ||
+		a[0].FinishedSince != done4.WaitingSince || a[1].FinishedSince != done4.WaitingSince || a[2].FinishedSince != done4.WaitingSince {
+		t.Errorf("history acknowledgements %+v, want seen, undone, seen of %d", a, done4.WaitingSince)
+	}
+
 	// herdr lost and back, the same instance (the shell kept its terminal),
 	// with both Agents' terminals replaced: each is removed and re-added
 	// under the same key.
@@ -472,6 +556,46 @@ func TestEngineContract(t *testing.T) {
 			t.Errorf("view %d: Board connection %v, want %s", v.Seq, c, cb)
 		}
 	}
+	// Each acknowledgement change of w1:p4 reached the stream: the mark, the
+	// undo and the second mark as an agent event carrying seen, the move to
+	// working as the transition event of its publication.
+	var p4 []core.AgentView
+	var p4seqs []uint64
+	for _, v := range vs {
+		if a, ok := agent(v, "w1:p4"); ok && a.Key.Epoch == 1 {
+			if len(p4) == 0 || p4[len(p4)-1].Seen != a.Seen || p4[len(p4)-1].Status != a.Status {
+				p4, p4seqs = append(p4, a), append(p4seqs, v.Seq)
+			}
+		}
+	}
+	var changes []string
+	for i, a := range p4 {
+		changes = append(changes, fmt.Sprintf("%s/%v", a.Status, a.Seen))
+		if i == 0 {
+			continue
+		}
+		id := strconv.FormatUint(p4seqs[i], 10)
+		want := eventAgent
+		if a.Status != p4[i-1].Status {
+			want = eventTransition
+		}
+		found := false
+		for _, ev := range evs {
+			if ev.id != id || ev.event != want || !strings.Contains(ev.data, `"pane_id":"w1:p4"`) {
+				continue
+			}
+			if strings.Contains(ev.data, fmt.Sprintf(`"seen":%v`, a.Seen)) {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("publication %d (w1:p4 %s seen %v): no %s event for it on the stream", p4seqs[i], a.Status, a.Seen, want)
+		}
+	}
+	if g, w := strings.Join(changes, " "), "working/false done/false done/true done/false done/true working/false"; g != w {
+		t.Errorf("w1:p4's published changes %q, want %q", g, w)
+	}
+
 	// The scenarios above publish removals, a re-add under a new epoch and
 	// connection changes: the replay saw each kind.
 	kinds := map[string]bool{}
