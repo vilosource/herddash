@@ -31,8 +31,9 @@ them to disagree.
 
 ## How the build runs
 
-**Planning is complete.** The PRD, the architecture and the 45 stories in
-`docs/planning/epics.md` (27 for Epics 1 to 4, 18 for Epic 5, 5.1 to 5.18) are final, and
+**Planning is complete.** The PRD, the architecture and the 51 stories in
+`docs/planning/epics.md` (27 for Epics 1 to 4, 19 for Epic 5, 5.1 to 5.19, and 5 for Epic 6,
+6.1 to 6.5, planned 2026-10-27 with ADR-0014) are final, and
 `docs/implementation/sprint-status.yaml` tracks them. Build one story at a time with
 `/bmad-build`, in the order the tracking file lists; it names the next one. Do not write code that
 no story asks for.
@@ -44,11 +45,11 @@ The tracking file's `action_items` name the operator checkpoints. Those of Epics
 - **Story 3.6's design** was approved before Story 3.7.
 - **Story 4.3** had its day of dogfooding before release-please PR #2 was merged, at 0.1.0.
 
-Two are open:
-- **When Epic 5 is done**, the operator is asked once; on their OK it ships as one pull request
+Epic 5 shipped as v0.6.0 (PR #55). Story 5.9 is superseded: the operator decided PRD §8 Q1
+directly on 2026-10-27 (ADR-0014), and its checkpoint is closed. One is open:
+- **When Epic 6 (acknowledging a Finished Agent, "Seen") is built**, its `-dev` build is installed
+  locally and the operator is asked once to dogfood it; on their OK it ships as one pull request
   and one release. Until then its stories are built and installed locally as `-dev` builds.
-- **Story 5.9** runs on or after 2026-11-03, and asks the operator only if the record shows
-  Finished Agents that never cleared.
 
 The architecture spine at
 `docs/planning/architecture/architecture-herddash-2026-10-14/ARCHITECTURE-SPINE.md` is binding on
@@ -58,9 +59,10 @@ work, recaps, the tighter import rules and the event stream's keepalive. Its fou
 were answered by Story 1.3 against an isolated herdr 0.9.5 binary; the evidence is in the socket
 API record's "Findings against herdr 0.9.5".
 
-The PRD's remaining open questions (§8) are answered during the build, not before it: whether
-acknowledgement is needed at all (Story 5.9, from the record), and Profile rules and Pane Titles
-for Codex and Antigravity once one pane of each has been observed.
+The PRD's remaining open questions (§8) are answered during the build, not before it: Profile
+rules and Pane Titles for Codex and Antigravity once one pane of each has been observed. Whether
+acknowledgement is needed (§8 Q1) was closed by the operator on 2026-10-27: it is FR-5a,
+ADR-0014, built as Epic 6.
 
 ## Working method
 

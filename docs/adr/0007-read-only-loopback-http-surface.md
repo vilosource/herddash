@@ -1,6 +1,8 @@
 # ADR-0007: A read-only HTTP surface on loopback
 
-**Status: Accepted.** Written 2026-10-15 during the architecture run, under the operator's
+**Status: Accepted; amended by [ADR-0012](0012-an-observable-keepalive-on-the-event-stream.md)
+(keepalive, 2026-10-23) and [ADR-0014](0014-acknowledging-a-finished-agent.md) (the acknowledgement
+write routes, 2026-10-27).** Written 2026-10-15 during the architecture run, under the operator's
 delegation. It carries the PRD's FR-12 to FR-14 and FR-17 and ADR-0003's restraint.
 
 ## Context

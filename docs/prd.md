@@ -5,6 +5,7 @@ created: 2026-10-08
 updated: 2026-10-14
 supersedes: the 2026-10-05 draft of docs/prd.md
 governed_by: [docs/adr/0001-what-herddash-is.md, docs/adr/0003-the-board-is-the-product.md]
+amended: 2026-10-27 (ADR-0014, acknowledgement: glossary, FR-5a, §4.4, §6.2, SM-C1, §8 Q1)
 ---
 
 # PRD: herddash
@@ -138,7 +139,13 @@ read-only, so any future surface shows the same truth the Board does.
   exist only there: the herdr socket and the Agents' process environments. It gathers what the
   Board needs to answer its question, and nothing merely because it is available.
 - **Retention** — the bounded policy under which recorded Transitions are kept and then deleted.
-- **API** — the Daemon's read-only HTTP surface: current state, history, and an event stream.
+- **Seen** — a Finished Agent the operator has acknowledged on the Board: they have read its
+  result. An **acknowledgement** names one exact finish (the Agent and the instant its Finished
+  class began), is recorded append-only, never reaches herdr, and lasts until the Agent's next
+  Transition out of that finish. A Seen Box ranks with the Idle ones and is not counted Finished;
+  its Attention Class and Status are unchanged (FR-5a, ADR-0014, 2026-10-27).
+- **API** — the Daemon's HTTP surface: current state, history, and an event stream, all
+  read-only, plus the acknowledgement write routes (*amended 2026-10-27, ADR-0014*).
 
 ## 4. Features
 
@@ -356,8 +363,29 @@ edge case.
 - Stopping herdr produces the disconnected strip within the Daemon's reconnect interval.
 - Restarting herdr clears the strip and refreshes every Box from a new snapshot.
 
+#### FR-5a: Acknowledge a Finished Agent
+
+*Added 2026-10-27 by operator decision (ADR-0014), closing §8 Q1.* The operator can mark a
+Finished Box Seen, meaning its result has been read, without touching herdr.
+
+**Consequences (testable):**
+- A Finished Box, and only a Finished one (not Needs you, Idle, Background, Working or Unknown),
+  offers a `✓ Seen` control. Marking it turns the Box grey, labelled SEEN; it moves down among
+  its workspace's Idle Boxes and its group's counts show it as seen, not finished.
+- It stays Seen until the Agent's next Transition out of that finish (a new turn, Needs you, a
+  new Agent in the pane); herdr's own `done` to `idle` within the finish does not end it. It
+  survives a Daemon restart.
+- A workspace heading with two or more unseen Finished Boxes offers `✓ Mark N finished seen`,
+  which marks exactly those Boxes.
+- Every mark offers Undo for 6 seconds.
+- herdr is never told: no focus call, no seen-state change, nothing on any other client.
+- Acknowledgements are recorded append-only and appear in the Agent's history (FR-14).
+- A mark made from a view that is no longer current is refused and changes nothing.
+- There is no keyboard shortcut; the controls are ordinary buttons.
+
 **Out of Scope for the Board:**
-- Any action on an Agent: no focus, no send, no kill, no open-in-terminal.
+- Any action on an Agent: no focus, no send, no kill, no open-in-terminal. (The acknowledgement
+  of FR-5a is not an action on the Agent: herdr is never told.)
 - Pane output, excerpts, or scrollback.
 - Per-Agent detail pages. A history timeline per Agent is a natural second page and is deferred;
   see §6.2.
@@ -498,8 +526,9 @@ pane of each has been observed, and until then they resolve to their Agent Progr
 
 ### 4.4 Read-Only API and Event Stream
 
-**Description:** Everything the Board shows comes from the API. The API is read-only, served on
-the same loopback listener, and designed for the Board first and for future surfaces second.
+**Description:** Everything the Board shows comes from the API. The API is read-only, apart from
+acknowledgement (FR-5a, *amended 2026-10-27*), served on the same loopback listener, and designed
+for the Board first and for future surfaces second.
 Realizes UJ-4.
 
 **Functional Requirements:**
@@ -534,7 +563,12 @@ Retention, in order.
 - No filtering or aggregation beyond this in v1; UJ-4 surfaces do not need it yet.
 
 **Feature-specific NFRs:**
-- No endpoint mutates anything. There are no POST, PUT or DELETE routes.
+- No endpoint mutates anything. There are no POST, PUT or DELETE routes. *Amended 2026-10-27
+  (operator decision, ADR-0014):* except the acknowledgement routes of FR-5a, which are `POST`
+  only, change only herddash's own acknowledgement of a finish, and refuse any request that is not
+  from the Board's own origin (a required same-origin `Origin` and a custom header). Nothing else
+  mutates anything, and nothing reaches herdr.
+- History per Agent also returns its acknowledgements (FR-5a), in recording order.
 - The API never proxies a herdr call on demand; it serves the Daemon's own record and cache.
 
 ### 4.5 Running It
@@ -622,6 +656,7 @@ browser never reaches the herdr socket.
 - **Acknowledgement.** Marking a Finished Agent as dealt with without prompting it. The shape is
   settled by ADR-0001: devswha's finished-pane set beside a server generation marker. It is built
   only if dogfooding shows herdr's own Transitions are not enough. See §8, question 1.
+  *Amended 2026-10-27:* now in scope, by operator decision, as FR-5a (ADR-0014, Epic 6).
 - **Retiring the existing plugin.** Settled by ADR-0001: retire it once the Daemon is trusted, so
   there is one recorder. The change belongs to the provisioning repository, not this one.
 - **Service units** (launchd, systemd user). Deferred to the first release; dogfooding runs the
@@ -659,6 +694,11 @@ browser never reaches the herdr socket.
   *Amended 2026-10-26 (operator decision, ADR-0013):* the Board also carries one title bar: a
   text logo and a summary that restates the Needs you count and herdr's connection, no control
   and no new fact.
+  *Amended 2026-10-27 (operator decision, ADR-0014):* the Board also carries the acknowledgement
+  controls of FR-5a, and only those: a `✓ Seen` pill on each Finished Box, a
+  `✓ Mark N finished seen` button on a workspace heading with two or more unseen Finished Boxes,
+  and a 6 s Undo bar after each mark; a group's counts may read `N seen`. They change only
+  herddash's acknowledgement, never herdr or an Agent. Any other control still needs an ADR.
 - **SM-C2: herdr load.** The Daemon issues no on-demand herdr reads to serve a page view; snapshot
   frequency is bounded by the reconcile timer. Counterbalances SM-2.
 
@@ -673,6 +713,11 @@ are now FR-9a and §6.2.
    stop showing an Agent as Finished. If it is not, the shape is settled (§6.2), but the precedent
    is thin: devswha's `completions.json` was seen once, empty, and how entries are added and
    removed was not observed. Decide after two weeks of dogfooding.
+   *Closed 2026-10-27 by operator decision, not by the record:* yes. A Finished Box stays Finished
+   after its result is read, and herdr's `done` to `idle` keeps it Finished by design. The operator
+   approved an acknowledgement ("Seen") control from a mock rendered with live data; it is FR-5a,
+   decided by ADR-0014 and built as Epic 6. Story 5.9, which was to decide this from the record, is
+   superseded.
 2. **One request per connection on 0.9.x.** Empirically true on 0.8.2 and consistent with 0.9.3
    source, unverified against a 0.9.5 binary. It shapes the whole client; milestone 1
    (addendum §J) proves it. *Answered 2026-10-16: it holds on 0.9.5 (socket API record, finding

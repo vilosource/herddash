@@ -4,16 +4,17 @@ type: architecture-spine
 purpose: build-substrate
 altitude: initiative
 paradigm: 'hexagonal (ports and adapters) around a pure core, with a single-writer engine actor'
-scope: 'herddash v1: one Daemon per Host observing one herdr server - herdr client, recorder, attribution, read-only HTTP API and SSE, embedded Board, plugin-log import'
+scope: 'herddash v1: one Daemon per Host observing one herdr server - herdr client, recorder, attribution, HTTP API (read-only apart from acknowledgement, ADR-0014) and SSE, embedded Board, plugin-log import'
 status: final
 created: '2026-10-14'
-updated: '2026-10-23'
-binds: [FR-1, FR-2, FR-2a, FR-3, FR-4, FR-5, FR-6, FR-7, FR-8, FR-9, FR-9a, FR-10, FR-11, FR-12, FR-13, FR-14, FR-15, FR-16, FR-17]
+updated: '2026-10-27'
+binds: [FR-1, FR-2, FR-2a, FR-3, FR-4, FR-5, FR-5a, FR-6, FR-7, FR-8, FR-9, FR-9a, FR-10, FR-11, FR-12, FR-13, FR-14, FR-15, FR-16, FR-17]
 sources:
   - docs/prd.md
   - docs/planning/prds/prd-herddash-2026-10-08/addendum.md
   - docs/adr/0001-what-herddash-is.md
   - docs/adr/0003-the-board-is-the-product.md
+  - docs/adr/0014-acknowledging-a-finished-agent.md
   - docs/research/herdr-socket-api.md
   - docs/research/herdr-on-this-machine.md
 companions: []
@@ -32,12 +33,12 @@ One **engine** goroutine is the only owner of current state and the only caller 
 
 | Layer | Package | Holds |
 | --- | --- | --- |
-| Core | `internal/core` | AgentKey, Agent, Transition and its constructor, Status, Attention Class, Waiting Time and exactness, sort key, history fold, Profile and Context Line rules, AgentView, ConnectionTruth |
+| Core | `internal/core` | AgentKey, Agent, Transition and its constructor, Status, Attention Class, Waiting Time and exactness, sort key, history fold, Profile and Context Line rules, AgentView, ConnectionTruth; Acknowledgement, its constructor and the rule deciding whether a finish is Seen (ADR-0014) |
 | Engine | `internal/engine` | the actor: pane set, current state, reconcile and Retention timers, resync decisions, publishing views |
 | Adapter | `internal/herdr` | socket mechanics: dial, ping, snapshot, subscribe, stream-health signals, generated wire types |
 | Adapter | `internal/procenv` | reading one process's environment, and its direct children with their arguments (linux: `/proc`; darwin: `kern.procargs2`, `kern.proc.all`; children added 2026-10-21 for Background); and Claude Code's session record for one process, exactly `<config dir>/sessions/<pid>.json`, decoding only `pid`, `status` and `statusUpdatedAt` (added 2026-10-21, ADR-0008: a second source of `blocked`, recorded as `observed_by = claude_session`), and `sessionId` and `cwd`, which name the session's transcript; and that transcript, exactly `<config dir>/projects/<cwd with every character but a letter or digit as "-", or with only "/" and "." as "-" when only that folder exists>/<sessionId>.jsonl`, tailed from an in-memory offset (the last 8 MiB at first sight, then at most 1 MiB of complete new lines per read), handing each line to `core.DecodeTranscriptLine` and keeping nothing of it (added 2026-10-21, ADR-0009: background tasks for the view only, never recorded); only with the operator's `claude_recaps` consent, the decoder also takes one more record, a non-sidechain `system` record of `subtype` `away_summary`, for its string `content` alone, the newest recap held in memory for the view, never recorded or logged (added 2026-10-22, ADR-0010); from 2026-10-23 (ADR-0010 amendment, Story 5.14), also a non-sidechain `system` record of `subtype` `local_command` whose `commandRun.command` is "recap", for the text inside its string content's `<local-command-stdout>` wrapper |
-| Adapter | `internal/store` | open with lock, migrations, append, history reads and fold input, Retention sweep |
-| Adapter | `internal/httpapi` | GET routes, SSE, embedded Board assets |
+| Adapter | `internal/store` | open with lock, migrations, append, history reads and fold input, Retention sweep; acknowledgements: batch append, per-Agent read, swept with their Agent (ADR-0014) |
+| Adapter | `internal/httpapi` | GET routes, SSE, embedded Board assets; the acknowledgement `POST` routes and their cross-site guard, which reach the engine by message (ADR-0014) |
 | Adapter | `internal/importer` | parsing the plugin log into core Transitions |
 | Wiring | `internal/config`, `cmd/herddash` | TOML config, socket and Server resolution, flags, lifecycle, subcommands |
 
@@ -69,7 +70,10 @@ Arrows are the only permitted import directions. `core` imports only the standar
 so do `herdr` and the packages under it, `herdr/gen` and `herdr/gen/genwire` (ADR-0011). Only
 `internal/herdr` and the packages under it import `herdr/gen`; `herdr` itself may import only
 `core` and its own `gen` (ADR-0011). `httpapi` may call only `store`'s read functions; only
-`engine` and `importer` call `store.Append`. `arch_test.go` enforces all of this.
+`engine` and `importer` call `store.Append`, and only `engine` calls
+`store.AppendAcknowledgements`: `httpapi` reaches an acknowledgement only through
+`engine.Engine.Acknowledge`, a message to the actor (ADR-0014; no new edge). `arch_test.go` and
+`callsite_test.go` enforce all of this.
 
 ### AD-1 — Core is pure; every derived value is computed once, there
 
@@ -89,6 +93,10 @@ so do `herdr` and the packages under it, `herdr/gen` and `herdr/gen/genwire` (AD
     would merge two such groups. Inside a group `class_rank` orders Finished, Idle (class Working
     with a Status other than `working`), Background (ADR-0009), Working, then Unknown, and `start`
     is the negated start instant, so the most recent comes first.
+  - **Seen** (added 2026-10-27, ADR-0014): a Finished Agent whose current finish is acknowledged
+    (`AgentView.seen`) has `class_rank` 2, Idle's, so it sorts among the Idle Agents of its group
+    by the same newest-first `start`; Background (3) still takes precedence over it. Its
+    `attention_class` stays `finished`.
 
   The Board does exactly three things beyond rendering. It advances the displayed Waiting Time from
   the view's start instant. It orders Boxes by the sort key. It draws a workspace header wherever
@@ -103,7 +111,8 @@ so do `herdr` and the packages under it, `herdr/gen` and `herdr/gen/genwire` (AD
   message. It publishes an immutable view after each change, holding the current `AgentView`s, the
   ConnectionTruth, a view sequence number and the run id. Readers take that view and never lock
   engine state. The importer is the one other writer; AD-9 keeps it from ever running alongside the
-  engine.
+  engine. An acknowledgement request (ADR-0014) is one more message: the actor validates it
+  against its current state, writes it, and publishes, so a request can never race a Transition.
 
 ### AD-3 — Agent identity is (Host, Server, server epoch, pane id)
 
@@ -206,8 +215,10 @@ so do `herdr` and the packages under it, `herdr/gen` and `herdr/gen/genwire` (AD
 
 - **Binds:** FR-6, FR-7, FR-8, FR-9, FR-9a, FR-11, FR-14
 - **Prevents:** history rewritten by a Profile Map edit, a resync or an import.
-- **Rule:** Transitions and resync markers are inserted and never updated. The only delete is the
-  Retention sweep. For each Agent still present, it keeps every Transition from the one that began
+- **Rule:** Transitions, resync markers and acknowledgements (ADR-0014, migration 0005, their own
+  table) are inserted and never updated; an undo is a further acknowledgement row. The only delete
+  is the Retention sweep, which removes an acknowledgement with its Agent's rows: by age, except a
+  present Agent's rows for its current finish. For each Agent still present, it keeps every Transition from the one that began
   the current Attention Class onward, plus the latest `working` Transition of the current Agent:
   none from before the key's last Transition with no previous Status, which began it (AD-3).
   Agents no longer present are swept purely by age. Each Daemon start is recorded as a resync
@@ -225,15 +236,25 @@ so do `herdr` and the packages under it, `herdr/gen` and `herdr/gen/genwire` (AD
   the package edge; no package outside `internal/herdr` imports `gen`, and `internal/herdr` uses
   only the standard library and `core` (ADR-0011, enforced by `arch_test.go`).
 
-### AD-6 — The HTTP surface is read-only and never calls herdr — ADR-0007
+### AD-6 — The HTTP surface is read-only apart from acknowledgement, and never calls herdr — ADR-0007, ADR-0014
 
-- **Binds:** FR-12, FR-13, FR-14, FR-17
-- **Prevents:** a write route, an on-demand herdr call per page view, or a page on another origin
-  reading the API.
-- **Rule:** GET only. The routes are `/` (root only), `/assets/` (the embedded Board files),
-  `/api/state`, the history route in AD-3, and `/events`. Every response is built from the published
-  view or a `store` read. A request whose `Host` header is not a loopback name is rejected. Errors,
-  including 405, use the JSON error shape.
+- **Binds:** FR-5a, FR-12, FR-13, FR-14, FR-17
+- **Prevents:** any write route but acknowledgement, an on-demand herdr call per page view, a page
+  on another origin reading the API, or a page on another origin making an acknowledgement.
+- **Rule:** GET (and HEAD, except `/events`) on the read routes: `/` (root only), `/assets/` (the
+  embedded Board files), `/api/state`, the history route in AD-3, and `/events`. Every response is
+  built from the published view or a `store` read. A request whose `Host` header is not a loopback
+  name is rejected. Errors, including 405, use the JSON error shape.
+
+  **The write routes (amended 2026-10-27, ADR-0014)** are `POST` only:
+  `/api/agents/{host}/{server}/{epoch}/{pane}/seen` and `.../unseen` (body
+  `{"waiting_since": <ms>}`), and the bulk `/api/seen` and `/api/unseen` (body
+  `{"agents": [{"key": {...}, "waiting_since": <ms>}]}`, 1 to 256 items, all or nothing). Before any
+  body is read each is refused unless: the `Host` is loopback; `Origin` is present and equals
+  `http://` + `Host`; `Sec-Fetch-Site`, if sent, is `same-origin`; `X-Herddash-Write: 1` is sent;
+  `Content-Type` is `application/json`; and the body is within 4 KiB (64 KiB bulk). They reach the
+  engine only through `engine.Engine.Acknowledge`; the engine validates and writes. No CORS header
+  is ever sent, and `OPTIONS` is a 405.
 
 ### AD-7 — The event stream begins with the whole state
 
@@ -246,7 +267,9 @@ so do `herdr` and the packages under it, `herdr/gen` and `herdr/gen/genwire` (AD
     and view sequence.
   - **Change events.** The engine publishes each view together with the change list that produced
     it. `httpapi` turns that list into `agent`, `removed`, `transition`, `resync` and `connection`
-    events, in publish order. The client applies events in arrival order.
+    events, in publish order. The client applies events in arrival order. An acknowledgement or
+    undo (ADR-0014) is published as the `agent` event of each Agent whose view changed; it adds no
+    event name.
   - **Keepalive** (added 2026-10-23, ADR-0012).
     Every 15 s a stream also sends a `keepalive` event: a liveness event, not a change, with data
     `{}` and no `id:`, so `id:` stays the view sequence of real changes. A client that hears
@@ -288,10 +311,11 @@ so do `herdr` and the packages under it, `herdr/gen` and `herdr/gen/genwire` (AD
   an ADR first.
 
   The migrations so far: 0001 the record; 0002 `server_state` (AD-3); 0003 the transitions table's
-  `observed_by` column (ADR-0008); 0004 `server_state.released` (Story 5.17). 0002 and 0004 change
-  engine state only, outside the append-only record, so they needed no ADR. Every migration is a
-  one-way door for older binaries: a database at schema 4 is refused by 0.5.0, which knows schema
-  3, so going back to it means restoring or removing the database.
+  `observed_by` column (ADR-0008); 0004 `server_state.released` (Story 5.17); 0005 the append-only
+  `acknowledgements` table (ADR-0014, Epic 6). 0002 and 0004 change engine state only, outside the
+  append-only record, so they needed no ADR. Every migration is a one-way door for older binaries:
+  a database at schema 4 is refused by 0.5.0, which knows schema 3, and one at schema 5 by 0.7.x,
+  so going back means restoring or removing the database.
 
 ### AD-11 — The engine decides; `internal/herdr` only does
 
@@ -383,7 +407,7 @@ so do `herdr` and the packages under it, `herdr/gen` and `herdr/gen/genwire` (AD
 | Time | UTC Unix milliseconds in storage and on the wire. `observed_at` is the Daemon's clock. Order within an Agent is `observed_at`, then the order the engine recorded them. herdr's sequence (`state_change_seq`) is kept as evidence; it exists only for snapshot-derived Transitions and restarts with herdr, so it is compared only within one server instance. |
 | Status and class values | herdr's strings verbatim: `working`, `blocked`, `done`, `idle`, `unknown`. Attention Class values are `needs_you`, `finished`, `working` and `unknown`. Provenance is one of `live`, `snapshot` or `backfill`. |
 | ConnectionTruth | `{connected, last_snapshot_at, herdr_version, herdr_minimum, gate: ok\|advisory\|refused, resync_guaranteed}`. |
-| JSON | `snake_case` fields. Errors are `{"error":{"code":"...","message":"..."}}` with a matching status. String fields are always sent, `""` when unknown or empty: an AgentView's `heading`, `profile`, `directory`, `workspace`, `tab`, `pane_position`, `pane_title`, `context_line` and `recap`, and a Transition's `profile`. Omitted when absent: an AgentView's `waiting_since` (no class start known); ConnectionTruth's `last_snapshot_at`, `herdr_version` and `gate`; a Transition's `previous`, `herdr_order`, `herdr_version` and `observed_by`; a resync's `detail`. Each AgentView carries `heading` and `waiting_exact`, and `waiting_since` whenever its class start is known. Three packages own the shapes: `engine.View` is the `/api/state` body and the `state` event; `core` owns `AgentView`, `AgentKey`, `SortKey` and `ConnectionTruth`; `httpapi` owns the other SSE payloads, the history body and the error shape. |
+| JSON | `snake_case` fields. Errors are `{"error":{"code":"...","message":"..."}}` with a matching status. String fields are always sent, `""` when unknown or empty: an AgentView's `heading`, `profile`, `directory`, `workspace`, `tab`, `pane_position`, `pane_title`, `context_line` and `recap`, and a Transition's `profile`. Omitted when absent: an AgentView's `waiting_since` (no class start known); ConnectionTruth's `last_snapshot_at`, `herdr_version` and `gate`; a Transition's `previous`, `herdr_order`, `herdr_version` and `observed_by`; a resync's `detail`. Each AgentView carries `heading` and `waiting_exact`, and `waiting_since` whenever its class start is known, and `seen` (ADR-0014), always sent. A history body carries `acknowledgements`, always sent, `[]` when none. Three packages own the shapes: `engine.View` is the `/api/state` body and the `state` event; `core` owns `AgentView`, `AgentKey`, `SortKey` and `ConnectionTruth`; `httpapi` owns the other SSE payloads, the history body and the error shape. |
 | SSE | Event names `state`, `agent`, `removed`, `transition`, `resync` and `connection`, plus `keepalive`, which is sent with no `id:` (ADR-0012). `id:` is the view sequence. `data:` is one JSON object. The write deadline is cleared per stream. |
 | Errors | Adapters wrap with `%w`. herdr error codes are an open set: an unknown code on a subscription is a resync, never a crash. |
 | Logging | `log/slog`, JSON, to `herddash.log` in the data directory. Never log environment values except a matched `CLAUDE_CONFIG_DIR`; Pane Titles only at debug. |
@@ -416,7 +440,7 @@ graph LR
       pe[internal/procenv] --> eng
       eng --> st[(SQLite WAL<br/>flock)]
       eng --> view[published view]
-      view --> api[internal/httpapi<br/>loopback GET + SSE]
+      view --> api[internal/httpapi<br/>loopback GET + SSE<br/>ack POST to engine]
       st --> api
     end
     herdr --> hc
@@ -429,6 +453,7 @@ graph LR
 ```mermaid
 erDiagram
   AGENT_KEY ||--o{ TRANSITION : records
+  AGENT_KEY ||--o{ ACKNOWLEDGEMENT : "seen or undone"
   AGENT_KEY }o--|| SERVER_EPOCH : "scoped by"
   SERVER_EPOCH ||--o{ RESYNC_MARKER : "affected by"
   SCHEMA_VERSION ||--|| DATABASE : versions
@@ -457,6 +482,7 @@ SIGTERM. There is no container, no root and no system service.
 | Capability | Lives in | Governed by |
 | --- | --- | --- |
 | FR-1 to FR-5 Board | `internal/httpapi/web`, `internal/core` | AD-1, AD-6, AD-7 |
+| FR-5a Acknowledgement | `internal/core`, `internal/engine`, `internal/store`, `internal/httpapi` | AD-1, AD-2, AD-4, AD-6, AD-7, AD-10; ADR-0014 |
 | FR-6 to FR-8 Recording | `internal/engine`, `internal/herdr`, `internal/store` | AD-2, AD-4, AD-5, AD-11, AD-12 |
 | FR-9 Retention | engine timer, `store` sweep | AD-2, AD-4 |
 | FR-9a Backfill | `internal/importer`, `cmd/herddash` | AD-9, AD-13 |
@@ -488,8 +514,9 @@ The evidence is in the socket API record's "Findings against herdr 0.9.5".
 - **Several herdr servers per Daemon.** v1 observes one server. AgentKey already carries Server.
 - **Profile rules for Codex and Antigravity.** The rule interface is fixed by AD-1; the rules wait
   on PRD open question 3.
-- **The acknowledgement set.** If PRD open question 1 calls for it, it becomes engine state stored
-  through `store`.
+- ~~**The acknowledgement set.**~~ Decided 2026-10-27 by the operator (ADR-0014): acknowledgements
+  are append-only rows in the record (migration 0005), derived per finish, written only by the
+  engine, built as Epic 6.
 - **Authentication and non-loopback binding.** A future ADR; AD-6 refuses both until then.
 - **Multi-Host aggregation.** It reads several Daemons' APIs; AD-3 already keys on Host.
 - **Log rotation.** Writes are tiny; neither log is rotated yet, and

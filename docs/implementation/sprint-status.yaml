@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 10-16-2026 09:40
-last_updated: 10-23-2026 09:00
+last_updated: 10-27-2026 12:00
 project: herddash
 project_key: NOKEY
 tracking_system: file-system
@@ -74,7 +74,7 @@ development_status:
   4-3-release-binaries-for-every-host: done
   epic-4-retrospective: done
 
-  epic-5: in-progress
+  epic-5: done  # every story done; 5.9 superseded by Epic 6 (2026-10-27)
   5-1-retrospectives-for-epics-1-to-4: done
   5-2-a-resumed-session-does-not-keep-finished-background-tasks: done
   5-3-clear-drops-the-previous-session-s-background-tasks: done
@@ -83,7 +83,8 @@ development_status:
   5-6-ci-runs-the-board-s-browser-check: done
   5-7-ci-tests-on-macos: done
   5-8-documents-agents-read-match-the-code: done
-  5-9-decide-whether-acknowledgement-is-needed: backlog
+  # Superseded by Epic 6 (operator decision 2026-10-27, ADR-0014): PRD §8 Q1 decided by the operator, not the record; closed without running.
+  5-9-decide-whether-acknowledgement-is-needed: done
   5-10-a-new-agent-in-a-reused-pane-starts-fresh: done
   5-11-the-board-notices-a-hung-daemon: done
   5-12-the-engine-treats-repeated-failures-as-a-lost-connection: done
@@ -95,6 +96,15 @@ development_status:
   5-18-a-profile-hold-always-ends: done
   5-19-a-title-bar-on-the-board: done
   epic-5-retrospective: optional
+
+  # Epic 6: Acknowledging a Finished Agent (ADR-0014, vfkb 9aee0fc69560). Local -dev builds; the operator is asked only to dogfood.
+  epic-6: in-progress
+  6-1-acknowledgements-in-the-record: backlog
+  6-2-the-engine-acknowledges-a-finish: backlog
+  6-3-write-routes-guarded-against-cross-site-requests: backlog
+  6-4-the-board-s-seen-control-bulk-mark-and-undo: backlog
+  6-5-documents-and-the-build-the-operator-dogfoods: backlog
+  epic-6-retrospective: optional
 
 # Operator checkpoints and story-size notes carried from epics validation
 # (docs/planning/epics-validation.md, T-2..T-4 and S-4..S-7).
@@ -130,4 +140,8 @@ action_items:
   - epic: 5
     action: "Story 5.9 runs on or after 2026-11-03; it asks the operator only if the record shows Finished Agents that never cleared"
     owner: "dev"
+    status: done  # superseded by Epic 6 (operator decision 2026-10-27, ADR-0014); Story 5.9 closed without running
+  - epic: 6
+    action: "When Epic 6 is built and its -dev build installed (Story 6.5), ask the operator once to dogfood the Seen control; on their OK ship it as one PR and one release (vfkb 9aee0fc69560)"
+    owner: "operator"
     status: open
