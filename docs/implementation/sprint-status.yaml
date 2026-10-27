@@ -98,12 +98,12 @@ development_status:
   epic-5-retrospective: optional
 
   # Epic 6: Acknowledging a Finished Agent (ADR-0014, vfkb 9aee0fc69560). Local -dev builds; the operator is asked only to dogfood.
-  epic-6: in-progress
+  epic-6: done  # every story done; -dev 0.8.0-dev (5bcf6cb90b6b) installed 2026-10-27, ships on the operator's dogfooding OK
   6-1-acknowledgements-in-the-record: done
   6-2-the-engine-acknowledges-a-finish: done
   6-3-write-routes-guarded-against-cross-site-requests: done
   6-4-the-board-s-seen-control-bulk-mark-and-undo: done
-  6-5-documents-and-the-build-the-operator-dogfoods: backlog
+  6-5-documents-and-the-build-the-operator-dogfoods: done
   epic-6-retrospective: optional
 
 # Operator checkpoints and story-size notes carried from epics validation
@@ -144,4 +144,4 @@ action_items:
   - epic: 6
     action: "When Epic 6 is built and its -dev build installed (Story 6.5), ask the operator once to dogfood the Seen control; on their OK ship it as one PR and one release (vfkb 9aee0fc69560)"
     owner: "operator"
-    status: open
+    status: open  # Story 6.5 done; 0.8.0-dev (5bcf6cb90b6b) installed under launchd 2026-10-27, waiting on the operator
