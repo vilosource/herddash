@@ -83,5 +83,5 @@ func (e *Engine) sweep() {
 		return
 	}
 	e.log.Info("retention sweep", "cutoff", cutoff, "present", len(present),
-		"transitions", r.Transitions, "resync_markers", r.ResyncMarkers)
+		"transitions", r.Transitions, "resync_markers", r.ResyncMarkers, "acknowledgements", r.Acknowledgements)
 }

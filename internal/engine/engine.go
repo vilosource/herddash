@@ -499,6 +499,12 @@ type pane struct {
 	tail     procenv.Tail
 	tasks    core.BackgroundTasks
 	trLogged bool
+	// seenSince is the class start of the finish the operator acknowledged
+	// (ADR-0014), 0 when none: in force while the fold is Finished from that
+	// same instant (seenNow). Derived from the record when the fold is seeded
+	// from it, set by Acknowledge, and cleared once the fold leaves that
+	// finish.
+	seenSince int64
 }
 
 // cause is why a resync runs: the reason the Sink and the record show, and,
@@ -1013,6 +1019,8 @@ func (e *Engine) handle(m any) {
 		e.sweep()
 	case agentsQuery:
 		m.reply <- e.agents()
+	case ackMsg:
+		e.onAcknowledge(m)
 	case profileMsg:
 		e.onProfile(m)
 	case profileRetryMsg:
@@ -2648,6 +2656,13 @@ func (e *Engine) transitionAt(p *pane, next core.Status, prov core.Provenance, o
 // already shows.
 func (e *Engine) commit(p *pane, t core.Transition) {
 	p.fold = p.fold.Add(t)
+	if _, ok := t.Previous(); !ok {
+		p.seenSince = 0 // a new Agent's first row: its fold starts over
+	}
+	// A Transition that moves the class or its start ends an
+	// acknowledgement, with nothing read or written; done to idle within the
+	// finish moves neither.
+	clearStaleSeen(p)
 	e.record(t)
 	e.sink.Transition(t, e.agent(p))
 	if p.known {
@@ -2705,6 +2720,7 @@ func (e *Engine) firstSight(p *pane, reportedAt int64) (skipped bool) {
 	if hist.Known && hist.Status == p.status && ts[len(ts)-1].AgentProgram() == p.program {
 		e.log.Info("agent unchanged since the record", "pane", p.id, "status", p.status, "class", hist.Class, "since", hist.Since)
 		p.fold = hist
+		e.seedSeen(p)
 		return true
 	}
 	in := core.TransitionInput{
@@ -2735,6 +2751,9 @@ func (e *Engine) firstSight(p *pane, reportedAt int64) (skipped bool) {
 		return true
 	}
 	e.record(t)
+	// After the record: a row it failed to append leaves the pane unrecorded,
+	// but its acknowledgement, of a finish the record holds, still stands.
+	e.seedSeen(p)
 	if _, hasPrev := t.Previous(); !hasPrev && !p.unrecorded && e.released[p.id] {
 		// The released pane's next Agent now begins the record's rows for
 		// the pane: later starts may seed from them.

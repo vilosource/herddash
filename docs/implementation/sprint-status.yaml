@@ -100,7 +100,7 @@ development_status:
   # Epic 6: Acknowledging a Finished Agent (ADR-0014, vfkb 9aee0fc69560). Local -dev builds; the operator is asked only to dogfood.
   epic-6: in-progress
   6-1-acknowledgements-in-the-record: done
-  6-2-the-engine-acknowledges-a-finish: backlog
+  6-2-the-engine-acknowledges-a-finish: done
   6-3-write-routes-guarded-against-cross-site-requests: backlog
   6-4-the-board-s-seen-control-bulk-mark-and-undo: backlog
   6-5-documents-and-the-build-the-operator-dogfoods: backlog
