@@ -1688,6 +1688,7 @@ equivalent), so the check does not wait 3 s per step.
 
 **And** CI's `board-browser` job runs these and fails when the `.in-view` or `.unack` rule is removed; `go test ./...`, `node --test internal/httpapi/web/` and `gofmt -l .` pass
 **And** the design gate is the operator's dogfooding with live data (Story 6.9), as for Story 6.4
+**And** a Box redrawn for a view change while one of its controls (`button.ack` or `button.unack`) has keyboard focus gives focus back to the same control of the redrawn Box, not to the Box: since Story 6.7 every herdr focus move into or out of a Finished pane toggles `in_view` and redraws that Box, and the browser check asserts the Seen pill keeps focus across such a move (Story 6.7's review)
 
 ### Story 6.9: Documents, and the build the operator dogfoods again
 
