@@ -309,7 +309,10 @@ Board did not ask for it); `Mark unseen` takes it back.
   Box's exact finish (its key and `waiting_since`) to
   `/api/agents/{host}/{server}/{epoch}/{pane}/unseen`. On success the Undo bar shows "Marked <tab>
   not seen" for 6 s, whose `Undo` marks it seen again; a refusal shows the refusal bar, "Could not
-  mark it not seen" unless 409 or 503 as for Seen. After it the Box is Finished with its Seen pill,
+  mark it not seen" unless 409 or 503 as for Seen; a refused Undo of it says the Agent is still
+  not seen ("It changed before the undo; it is still not seen", "herddash is not recording; it is
+  still not seen", "Could not undo it; it is still not seen"). An Undo that succeeds shows no
+  bar. After it the Box is Finished with its Seen pill,
   and the Daemon will not mark that finish Seen again when the operator leaves the pane: their
   explicit choice wins. It is disabled while in flight and while the Boxes are dimmed or hidden.
 
@@ -343,7 +346,8 @@ users can read a Box in full. Each Box's accessible name carries its workspace a
 Context Line (or the full recap in its place, ADR-0010), directory, heading, class label and Waiting Time ("at least" for a lower bound),
 and it is kept current as the time ticks. Focusing a Box does nothing else. The acknowledgement
 controls (ADR-0014) are buttons with accessible names; a Box redrawn without its pill keeps
-focus, and the Undo bar is a status region. Needs you is conveyed in
+focus, a Box redrawn with the same pill (its in-view tag come or gone, ADR-0015) gives focus back
+to that pill, and the Undo bar is a status region. Needs you is conveyed in
 text, not only colour.
 
 ## Deliberately absent (NFR10, SM-C1)

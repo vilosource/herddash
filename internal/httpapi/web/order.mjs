@@ -276,6 +276,30 @@ export function ackPath(key, seen) {
   );
 }
 
+// IN_VIEW_TEXT and IN_VIEW_TITLE are the in-view tag's text and title
+// (ADR-0015).
+export const IN_VIEW_TEXT = "● in view";
+export const IN_VIEW_TITLE = "Focused in herdr now. Leaving the pane after 3 s marks it seen.";
+
+// inViewTag reports whether a Box shows the in-view tag (ADR-0015): a Box
+// of kind finished (so not Background and not Seen) whose pane is herdr's
+// focused pane, the Daemon's in_view read as sent. No other kind shows it,
+// Needs you included.
+export function inViewTag(view) {
+  return boxKind(view) === "finished" && view.in_view === true;
+}
+
+// ackLabel is a Seen pill's accessible name, "Mark <tab> seen".
+export function ackLabel(view) {
+  return "Mark " + tabLabel(view) + " seen";
+}
+
+// unackLabel is a Mark unseen pill's accessible name, "Mark <tab> not
+// seen" (ADR-0015).
+export function unackLabel(view) {
+  return "Mark " + tabLabel(view) + " not seen";
+}
+
 // ackToast is the Undo bar's text after a mark (seen true) or an undo:
 // "Marked <tab> seen", "Marked N Agents seen", "Marked <tab> not seen".
 export function ackToast(views, seen) {
@@ -283,25 +307,41 @@ export function ackToast(views, seen) {
   return "Marked " + what + (seen ? " seen" : " not seen");
 }
 
-// ACK_STALE, ACK_OFF and ACK_FAILED are the bar's text for a refused mark.
+// ACK_STALE, ACK_OFF and ACK_FAILED are the bar's text for a refused mark;
+// UNSEEN_FAILED is ACK_FAILED's for a refused Mark unseen (ADR-0015), whose
+// 409 and 503 read as a mark's.
 export const ACK_STALE = "It changed before it was marked; nothing was marked";
 export const ACK_OFF = "herddash is not recording; nothing was marked";
 export const ACK_FAILED = "Could not mark it seen";
+export const UNSEEN_FAILED = "Could not mark it not seen";
 
 // UNDO_STALE, UNDO_OFF and UNDO_FAILED are the bar's text for a refused
-// Undo: the mark stands, so they never say nothing was marked.
+// Undo of a Seen mark: the mark stands, so they never say nothing was marked.
 export const UNDO_STALE = "It changed before the undo; it is still marked seen";
 export const UNDO_OFF = "herddash is not recording; it is still marked seen";
 export const UNDO_FAILED = "Could not undo it; it is still marked seen";
 
-// ackError is the bar's text for a refused mark (seen true) or Undo (seen
-// false), by the response's status (0 when the request never got one) and
-// error code: a 409 (the Agent moved on, is no longer Finished, or is held),
-// a 503 (recording off), else a plain failure.
-export function ackError(status, code, seen = true) {
-  if (status === 409) return seen ? ACK_STALE : UNDO_STALE;
-  if (status === 503) return seen ? ACK_OFF : UNDO_OFF;
-  return seen ? ACK_FAILED : UNDO_FAILED;
+// REDO_STALE, REDO_OFF and REDO_FAILED are the bar's text for a refused
+// Undo of a Mark unseen: it stands, so the Agent is still not seen.
+export const REDO_STALE = "It changed before the undo; it is still not seen";
+export const REDO_OFF = "herddash is not recording; it is still not seen";
+export const REDO_FAILED = "Could not undo it; it is still not seen";
+
+// ackError is the bar's text for a refused request, by the response's
+// status (0 when the request never got one) and error code: a 409 (the
+// Agent moved on, is no longer Finished, or is held), a 503 (recording off),
+// else a plain failure. seen is what the request asked for, and undo says it
+// was the Undo bar's: a mark (seen, not undo), a Mark unseen (neither), the
+// Undo of a mark (undo, not seen) or the Undo of a Mark unseen (both).
+export function ackError(status, code, seen = true, undo = false) {
+  const [stale, off, failed] = undo
+    ? seen
+      ? [REDO_STALE, REDO_OFF, REDO_FAILED]
+      : [UNDO_STALE, UNDO_OFF, UNDO_FAILED]
+    : [ACK_STALE, ACK_OFF, seen ? ACK_FAILED : UNSEEN_FAILED];
+  if (status === 409) return stale;
+  if (status === 503) return off;
+  return failed;
 }
 
 // ACK_TOAST_MS is how long the Undo bar, or a refusal's bar, shows.
@@ -384,12 +424,14 @@ export function anyRecap(views) {
 // boxLabel is a Box's accessible name at nowMs: everything it shows,
 // untruncated, so keyboard and screen-reader users can read it in full:
 // workspace and tab, pane, the recap in full or else the Context Line,
-// directory, heading, class, its background tasks, and time.
+// directory, heading, class, "in view" when the Box shows that tag
+// (ADR-0015), its background tasks, and time.
 export function boxLabel(view, nowMs) {
   const w = hasWaitingSince(view)
     ? "waiting " + waitingLabel(view, nowMs).replace("≥ ", "at least ")
     : "Waiting Time unknown";
-  return [whereLabel(view), paneLabel(view), contextText(view), view.directory, view.heading, classLabel(view), tasksLabel(view), w]
+  const inView = inViewTag(view) ? "in view" : "";
+  return [whereLabel(view), paneLabel(view), contextText(view), view.directory, view.heading, classLabel(view), inView, tasksLabel(view), w]
     .filter(Boolean)
     .join(", ");
 }

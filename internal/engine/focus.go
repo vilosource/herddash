@@ -46,7 +46,7 @@ func (e *Engine) onFocus(id string) {
 // conditions (a present, published Agent under the epoch in force, its fold
 // known with a positive start, no rows held for a Profile, its fold in the
 // record), then core.SeenOnLeave on its published view, the finish's row and
-// the dwell against seenDwell. Leaves are judged only once the connection is
+// the dwell against e.minDwell(). Leaves are judged only once the connection is
 // ready: before its first snapshot the Agents and the epoch are not yet
 // confirmed. A mark is one herdr_focus row, with herdr's order for the Status
 // when a snapshot read it; a failed write is logged and changes nothing, and
@@ -59,7 +59,7 @@ func (e *Engine) leave(id string, dwell time.Duration) {
 	if !p.fold.Known || p.fold.Since <= 0 || p.holdRows || p.unrecorded || p.view.WaitingSince != p.fold.Since {
 		return
 	}
-	if !core.SeenOnLeave(core.LeaveInput{View: p.view, FinishHasRow: finishHasRow(p), Dwell: dwell, MinDwell: seenDwell}) {
+	if !core.SeenOnLeave(core.LeaveInput{View: p.view, FinishHasRow: finishHasRow(p), Dwell: dwell, MinDwell: e.minDwell()}) {
 		return
 	}
 	in := core.AcknowledgementInput{Key: e.key(p.id), FinishedSince: p.fold.Since, Seen: true, ObservedAt: e.now(),
@@ -149,4 +149,13 @@ func (e *Engine) restartDwell(p *pane) {
 	if m := e.focusMoved; m != nil && p.id == m.from {
 		e.focusMoved = nil
 	}
+}
+
+// minDwell is the least dwell for a leave to mark a finish Seen:
+// Options.SeenDwell when positive, else seenDwell.
+func (e *Engine) minDwell() time.Duration {
+	if e.seenDwell > 0 {
+		return e.seenDwell
+	}
+	return seenDwell
 }

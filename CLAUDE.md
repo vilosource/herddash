@@ -232,7 +232,9 @@ Beside them, CI's `board-browser` job builds `./cmd/herddash` and runs
 `internal/httpapi/web/check/board-browser.mjs` against the runner's preinstalled Google Chrome with
 the runner's Node (22 or newer, no npm), so breaking the Board's drawing, such as removing the
 `.board--recaps` rule, turns CI red. To run it locally (on Linux, prefix the second command with
-`CHROME=$(command -v google-chrome)`):
+`CHROME=$(command -v google-chrome)`). Its focus section runs `serve` with
+`HERDDASH_TEST_SEEN_DWELL_MS=1000`, a test seam that lowers the 3 s Seen dwell (ADR-0015, Story
+6.8); `serve` logs a warning when it is set, and nothing else should set it:
 
 ```bash
 go build -o /tmp/herddash ./cmd/herddash

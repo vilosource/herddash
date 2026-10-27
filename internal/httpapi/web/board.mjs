@@ -9,13 +9,18 @@
 // dimmed or hidden are order.mjs's boardStatus; this file draws them.
 //
 // The acknowledgement controls (ADR-0014, Story 6.4) are ordinary buttons,
-// with no key binding: a Seen pill on every Finished Box, a heading's bulk
-// mark, and the Undo bar. A click only sends the request; the Box changes
-// when the stream's agent event says so, never optimistically.
+// with no key binding: a Seen pill on every Finished Box, a Mark unseen pill
+// on every Seen Box (ADR-0015, Story 6.8), a heading's bulk mark, and the
+// Undo bar. A click only sends the request; the Box changes when the stream's
+// agent event says so, never optimistically. The in-view tag on a Finished
+// Box whose pane herdr has focused (ADR-0015) is a label, not a control.
 
 import {
   ACK_TOAST_MS,
   EVENT_NAMES,
+  IN_VIEW_TEXT,
+  IN_VIEW_TITLE,
+  ackLabel,
   ackBody,
   ackError,
   ackPath,
@@ -30,6 +35,7 @@ import {
   documentTitle,
   hasWaitingSince,
   inNeedsYou,
+  inViewTag,
   keyId,
   layout,
   modelViews,
@@ -41,6 +47,7 @@ import {
   waitingLabel,
   tabLabel,
   titleBar,
+  unackLabel,
   unseenFinished,
 } from "./order.mjs";
 
@@ -82,9 +89,19 @@ function fillBox(box, view, now) {
   const wh = el("p", "where");
   wh.appendChild(el("span", "tab", tabLabel(view)));
   if (view.pane_position) wh.appendChild(el("span", "pane", view.pane_position));
+  // A Finished Box whose pane herdr has focused shows the in-view tag, a
+  // label and not a control (ADR-0015).
+  if (inViewTag(view)) {
+    const tag = el("span", "in-view", IN_VIEW_TEXT);
+    tag.title = IN_VIEW_TITLE;
+    wh.appendChild(tag);
+  }
   // A Finished Box, and no other kind, ends its first line with the Seen
-  // pill (ADR-0014).
-  if (boxKind(view) === "finished") wh.appendChild(ackButton(view));
+  // pill (ADR-0014); a Seen Box, and no other kind, with Mark unseen
+  // (ADR-0015).
+  const kind = boxKind(view);
+  if (kind === "finished") wh.appendChild(ackButton(view));
+  else if (kind === "seen") wh.appendChild(unackButton(view));
 
   // Second: in the Needs you zone the workspace; in a workspace group the
   // directory, truncated from the start in CSS, so the project segment stays
@@ -130,7 +147,7 @@ function ackButton(view) {
   const b = el("button", "ack");
   b.type = "button";
   b.title = "Mark seen: you have read this Agent's result";
-  b.setAttribute("aria-label", "Mark " + tabLabel(view) + " seen");
+  b.setAttribute("aria-label", ackLabel(view));
   const icon = el("span", "ack-icon", "✓");
   icon.setAttribute("aria-hidden", "true");
   b.append(icon, el("span", "ack-text", "Seen"));
@@ -138,6 +155,22 @@ function ackButton(view) {
   b.addEventListener("click", (e) => {
     e.stopPropagation();
     acknowledge([view], true, { bulk: false });
+  });
+  return b;
+}
+
+// unackButton is a Seen Box's Mark unseen pill, showing view's finish as
+// unread again (ADR-0015): the remedy for a mark the operator disagrees
+// with, automatic or not. The Daemon then leaves that finish Finished.
+function unackButton(view) {
+  const b = el("button", "unack", "Mark unseen");
+  b.type = "button";
+  b.title = "Mark not seen: show this result as unread again";
+  b.setAttribute("aria-label", unackLabel(view));
+  b.disabled = controlsOff || pending.has(keyId(view.key));
+  b.addEventListener("click", (e) => {
+    e.stopPropagation();
+    acknowledge([view], false, { bulk: false });
   });
   return b;
 }
@@ -317,11 +350,12 @@ async function postAck(path, body) {
   }
 }
 
-// acknowledge marks views seen (or, with seen false, undoes them): one
-// view per-Agent unless it came from a heading, else the bulk route. The
-// Board changes nothing itself: the Boxes change when the stream's agent
-// events arrive. A mark that succeeds shows the Undo bar; a refusal shows
-// why, with no Undo.
+// acknowledge marks views seen, or with seen false not seen: one view
+// per-Agent unless it came from a heading, else the bulk route. how.undo is
+// set for the Undo bar's request. The Board changes nothing itself: the
+// Boxes change when the stream's agent events arrive. A mark or a Mark
+// unseen that succeeds shows the Undo bar, whose Undo asks for the
+// opposite; a refusal shows why, with no Undo.
 async function acknowledge(views, seen, how) {
   if (controlsOff || !views.length) return;
   const ids = views.map((v) => keyId(v.key));
@@ -338,8 +372,8 @@ async function acknowledge(views, seen, how) {
     if (how.group !== undefined) pendingGroups.delete(how.group);
     syncControls();
   }
-  if (!res.ok) showToast(ackError(res.status, res.code, seen), null, ids[0]);
-  else if (seen) showToast(ackToast(views, true), () => acknowledge(views, false, { bulk: how.bulk }), ids[0]);
+  if (!res.ok) showToast(ackError(res.status, res.code, seen, !!how.undo), null, ids[0]);
+  else if (!how.undo) showToast(ackToast(views, seen), () => acknowledge(views, !seen, { bulk: how.bulk, undo: true }), ids[0]);
 }
 
 // setDisabled disables or enables btn. A browser drops a focused control's
@@ -353,8 +387,7 @@ function setDisabled(btn, off, target) {
 // syncControls enables or disables every acknowledgement control.
 function syncControls() {
   for (const [id, b] of boxes) {
-    const btn = b.box.querySelector("button.ack");
-    if (btn) setDisabled(btn, controlsOff || pending.has(id), b.box);
+    for (const btn of b.box.querySelectorAll("button.ack, button.unack")) setDisabled(btn, controlsOff || pending.has(id), b.box);
   }
   for (const [id, g] of groups) setDisabled(g.bulk, controlsOff || pendingGroups.has(id), g.grid.querySelector(".box"));
   setDisabled(toastUndo, controlsOff, toastFocus && boxes.get(toastFocus)?.box);
@@ -432,8 +465,10 @@ function render() {
   const status = currentStatus(now);
   drawStatus(status);
   // A control inside a Box counts as its Box: a Box redrawn without its pill
-  // keeps the focus.
+  // keeps the focus, and one redrawn with the same pill (an in-view tag come
+  // or gone, a Waiting Time restarted) gives it back to that pill.
   let focused = document.activeElement?.closest?.("[data-key]")?.dataset?.key;
+  const focusedPill = ["ack", "unack"].find((c) => document.activeElement?.matches?.("button." + c));
   // A heading's bulk mark that this render hides would drop focus to the
   // page; its group keeps it instead (below).
   let bulkFocus;
@@ -484,7 +519,11 @@ function render() {
   // A Box moved in the document loses focus; give it back.
   if (focused && !status.hideBoxes) {
     const b = boxes.get(focused);
-    if (b && !b.box.contains(document.activeElement)) b.box.focus({ preventScroll: true });
+    if (b && !b.box.contains(document.activeElement)) {
+      const pill = focusedPill && b.box.querySelector("button." + focusedPill);
+      if (pill && !pill.disabled && !controlsOff) pill.focus({ preventScroll: true });
+      else b.box.focus({ preventScroll: true });
+    }
   }
   syncControls();
 }

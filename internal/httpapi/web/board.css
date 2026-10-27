@@ -337,6 +337,30 @@ body {
 }
 .pane + .ack { margin-left: var(--space-2); }
 .ack:hover:not(:disabled) { background: var(--finished-edge); color: var(--surface); }
+/* The in-view tag (ADR-0015): a label, not a control, before a Finished Box's Seen pill when
+   herdr has its pane focused. Text only, in the Finished accent; the dot is the same colour. */
+.in-view {
+  flex: none; margin-left: auto;
+  font-size: var(--text-label); font-weight: 600; line-height: 1.25;
+  color: var(--finished-accent);
+  white-space: nowrap;
+}
+.pane + .in-view, .in-view + .ack { margin-left: var(--space-2); }
+/* Mark unseen (ADR-0015), at the end of a Seen Box's first line: the Seen pill's shape, quiet,
+   so it does not pull the eye back to a Box that has receded. */
+.unack {
+  flex: none; margin-left: auto;
+  padding: 0.15rem 0.55rem;
+  font: inherit; font-size: var(--text-label); font-weight: 600; line-height: 1.25;
+  color: var(--ink-muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.pane + .unack { margin-left: var(--space-2); }
+.unack:hover:not(:disabled) { color: var(--ink); border-color: var(--ink-faint); }
 /* A workspace heading's bulk mark, after its counts, shown with 2 or more Finished Boxes. */
 .ack-all {
   flex: none; margin-left: auto; align-self: center;
@@ -351,7 +375,7 @@ body {
 }
 .ack-all:hover:not(:disabled) { border-color: var(--finished-edge); }
 .ack-all[hidden] { display: none; }
-.ack:disabled, .ack-all:disabled, .toast-undo:disabled { opacity: 0.55; cursor: default; }
+.ack:disabled, .unack:disabled, .ack-all:disabled, .toast-undo:disabled { opacity: 0.55; cursor: default; }
 /* The Undo bar: fixed at the bottom centre for 6 s after a mark, or a refusal's text. */
 .toast {
   position: fixed; left: 50%; bottom: var(--space-5); z-index: 3;

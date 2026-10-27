@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -2006,5 +2007,47 @@ func TestServeRecap(t *testing.T) {
 				t.Fatalf("exit code %d, stderr %q", code, stderr.String())
 			}
 		})
+	}
+}
+
+// HERDDASH_TEST_SEEN_DWELL_MS, the browser check's seam (Story 6.8), lowers
+// the Seen dwell only when it is a whole number of milliseconds from 1 to
+// 60000, and a Daemon running with it says so in its log.
+func TestTestSeenDwell(t *testing.T) {
+	cases := []struct {
+		value string
+		set   bool
+		want  time.Duration
+		log   string
+	}{
+		{set: false, want: 0},
+		{value: "1500", set: true, want: 1500 * time.Millisecond, log: "test seam: the Seen dwell is lowered"},
+		{value: "1", set: true, want: time.Millisecond, log: "test seam: the Seen dwell is lowered"},
+		{value: "60000", set: true, want: time.Minute, log: "test seam: the Seen dwell is lowered"},
+		{value: "", set: true, want: 0, log: "test seam ignored"},
+		{value: "0", set: true, want: 0, log: "test seam ignored"},
+		{value: "-5", set: true, want: 0, log: "test seam ignored"},
+		{value: "60001", set: true, want: 0, log: "test seam ignored"},
+		{value: "1.5", set: true, want: 0, log: "test seam ignored"},
+		{value: "3s", set: true, want: 0, log: "test seam ignored"},
+	}
+	for _, c := range cases {
+		if c.set {
+			t.Setenv(testSeenDwellEnv, c.value)
+		} else {
+			t.Setenv(testSeenDwellEnv, "")
+			os.Unsetenv(testSeenDwellEnv)
+		}
+		var buf strings.Builder
+		got := testSeenDwell(slog.New(slog.NewJSONHandler(&buf, nil)))
+		if got != c.want {
+			t.Errorf("%q (set %v): %v, want %v", c.value, c.set, got, c.want)
+		}
+		if c.log == "" && buf.Len() != 0 {
+			t.Errorf("unset: logged %s, want nothing", buf.String())
+		}
+		if c.log != "" && (!strings.Contains(buf.String(), c.log) || !strings.Contains(buf.String(), `"level":"WARN"`)) {
+			t.Errorf("%q: logged %s, want a warning %q", c.value, buf.String(), c.log)
+		}
 	}
 }

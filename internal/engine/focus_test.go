@@ -175,6 +175,29 @@ func TestFocusShortDwell(t *testing.T) {
 	}
 }
 
+// Options.SeenDwell, the browser check's seam (Story 6.8), replaces seenDwell
+// for one engine: a leave at it marks, one just under it does not.
+func TestFocusSeenDwellOption(t *testing.T) {
+	const dwell = 400 * time.Millisecond
+	h, _, st, clock := startFocus(t, snapOf(agentPane("w1:p1", core.StatusDone), agentPane("w1:p2", core.StatusDone),
+		agentPane("w1:p3", core.StatusIdle)), func(o *Options, _ *recorder) { o.SeenDwell = dwell })
+	h.focusOn("w1:p1")
+	clock.advance(dwell - time.Millisecond)
+	h.focusOn("w1:p3")
+	if n := len(st.ackList()); n != 0 || h.viewOf("w1:p1").Seen {
+		t.Fatalf("%d acknowledgements after a dwell just under Options.SeenDwell, want none", n)
+	}
+	h.focusOn("w1:p2")
+	clock.advance(dwell)
+	h.focusOn("w1:p3")
+	if acks := focusAcks(st); len(acks) != 1 || acks[0].Key().PaneID != "w1:p2" || !h.viewOf("w1:p2").Seen {
+		t.Fatalf("acknowledgements %+v after a dwell of Options.SeenDwell, want one herdr_focus mark of w1:p2", acks)
+	}
+	if h.viewOf("w1:p1").Seen {
+		t.Error("w1:p1 seen")
+	}
+}
+
 // The dwell counts time focused during the current finish only: focus that
 // began while the Agent was Working restarts when it finishes.
 func TestFocusDwellRestartsAtFinish(t *testing.T) {

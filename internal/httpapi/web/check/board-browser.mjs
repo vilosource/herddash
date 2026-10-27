@@ -6,7 +6,10 @@
 // and dim its Boxes once STREAM_SILENCE_MS passes, and clear both after
 // SIGCONT, and the acknowledgement controls (ADR-0014, Story 6.4): the Seen
 // pill, the heading's bulk mark, the Undo bar, Seen across a status change
-// and a restart, and a page on another origin refused. Not embedded. CI's board-browser job runs it on ubuntu against the
+// and a restart, and a page on another origin refused; and Seen on leaving
+// the pane (ADR-0015, Story 6.8): the in-view tag, a leave past the dwell,
+// Mark unseen with its Undo, an explicit choice that sticks, a flick that
+// marks nothing, all across a restart. Not embedded. CI's board-browser job runs it on ubuntu against the
 // runner's Google Chrome (Story 5.6); it also runs by hand:
 //
 //   go build -o /tmp/herddash ./cmd/herddash
@@ -91,11 +94,14 @@ const SNAPSHOT = {
 };
 
 // fakeHerdr answers with snapshot() (SNAPSHOT by default) and keeps each
-// pane's status subscription, so push can send that pane a status change.
+// pane's status subscription, so push can send that pane a status change,
+// and each lifecycle subscription naming pane.focused, so pushFocus can send
+// it a pane_focused line (ADR-0015).
 function fakeHerdr(path, version, snapshot = () => SNAPSHOT) {
   let server = null;
   const conns = new Set();
   const statusSubs = new Map(); // pane id -> its subscription's connections
+  const focusSubs = new Set(); // lifecycle connections subscribed to pane.focused
   const handle = (conn) => {
     conns.add(conn);
     conn.on("close", () => conns.delete(conn));
@@ -122,7 +128,12 @@ function fakeHerdr(path, version, snapshot = () => SNAPSHOT) {
           break;
         case "events.subscribe": {
           reply({ type: "subscription_started" }); // held open until the client closes it
-          const sub = (req.params?.subscriptions || []).find((x) => x.type === "pane.agent_status_changed");
+          const subs = req.params?.subscriptions || [];
+          if (subs.some((x) => x.type === "pane.focused")) {
+            focusSubs.add(conn);
+            conn.on("close", () => focusSubs.delete(conn));
+          }
+          const sub = subs.find((x) => x.type === "pane.agent_status_changed");
           if (sub) {
             if (!statusSubs.has(sub.pane_id)) statusSubs.set(sub.pane_id, new Set());
             statusSubs.get(sub.pane_id).add(conn);
@@ -138,6 +149,15 @@ function fakeHerdr(path, version, snapshot = () => SNAPSHOT) {
   return {
     // subscribed reports whether pane has a live status subscription.
     subscribed: (pane) => (statusSubs.get(pane)?.size || 0) > 0,
+    // focusSubscribed reports whether a lifecycle subscription names
+    // pane.focused.
+    focusSubscribed: () => focusSubs.size > 0,
+    // pushFocus sends every pane.focused subscription a pane_focused line,
+    // as herdr 0.9.5 sends it (docs/research/herdr-focus-events-2026-10-27.md).
+    pushFocus(pane, workspace) {
+      const line = JSON.stringify({ data: { pane_id: pane, type: "pane_focused", workspace_id: workspace }, event: "pane_focused" });
+      for (const c of focusSubs) c.write(line + "\n");
+    },
     // push sends pane's status subscriptions a status change.
     push(pane, status, workspace) {
       const line = JSON.stringify({ data: { agent: "claude", agent_status: status, pane_id: pane, workspace_id: workspace }, event: "pane.agent_status_changed" });
@@ -158,10 +178,10 @@ function fakeHerdr(path, version, snapshot = () => SNAPSHOT) {
 
 // ---- herddash serve ----
 
-function serve(name, sock, bind, extra = []) {
+function serve(name, sock, bind, extra = [], extraEnv = {}) {
   const home = join(root, name + "-home");
   const data = join(root, name + "-data");
-  const env = { PATH: process.env.PATH, HOME: home };
+  const env = { PATH: process.env.PATH, HOME: home, ...extraEnv };
   const args = ["serve", "--socket", sock, "--server", "test", "--host", "testhost", "--data-dir", data, "--bind", bind, ...extra];
   const p = spawn(binary, args, { env, stdio: "ignore" });
   const exited = new Promise((r) => p.on("exit", r));
@@ -279,32 +299,39 @@ const ACK_PANES = [
 
 // ackSnapshot is herdr's snapshot of ACK_PANES at their current statuses.
 function ackSnapshot() {
-  const ws = { w1: "probe", w2: "solo" };
+  return paneSnapshot(ACK_PANES, { w1: "probe", w2: "solo" });
+}
+
+// paneSnapshot is herdr's snapshot of panes, one tab each, in the
+// workspaces ws labels, with focused_pane_id set when focus is given.
+function paneSnapshot(panes, ws, focus) {
+  const focused = focus ? { focused_workspace_id: focus.split(":")[0], focused_tab_id: focus.replace(":p", ":t"), focused_pane_id: focus } : {};
   return {
     type: "session_snapshot",
     snapshot: {
       version: "0.9.5",
       protocol: 22,
+      ...focused,
       workspaces: Object.entries(ws).map(([id, label], i) => {
-        const n = ACK_PANES.filter((p) => p.ws === id).length;
+        const n = panes.filter((p) => p.ws === id).length;
         return { workspace_id: id, number: i + 1, label, focused: i === 0, pane_count: n, tab_count: n, active_tab_id: id + ":t1", agent_status: "working" };
       }),
-      tabs: ACK_PANES.map((p, i) => ({
-        tab_id: p.pane.replace(":p", ":t"), workspace_id: p.ws, number: i + 1, label: p.tab, focused: i === 0, pane_count: 1, agent_status: p.status,
+      tabs: panes.map((p, i) => ({
+        tab_id: p.pane.replace(":p", ":t"), workspace_id: p.ws, number: i + 1, label: p.tab, focused: focus ? p.pane === focus : i === 0, pane_count: 1, agent_status: p.status,
       })),
-      panes: ACK_PANES.map((p, i) => ({
-        pane_id: p.pane, terminal_id: "t-" + p.pane, workspace_id: p.ws, tab_id: p.pane.replace(":p", ":t"), focused: i === 0,
+      panes: panes.map((p, i) => ({
+        pane_id: p.pane, terminal_id: "t-" + p.pane, workspace_id: p.ws, tab_id: p.pane.replace(":p", ":t"), focused: focus ? p.pane === focus : i === 0,
         cwd: "/srv/" + p.pane.replace(":", "-"), agent: "claude", agent_status: p.status, revision: 0,
       })),
-      layouts: ACK_PANES.map((p) => ({
+      layouts: panes.map((p) => ({
         workspace_id: p.ws, tab_id: p.pane.replace(":p", ":t"), zoomed: false, focused_pane_id: p.pane,
         area: { x: 0, y: 0, width: 120, height: 40 },
         panes: [{ pane_id: p.pane, focused: true, rect: { x: 0, y: 0, width: 120, height: 40 } }],
         splits: [],
       })),
-      agents: ACK_PANES.map((p, i) => ({
+      agents: panes.map((p, i) => ({
         terminal_id: "t-" + p.pane, agent: "claude", agent_status: p.status, workspace_id: p.ws, tab_id: p.pane.replace(":p", ":t"),
-        pane_id: p.pane, focused: i === 0, state_change_seq: i + 1, revision: 0,
+        pane_id: p.pane, focused: focus ? p.pane === focus : i === 0, state_change_seq: i + 1, revision: 0,
       })),
     },
   };
@@ -484,7 +511,9 @@ async function ackChecks(browser) {
     // One Box marked seen with its pill.
     const before = await viewOf("w1:p4");
     check("click on the Seen pill is accepted", await click("w1:p4", "button.ack"), null);
-    b = await boardUntil("4: docs drawn Seen", (x) => box(x, "w1:p4")?.kind === "seen" && x.toast?.on);
+    // The bar fades in over 150 ms; its visibility turns visible once the
+    // fade has started, so wait for that rather than its first frame.
+    b = await boardUntil("4: docs drawn Seen", (x) => box(x, "w1:p4")?.kind === "seen" && x.toast?.on && x.toast.visible);
     const docs = box(b, "w1:p4");
     const after = await viewOf("w1:p4");
     check("marked: focus stays on the Box whose pill was pressed, not the page", b.focus.box === "w1:p4" && b.focus.isBox, b.focus);
@@ -626,6 +655,309 @@ async function ackChecks(browser) {
         box(b, "w1:p4").kind === "finished" && head(b, "probe").counts === "1 finished · 1 idle · 2 seen · 1 working" &&
         b.boxes.filter((x) => x.acks).every((x) => x.ackDisabled === false),
       b,
+    );
+  } finally {
+    await d.stop();
+    await herdr.stop();
+  }
+}
+
+// ---- Seen on leaving the pane (ADR-0015, Story 6.8) ----
+
+// FOCUS_PANES are the focus check's Agents, one tab each in workspace
+// probe: three Finished (A, B and C), a Needs you, an Idle and a Working.
+const FOCUS_PANES = [
+  { pane: "w1:p1", ws: "w1", tab: "1: alpha", status: "done" },
+  { pane: "w1:p2", ws: "w1", tab: "2: beta", status: "done" },
+  { pane: "w1:p3", ws: "w1", tab: "3: gamma", status: "done" },
+  { pane: "w1:p4", ws: "w1", tab: "4: review", status: "blocked" },
+  { pane: "w1:p5", ws: "w1", tab: "5: notes", status: "idle" },
+  { pane: "w1:p6", ws: "w1", tab: "6: build", status: "working" },
+];
+// FOCUS_DWELL_MS is the Seen dwell the check's serve runs with, through
+// HERDDASH_TEST_SEEN_DWELL_MS, so a step waits about 1 s rather than 3 s;
+// PAST_DWELL_MS is a wait safely past it, FLICK_MS one safely under it.
+const FOCUS_DWELL_MS = 1000;
+const PAST_DWELL_MS = 1800;
+const FLICK_MS = 100;
+
+// FOCUS_BOARD is every Box's kind, tag and pills as the page draws them now,
+// with the in-view tag's and Mark unseen's computed styles and the tokens
+// their rules use, so removing either rule fails the check.
+const FOCUS_BOARD = `JSON.stringify({
+  stale: document.getElementById("board").classList.contains("board--stale"),
+  boxes: [...document.querySelectorAll("#board .box")].map((b) => {
+    const tag = b.querySelector(".in-view");
+    const un = b.querySelector("button.unack");
+    const ts = tag && getComputedStyle(tag);
+    const us = un && getComputedStyle(un);
+    return {
+      pane: JSON.parse(b.dataset.key)[3],
+      kind: b.className.replace("box box--", ""),
+      label: b.getAttribute("aria-label"),
+      cls: b.querySelector(".class")?.innerText,
+      where: [...(b.querySelector(".where")?.children || [])].map((c) => c.tagName.toLowerCase() + "." + c.className),
+      tags: b.querySelectorAll(".in-view").length,
+      tag: tag ? { text: tag.textContent, title: tag.title, tabIndex: tag.tabIndex, tagName: tag.tagName,
+        color: ts.color, weight: ts.fontWeight, border: ts.borderTopStyle } : null,
+      acks: b.querySelectorAll("button.ack").length,
+      unacks: b.querySelectorAll("button.unack").length,
+      unack: un ? { text: un.textContent, aria: un.getAttribute("aria-label"), title: un.title, disabled: un.disabled,
+        color: us.color, radius: us.borderTopLeftRadius, borderColor: us.borderTopColor, borderWidth: us.borderTopWidth } : null,
+    };
+  }),
+  focus: (() => {
+    const a = document.activeElement;
+    const k = a?.closest?.("[data-key]");
+    return { box: k ? JSON.parse(k.dataset.key)[3] : null, isBox: !!k && a === k, control: a?.matches?.("button") ? a.className : null };
+  })(),
+  toast: (() => {
+    const t = document.querySelector(".toast");
+    const u = t?.querySelector(".toast-undo");
+    return t ? { on: t.classList.contains("toast--on"), text: t.querySelector(".toast-text")?.textContent, undo: !!u && !u.hidden } : null;
+  })(),
+  tokens: (() => {
+    const p = document.createElement("div");
+    document.body.appendChild(p);
+    const c = (v) => { p.style.color = "var(" + v + ")"; return getComputedStyle(p).color; };
+    const out = { finished: c("--finished-accent"), muted: c("--ink-muted"), border: c("--border") };
+    p.remove();
+    return out;
+  })(),
+})`;
+
+async function focusChecks(browser) {
+  const sock = join(root, "focus.sock");
+  const statuses = new Map(FOCUS_PANES.map((p) => [p.pane, p]));
+  // The fake herdr's focus, which its snapshot names and pushFocus moves.
+  let focus = "w1:p1";
+  const herdr = fakeHerdr(sock, "0.9.5", () => paneSnapshot(FOCUS_PANES, { w1: "probe" }, focus));
+  await herdr.start();
+  const env = { HERDDASH_TEST_SEEN_DWELL_MS: String(FOCUS_DWELL_MS) };
+  let d = serve("focus", sock, "127.0.0.1:0", [], env);
+  const addr = await d.addr();
+  const base = "http://" + addr;
+  const board = async () => JSON.parse(await browser.eval(FOCUS_BOARD));
+  const boardUntil = (what, cond, ms) =>
+    until(what, async () => {
+      const b = await board();
+      return cond(b) ? b : null;
+    }, ms);
+  const box = (b, pane) => b.boxes.find((x) => x.pane === pane);
+  const state = async () => JSON.parse(await (await fetch(base + "/api/state")).text());
+  const viewOf = async (pane) => (await state()).agents.find((a) => a.key.pane_id === pane);
+  const history = async (pane) => {
+    const v = await viewOf(pane);
+    const path = [v.key.host, v.key.server, String(v.key.epoch), v.key.pane_id].map(encodeURIComponent).join("/");
+    return JSON.parse(await (await fetch(base + "/api/agents/" + path + "/history")).text());
+  };
+  const sources = async (pane) => (await history(pane)).acknowledgements.map((a) => (a.seen ? "seen:" : "unseen:") + a.source);
+  const click = (pane, sel) =>
+    browser.eval(`(() => {
+      const b = [...document.querySelectorAll("#board .box")].find((x) => JSON.parse(x.dataset.key)[3] === ${JSON.stringify(pane)});
+      const btn = b?.querySelector(${JSON.stringify(sel)});
+      if (!btn || btn.disabled) return false;
+      btn.focus();
+      btn.click();
+      return true;
+    })()`);
+  // focusOn moves the fake herdr's focus to pane, in its snapshot first and
+  // then as a pane_focused line, as a terminal client's navigation does.
+  const focusOn = (pane) => {
+    focus = pane;
+    herdr.pushFocus(pane, statuses.get(pane).ws);
+  };
+  const ready = async (what) => {
+    const b = await boardUntil(what, (x) => x.boxes.length === FOCUS_PANES.length && !x.stale, 40000);
+    await until("every status subscription", () => FOCUS_PANES.every((p) => herdr.subscribed(p.pane)));
+    await until("the pane.focused subscription", () => herdr.focusSubscribed());
+    return b;
+  };
+  try {
+    await browser.open(base + "/");
+    let b = await ready("the focus Board");
+    b = await boardUntil("1: alpha in view", (x) => box(x, "w1:p1")?.tags === 1);
+    const a0 = box(b, "w1:p1");
+    check(
+      "in view: the focused Finished Box, and no other, shows the tag",
+      b.boxes.every((x) => x.tags === (x.pane === "w1:p1" ? 1 : 0)) && ["needs_you", "working", "idle"].every((k) => b.boxes.some((x) => x.kind === k)),
+      b.boxes,
+    );
+    check(
+      "in view: ● in view with its title, a span that is not focusable, after the tab and before the Seen pill",
+      a0.tag.text === "● in view" && a0.tag.title === "Focused in herdr now. Leaving the pane after 3 s marks it seen." &&
+        a0.tag.tagName === "SPAN" && a0.tag.tabIndex === -1 &&
+        JSON.stringify(a0.where) === JSON.stringify(["span.tab", "span.in-view", "button.ack"]),
+      a0,
+    );
+    check(
+      "in view: the .in-view rule draws it in the Finished accent at weight 600, no border",
+      a0.tag.color === b.tokens.finished && a0.tag.weight === "600" && a0.tag.border === "none",
+      { tag: a0.tag, tokens: b.tokens },
+    );
+    check("in view: the Box's accessible name says in view after its class", /, Finished, in view, waiting /.test(a0.label), a0.label);
+    check(
+      "in view: the Daemon sends in_view on every Agent, true for 1: alpha alone",
+      (await state()).agents.every((v) => v.in_view === (v.key.pane_id === "w1:p1")),
+      (await state()).agents.map((v) => [v.key.pane_id, v.in_view]),
+    );
+
+    // Background, Seen, Needs you, Idle and Working never show the tag, even
+    // in view: the Daemon's state, every Agent in_view, one Finished Agent
+    // made Background and one seen, through a stand-in EventSource.
+    {
+      const sent = await state();
+      for (const a of sent.agents) {
+        a.in_view = true;
+        if (a.key.pane_id === "w1:p1") a.background = true;
+        if (a.key.pane_id === "w1:p2") a.seen = true;
+      }
+      const { result: added } = await browser.send("Page.addScriptToEvaluateOnNewDocument", {
+        source: `window.EventSource = class extends EventTarget {
+          static CLOSED = 2;
+          readyState = 1;
+          constructor() {
+            super();
+            setTimeout(() => this.dispatchEvent(new MessageEvent("state", { data: ${JSON.stringify(JSON.stringify(sent))}, lastEventId: "1" })), 0);
+          }
+          close() {}
+        };`,
+      });
+      await browser.open(base + "/");
+      const x = await boardUntil("the stand-in in-view Boxes", (y) => box(y, "w1:p1")?.kind === "background" && box(y, "w1:p2")?.kind === "seen", 5000);
+      check(
+        "every Agent in view: only the Finished Box shows the tag (not Background, Seen, Needs you, Idle or Working)",
+        x.boxes.every((z) => z.tags === (z.kind === "finished" ? 1 : 0)) && box(x, "w1:p3").tags === 1 &&
+          ["background", "seen", "needs_you", "idle", "working"].every((k) => x.boxes.some((z) => z.kind === k)),
+        x.boxes,
+      );
+      await browser.send("Page.removeScriptToEvaluateOnNewDocument", { identifier: added.identifier });
+      await browser.open(base + "/");
+      b = await ready("the real stream back");
+    }
+
+    // Visit, read, leave: 1: alpha in view past the dwell, then 2: beta. 2:
+    // beta's Seen pill has keyboard focus, and keeps it across its redraw.
+    await browser.eval(`(() => {
+      const b = [...document.querySelectorAll("#board .box")].find((x) => JSON.parse(x.dataset.key)[3] === "w1:p2");
+      b?.querySelector("button.ack")?.focus();
+    })()`);
+    await sleep(PAST_DWELL_MS);
+    focusOn("w1:p2");
+    b = await boardUntil("1: alpha Seen on leaving", (x) => box(x, "w1:p1")?.kind === "seen" && box(x, "w1:p2")?.tags === 1);
+    const a1 = box(b, "w1:p1");
+    check(
+      "leave past the dwell: 1: alpha is box--seen, SEEN, with Mark unseen at the end of its first line and no Seen pill or tag",
+      a1.cls === "SEEN" && a1.acks === 0 && a1.unacks === 1 && a1.tags === 0 && a1.where.at(-1) === "button.unack",
+      a1,
+    );
+    check(
+      "leave past the dwell: the Daemon recorded a herdr_focus mark, and no Undo bar appeared",
+      (await viewOf("w1:p1")).seen === true && JSON.stringify(await sources("w1:p1")) === JSON.stringify(["seen:herdr_focus"]) && !b.toast?.on,
+      { sources: await sources("w1:p1"), toast: b.toast },
+    );
+    check(
+      "Mark unseen: its text, title and accessible name naming the tab",
+      a1.unack.text === "Mark unseen" && a1.unack.aria === "Mark 1: alpha not seen" && a1.unack.title === "Mark not seen: show this result as unread again",
+      a1.unack,
+    );
+    check(
+      "Mark unseen: the .unack rule draws a quiet pill (muted ink, 1px border, radius 999px)",
+      a1.unack.color === b.tokens.muted && a1.unack.borderColor === b.tokens.border && a1.unack.borderWidth === "1px" && a1.unack.radius === "999px",
+      { unack: a1.unack, tokens: b.tokens },
+    );
+    check("leave: 2: beta now carries the tag, Seen nowhere else", box(b, "w1:p2").tags === 1 && b.boxes.filter((x) => x.tags).length === 1, b.boxes);
+    check(
+      "a Box redrawn for in_view gives focus back to the same pill, not the Box",
+      b.focus.box === "w1:p2" && !b.focus.isBox && b.focus.control === "ack",
+      b.focus,
+    );
+
+    // Mark unseen, then its Undo.
+    check("click on Mark unseen is accepted", await click("w1:p1", "button.unack"), null);
+    b = await boardUntil("1: alpha Finished again", (x) => box(x, "w1:p1")?.kind === "finished" && x.toast?.on);
+    check(
+      "Mark unseen: 1: alpha is Finished with its Seen pill, the bar says Marked 1: alpha not seen with an Undo",
+      box(b, "w1:p1").acks === 1 && box(b, "w1:p1").unacks === 0 && b.toast.text === "Marked 1: alpha not seen" && b.toast.undo &&
+        (await viewOf("w1:p1")).seen === false,
+      { box: box(b, "w1:p1"), toast: b.toast },
+    );
+    check("Mark unseen: focus stays on the Box, not the page", b.focus.box === "w1:p1", b.focus);
+    const undone = await browser.eval(`(() => { const u = document.querySelector(".toast-undo"); if (!u || u.disabled) return false; u.focus(); u.click(); return true; })()`);
+    b = await boardUntil("1: alpha seen again by Undo", (x) => box(x, "w1:p1")?.kind === "seen");
+    check(
+      "Undo of Mark unseen: the bar closes, 1: alpha is seen again by a board mark",
+      undone && !b.toast.on && box(b, "w1:p1").unacks === 1 && (await viewOf("w1:p1")).seen === true &&
+        JSON.stringify(await sources("w1:p1")) === JSON.stringify(["seen:herdr_focus", "unseen:board", "seen:board"]),
+      { toast: b.toast, sources: await sources("w1:p1") },
+    );
+
+    // A second Mark unseen sticks: a revisit past the dwell and a leave keep
+    // 1: alpha Finished.
+    await click("w1:p1", "button.unack");
+    b = await boardUntil("1: alpha Finished after a second Mark unseen", (x) => box(x, "w1:p1")?.kind === "finished");
+    focusOn("w1:p1");
+    b = await boardUntil("1: alpha in view again", (x) => box(x, "w1:p1")?.tags === 1);
+    await sleep(PAST_DWELL_MS);
+    focusOn("w1:p5");
+    await until("1: alpha out of view", async () => (await viewOf("w1:p1")).in_view === false && (await viewOf("w1:p5")).in_view === true);
+    await sleep(500);
+    b = await board();
+    check(
+      "after Mark unseen, a revisit past the dwell and a leave keep 1: alpha Finished, with no further row",
+      box(b, "w1:p1").kind === "finished" && box(b, "w1:p1").acks === 1 && (await viewOf("w1:p1")).seen === false &&
+        (await sources("w1:p1")).length === 4,
+      { box: box(b, "w1:p1"), sources: await sources("w1:p1") },
+    );
+
+    // A flick, each pane well under the dwell: 3: gamma, 6: build, then
+    // Needs you. Nothing is marked, 3: gamma or any other.
+    const allRows = async () => (await Promise.all(FOCUS_PANES.map((p) => sources(p.pane)))).flat().length;
+    const rowsBefore = await allRows();
+    for (const p of ["w1:p3", "w1:p6", "w1:p4"]) {
+      focusOn(p);
+      await sleep(FLICK_MS);
+    }
+    await until("focus on 4: review", async () => (await viewOf("w1:p4")).in_view === true);
+    await sleep(500);
+    b = await board();
+    check(
+      "a flick faster than the dwell marks nothing: 3: gamma stays Finished with no row",
+      box(b, "w1:p3").kind === "finished" && (await viewOf("w1:p3")).seen === false && (await sources("w1:p3")).length === 0 &&
+        (await allRows()) === rowsBefore,
+      { box: box(b, "w1:p3"), sources: await sources("w1:p3") },
+    );
+    check(
+      "Needs you in view shows no tag",
+      box(b, "w1:p4").kind === "needs_you" && box(b, "w1:p4").tags === 0 && b.boxes.every((x) => x.tags === 0),
+      b.boxes,
+    );
+
+    // serve stops and starts on the same data directory: every Box as it was.
+    const kinds = (x) => JSON.stringify(x.boxes.map((y) => [y.pane, y.kind, y.acks, y.unacks]).sort());
+    const beforeRestart = kinds(b);
+    await d.stop();
+    await boardUntil("the Boxes dimmed", (x) => x.stale, PAST_GRACE_MS + 5000);
+    d = serve("focus", sock, addr, [], env);
+    b = await ready("the focus Board after a restart");
+    check(
+      "after serve restarts on the same data directory, every Box is as it was (1: alpha Finished after Mark unseen)",
+      kinds(b) === beforeRestart && box(b, "w1:p1").kind === "finished",
+      { before: beforeRestart, after: kinds(b) },
+    );
+    // The explicit choice sticks across the restart; a finish with no row is
+    // still marked by a leave.
+    focusOn("w1:p1");
+    await sleep(PAST_DWELL_MS);
+    focusOn("w1:p3");
+    await sleep(PAST_DWELL_MS);
+    focusOn("w1:p5");
+    b = await boardUntil("3: gamma Seen on leaving after the restart", (x) => box(x, "w1:p3")?.kind === "seen");
+    check(
+      "after the restart, a leave of 1: alpha keeps it Finished; a leave of 3: gamma marks it Seen",
+      box(b, "w1:p1").kind === "finished" && (await sources("w1:p1")).length === 4 &&
+        JSON.stringify(await sources("w1:p3")) === JSON.stringify(["seen:herdr_focus"]),
+      { alpha: await sources("w1:p1"), gamma: await sources("w1:p3") },
     );
   } finally {
     await d.stop();
@@ -952,6 +1284,9 @@ async function main() {
 
     // 4. The acknowledgement controls (ADR-0014).
     await ackChecks(browser);
+
+    // 5. Seen on leaving the pane, in view and Mark unseen (ADR-0015).
+    await focusChecks(browser);
 
     // The skipped-publication case's own warning is expected; nothing else is.
     const unexpected = browser.warnings.filter((w) => !SKIPPED_WARNING.test(w));

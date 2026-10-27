@@ -67,6 +67,12 @@ type Options struct {
 	// Home is the Daemon user's home directory, for shortening each Agent's
 	// project directory in its view; "" shortens nothing.
 	Home string
+	// SeenDwell, when positive, replaces seenDwell (defaultSeenDwell, 3 s)
+	// as the least dwell for leaving a pane to mark its finish Seen
+	// (ADR-0015). It is a test seam: serve sets it only from
+	// HERDDASH_TEST_SEEN_DWELL_MS, which the Board's browser check sets so
+	// that it does not wait 3 s per step. 0 keeps the default.
+	SeenDwell time.Duration
 }
 
 // EnvironFunc is the type of Options.Environ.
@@ -240,6 +246,9 @@ type Engine struct {
 	// home is Options.Home and runID this run's id; read-only after New.
 	home  string
 	runID string
+	// seenDwell is Options.SeenDwell, 0 for the package's seenDwell;
+	// read-only after New.
+	seenDwell time.Duration
 	// pub is what readers see; safe from any goroutine.
 	pub publisher
 
@@ -695,6 +704,7 @@ func New(o Options) *Engine {
 		store:            o.Store,
 		retentionDays:    o.RetentionDays,
 		home:             o.Home,
+		seenDwell:        o.SeenDwell,
 		runID:            newRunID(),
 		inbox:            make(chan any),
 		stopped:          make(chan struct{}),
