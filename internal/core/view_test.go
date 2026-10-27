@@ -410,6 +410,8 @@ type boardFixture struct {
 		// Seen is the operator's acknowledgement of the current finish
 		// (ADR-0014).
 		Seen bool `json:"seen"`
+		// InView is the Agent's pane being herdr's focused pane (ADR-0015).
+		InView bool `json:"in_view"`
 		// View is the expected AgentView, as NewAgentView serialises it.
 		View json.RawMessage `json:"view"`
 	} `json:"input"`
@@ -448,7 +450,7 @@ func loadBoard(t *testing.T) ([]AgentView, boardFixture) {
 			Key: in.Key, AgentProgram: in.AgentProgram, Profile: in.Profile, Status: in.Status, Fold: f,
 			Context: PaneContext{ProjectDir: in.Directory, WorkspaceLabel: in.Workspace, TabLabel: in.Tab,
 				WorkspaceID: in.WorkspaceID, WorkspacePosition: in.WorkspacePosition, PaneTitle: in.PaneTitle, PanePosition: in.PanePosition},
-			Home: fx.Home, Background: in.Background, Transcript: tr, Seen: in.Seen,
+			Home: fx.Home, Background: in.Background, Transcript: tr, Seen: in.Seen, InView: in.InView,
 		}))
 	}
 	return views, fx

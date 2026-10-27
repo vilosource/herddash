@@ -175,6 +175,7 @@ func (e *Engine) viewOf(p *pane) core.AgentView {
 		Background:   p.background,
 		Transcript:   p.tasks,
 		Seen:         seenNow(p),
+		InView:       e.focusPane != "" && p.id == e.focusPane,
 	})
 }
 

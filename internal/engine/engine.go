@@ -200,6 +200,20 @@ type TranscriptFunc = func(t procenv.Tail, path string, line func([]byte)) (proc
 // record that ends, drops what the transcript said, so the process check
 // alone decides, logged at debug level once per pane. A new process, a
 // program change, removal and the run's end drop it too.
+//
+// herdr's focus (ADR-0015): the engine holds, in memory only, the pane herdr
+// names focused and its dwell start, by its clock. A pane_focused for another
+// pane is a leave of the pane focused before it: when core.SeenOnLeave holds
+// for that pane's Agent, with the Board mark's own conditions, the dwell since
+// its start and seenDwell as the minimum, the finish is marked Seen with one
+// herdr_focus row. A pane_focused for the pane already focused changes
+// nothing. A connection's first snapshot and a resync's set the focus from
+// the snapshot, dwell from then, with no leave; a later snapshot naming
+// another pane moves it the same way, unless a pane_focused arrived after
+// that read began. A disconnect drops it. The dwell restarts whenever the
+// focused pane's fold changes class or start, it gets a new Agent, or a turn
+// not observed ends its finish. Focus is never recorded, and never requests a
+// snapshot read; herdr is never told anything.
 type Engine struct {
 	host, server string
 	client       Client
@@ -342,6 +356,15 @@ type Engine struct {
 	truth   core.ConnectionTruth
 	changes []Change
 	viewSeq uint64
+
+	// focusPane is the pane herdr names focused, as the engine last learnt
+	// it, "" when none is known (ADR-0015); focusSince is its dwell start, by
+	// e.clock(), restarted whenever its Agent's finish begins or ends.
+	// focusEvent is snapSeq when the latest pane_focused arrived: a read
+	// numbered at most that started before it, so its focus is older.
+	focusPane  string
+	focusSince time.Time
+	focusEvent uint64
 }
 
 // pane is one tracked Agent pane.
@@ -510,6 +533,13 @@ type pane struct {
 	// a live event, which carries none. A later read showing the same Status
 	// with a higher one shows a turn herddash did not observe (missedTurn).
 	herdrSeq *uint64
+	// rowSince is the class start of the finish the record holds an
+	// acknowledgement row for, of any source, mark or undo (ADR-0015), 0
+	// when none: in force, as the leave rule's FinishHasRow, while the fold
+	// is Finished from that same instant (finishHasRow). Set when a row is
+	// written for the current finish and derived from the record at a seed;
+	// cleared once the fold leaves that finish or a turn not observed ends it.
+	rowSince int64
 }
 
 // cause is why a resync runs: the reason the Sink and the record show, and,
@@ -932,6 +962,9 @@ func (e *Engine) disconnect() {
 	e.resyncNext = nil
 	e.resyncCauses = nil
 	e.reconcileFrom = 0
+	// A focus move while the lifecycle stream is down is missed, and a
+	// missed move never marks: the next connection starts counting afresh.
+	e.focusPane, e.focusSince = "", time.Time{}
 }
 
 func (e *Engine) loop(ctx context.Context) {
@@ -1065,7 +1098,8 @@ func (e *Engine) onLifecycle(d herdr.Delivery[core.LifecycleEvent]) {
 	if d.Event.Kind == core.LifecycleFocused {
 		// Focus is not a sign that tracked state is stale (ADR-0015): it
 		// neither counts as an event during a snapshot read nor requests
-		// one. Story 6.7 gives it meaning; until then it is ignored.
+		// one.
+		e.onFocus(d.Event.PaneID)
 		return
 	}
 	e.noteEvent()
@@ -1328,6 +1362,7 @@ func (e *Engine) onSnapshot(m snapshotMsg) {
 	t.Connected, t.LastSnapshotAt = true, e.now()
 	e.setTruth(t)
 	unsubscribed, changed := e.apply(m.seq, m.snap, first, before)
+	e.snapshotFocus(m.seq, m.snap.FocusedPaneID, first || ending)
 	if reconcile && changed {
 		e.mark(store.ReasonReconcile, "")
 	}
@@ -1812,6 +1847,9 @@ func (e *Engine) report(p *pane) {
 		e.log.Info("agent seen", "pane", p.id, "agent_program", p.program, "profile", p.profile, "status", p.status)
 		now := e.now()
 		p.firstSkipped = e.firstSight(p, now)
+		// A new Agent in the focused pane: its finish, if any, is counted
+		// from now.
+		e.restartDwell(p)
 		p.seenBy, p.seenOrder, p.seenAt = "", nil, 0
 		e.followBackground(p)
 		if p.sessGen == 0 { // a deferred first sight's watch runs on
@@ -2671,14 +2709,19 @@ func (e *Engine) transitionAt(p *pane, next core.Status, prov core.Provenance, o
 // commit folds, records and reports one Transition of p's, which p.status
 // already shows.
 func (e *Engine) commit(p *pane, t core.Transition) {
+	before := p.fold
 	p.fold = p.fold.Add(t)
-	if _, ok := t.Previous(); !ok {
-		p.seenSince = 0 // a new Agent's first row: its fold starts over
+	_, hasPrev := t.Previous()
+	if !hasPrev {
+		p.seenSince, p.rowSince = 0, 0 // a new Agent's first row: its fold starts over
 	}
 	// A Transition that moves the class or its start ends an
 	// acknowledgement, with nothing read or written; done to idle within the
-	// finish moves neither.
+	// finish moves neither, and neither does it restart the dwell.
 	clearStaleSeen(p)
+	if !hasPrev || before.Known != p.fold.Known || before.Class != p.fold.Class || before.Since != p.fold.Since {
+		e.restartDwell(p)
+	}
 	e.record(t)
 	e.sink.Transition(t, e.agent(p))
 	if p.known {

@@ -101,13 +101,24 @@ func seenNow(p *pane) bool {
 	return p.seenSince > 0 && p.fold.Known && p.fold.Class == core.ClassFinished && p.fold.Since == p.seenSince
 }
 
-// clearStaleSeen forgets p's acknowledgement once its fold has left the
-// acknowledged finish, so it never comes back: core.Seen holds only for the
-// finish named.
+// clearStaleSeen forgets p's acknowledgement, and that its finish has a row,
+// once its fold has left that finish, so neither ever comes back: core.Seen
+// holds only for the finish named.
 func clearStaleSeen(p *pane) {
 	if p.seenSince != 0 && !seenNow(p) {
 		p.seenSince = 0
 	}
+	if p.rowSince != 0 && !finishHasRow(p) {
+		p.rowSince = 0
+	}
+}
+
+// finishHasRow reports whether the record holds an acknowledgement row, of
+// any source, mark or undo, for p's current finish (ADR-0015): the leave
+// rule's FinishHasRow. Like seenNow, it holds while the fold is Finished from
+// the instant the row names.
+func finishHasRow(p *pane) bool {
+	return p.rowSince > 0 && p.fold.Known && p.fold.Class == core.ClassFinished && p.fold.Since == p.rowSince
 }
 
 // onAcknowledge validates every item of m's request against the engine's
@@ -205,7 +216,11 @@ func (e *Engine) acknowledge(req AckRequest) ([]core.AgentView, error) {
 			} else {
 				p.seenSince = 0
 			}
-			e.log.Info("acknowledgement", "pane", p.id, "since", it.WaitingSince, "seen", req.Seen)
+			// The finish has a row now: the operator's choice wins over the
+			// automatic mark for it (ADR-0015).
+			p.rowSince = it.WaitingSince
+			e.log.Info("acknowledgement", "pane", p.id, "since", it.WaitingSince, "seen", req.Seen,
+				"source", core.AckSourceBoard)
 			e.noteView(p)
 		}
 	}
@@ -224,8 +239,12 @@ func (e *Engine) acknowledge(req AckRequest) ([]core.AgentView, error) {
 // the same Status, which a Daemon down for a whole turn leaves behind. A
 // failed read is logged and leaves the Agent unacknowledged: the Board shows
 // more, never less.
+//
+// The same read decides whether the finish already has a row (ADR-0015),
+// by core.FinishRowAt: a row of an earlier turn with the same start does not
+// count, so after a turn not observed the automatic mark may write again.
 func (e *Engine) seedSeen(p *pane, last core.Transition) {
-	p.seenSince = 0
+	p.seenSince, p.rowSince = 0, 0
 	if e.store == nil || !p.seedHistory || !p.fold.Known || p.fold.Class != core.ClassFinished || p.fold.Since <= 0 {
 		return
 	}
@@ -233,6 +252,9 @@ func (e *Engine) seedSeen(p *pane, last core.Transition) {
 	if err != nil {
 		e.log.Error("acknowledgements not read; the agent is shown not seen", "pane", p.id, "error", err.Error())
 		return
+	}
+	if core.FinishRowAt(p.fold, acks, last, p.herdrSeq) {
+		p.rowSince = p.fold.Since
 	}
 	if core.SeenAt(p.fold, acks, last, p.herdrSeq) {
 		p.seenSince = p.fold.Since
@@ -249,8 +271,12 @@ func (e *Engine) seedSeen(p *pane, last core.Transition) {
 // a turn herddash did not observe. Its acknowledgement, of the finish before
 // that turn, ends; nothing is written, and the record's Status, unchanged,
 // stays as it is. A restart reaches the same answer from the order the
-// acknowledgement carries (core.SeenAt).
+// acknowledgement carries (core.SeenAt). The rows of the earlier finish no
+// longer count for this one, so the automatic mark may write again, and a
+// focused pane's dwell is counted from now (ADR-0015).
 func (e *Engine) missedTurn(p *pane, was, now uint64) {
+	p.rowSince = 0
+	e.restartDwell(p)
 	if !seenNow(p) {
 		e.log.Debug("turn not observed", "pane", p.id, "status", p.herdr, "herdr_order", was, "now", now)
 		return

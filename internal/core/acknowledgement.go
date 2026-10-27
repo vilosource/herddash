@@ -161,21 +161,49 @@ func SeenAt(f FoldResult, acks []Acknowledgement, last Transition, current *uint
 	if !Seen(f, acks) {
 		return false
 	}
-	if current == nil {
-		return true
+	d, _ := deciding(acks, f.Since)
+	return !earlierTurn(d, last, current)
+}
+
+// FinishRowAt reports whether acks hold a row for f's current finish, a mark
+// or an undo of any source, that herdr's ordering does not show is of an
+// earlier turn with the same start, by the order check SeenAt applies (ADR-0015).
+// Only a known Finished fold with a known start has a finish. It is the
+// engine's FinishHasRow for SeenOnLeave when the fold is seeded from the
+// record: once a finish has a row, only the operator changes it. last and
+// current are as for SeenAt.
+func FinishRowAt(f FoldResult, acks []Acknowledgement, last Transition, current *uint64) bool {
+	if !f.Known || f.Class != ClassFinished || f.Since <= 0 {
+		return false
 	}
-	var deciding Acknowledgement
+	d, ok := deciding(acks, f.Since)
+	return ok && !earlierTurn(d, last, current)
+}
+
+// deciding is the last of acks naming since, and whether there is one.
+func deciding(acks []Acknowledgement, since int64) (Acknowledgement, bool) {
 	for i := len(acks) - 1; i >= 0; i-- {
-		if acks[i].finishedSince == f.Since {
-			deciding = acks[i]
-			break
+		if acks[i].finishedSince == since {
+			return acks[i], true
 		}
 	}
-	known, ok := deciding.HerdrOrder()
-	if !ok || deciding.observedAt < last.ObservedAt() {
+	return Acknowledgement{}, false
+}
+
+// earlierTurn reports whether herdr's ordering shows d, a finish's deciding
+// row, is of an earlier turn than the one current is herdr's order for:
+// herdr's order as herddash last knew it is d's, when d was recorded at or
+// after last, or else last's, and a current order above it means the Status
+// changed since and came back. Either order unknown is no evidence.
+func earlierTurn(d Acknowledgement, last Transition, current *uint64) bool {
+	if current == nil {
+		return false
+	}
+	known, ok := d.HerdrOrder()
+	if !ok || d.observedAt < last.ObservedAt() {
 		known, ok = last.HerdrOrder()
 	}
-	return !ok || *current <= known
+	return ok && *current > known
 }
 
 // LeaveInput is everything SeenOnLeave needs: the facts the engine holds when

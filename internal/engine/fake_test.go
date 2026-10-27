@@ -39,6 +39,7 @@ type fakeSub[T any] struct {
 	leaky     bool
 	closeSeen atomic.Bool
 	delivered atomic.Int32 // deliveries the reader has taken
+	sent      atomic.Int32 // deliveries the test has pushed
 }
 
 func newFakeSub[T any](leaky bool) *fakeSub[T] {
@@ -92,7 +93,10 @@ func (s *fakeSub[T]) awaitDelivered(t *testing.T, n int32) {
 	}
 }
 
-func (s *fakeSub[T]) event(ev T) { s.in <- herdr.Delivery[T]{Event: ev} }
+func (s *fakeSub[T]) event(ev T) {
+	s.sent.Add(1)
+	s.in <- herdr.Delivery[T]{Event: ev}
+}
 
 func (s *fakeSub[T]) health(h *herdr.Health) { s.in <- herdr.Delivery[T]{Health: h} }
 
@@ -882,6 +886,37 @@ func (h *harness) focus(paneID, workspaceID string) {
 	h.t.Helper()
 	h.lifecycle(core.LifecycleEvent{Kind: core.LifecycleFocused, PaneID: paneID, WorkspaceID: workspaceID})
 }
+
+// focusOn sends herdr's pane_focused for paneID and waits until the engine
+// has handled it. A repeat for the same pane follows it, which changes
+// nothing (ADR-0015); the lifecycle reader takes the repeat only once the
+// engine has taken the first, and the Agents round trip then waits for the
+// first to be handled and published.
+func (h *harness) focusOn(paneID string) {
+	h.t.Helper()
+	h.focus(paneID, "w1")
+	h.focus(paneID, "w1")
+	sub := h.fake.lifecycleSub()
+	sub.awaitDelivered(h.t, sub.sent.Load())
+	h.agents()
+}
+
+// focused is s with herdr's focused pane set to paneID, as session.snapshot
+// names it.
+func focused(s core.Snapshot, paneID string) core.Snapshot {
+	s.FocusedPaneID = paneID
+	return s
+}
+
+// newManualClock is a manualClock at base; advance moves it by d, so a dwell
+// is exactly what the test makes it (ADR-0015).
+func newManualClock() *manualClock {
+	c := &manualClock{}
+	c.ms.Store(base)
+	return c
+}
+
+func (c *manualClock) advance(d time.Duration) { c.ms.Add(d.Milliseconds()) }
 
 var errBoom = errors.New("boom")
 

@@ -123,6 +123,10 @@ type AgentViewInput struct {
 	// as Seen decides from the record (ADR-0014). The view shows it only
 	// while the class is finished.
 	Seen bool
+	// InView is set when the Agent's pane is the one herdr names focused, as
+	// the engine last learnt it (ADR-0015). It is shown as it is, whatever
+	// the class, and changes no other value.
+	InView bool
 }
 
 // AgentView is how every surface (the API, the event stream and the Board)
@@ -174,7 +178,13 @@ type AgentView struct {
 	// with class finished, which it leaves unchanged. It moves the Box down
 	// among the Idle ones (the sort key's class rank 2) unless the Box is
 	// Background, which still takes precedence. Never omitted.
-	Seen    bool    `json:"seen"`
+	Seen bool `json:"seen"`
+	// InView is set when the Agent's pane is herdr's focused pane, as the
+	// engine last learnt it from a pane_focused event or a snapshot
+	// (ADR-0015): herdr names one even with no client attached, so it says
+	// where focus is, not that someone is looking. It is not part of the sort
+	// key. Never omitted.
+	InView  bool    `json:"in_view"`
 	SortKey SortKey `json:"sort_key"`
 }
 
@@ -213,6 +223,7 @@ func NewAgentView(in AgentViewInput) AgentView {
 
 		BackgroundTasks: tasks,
 		Seen:            seen,
+		InView:          in.InView,
 	}
 	v.SortKey = newSortKey(class, in.Status, background, seen, in.Context.WorkspacePosition, in.Context.WorkspaceID, since, in.Key)
 	return v

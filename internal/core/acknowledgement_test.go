@@ -267,6 +267,72 @@ func TestSeenAt(t *testing.T) {
 	}
 }
 
+// FinishRowAt is the seed's FinishHasRow (ADR-0015): any row, mark or undo of
+// either source, for the fold's current finish, unless herdr's order shows it
+// is of an earlier turn with the same start, by SeenAt's own check.
+func TestFinishRowAt(t *testing.T) {
+	key := AgentKey{Host: "mac", Server: "default", Epoch: 1, PaneID: "w1:p1"}
+	row := func(prev, next Status, at int64, order *uint64) Transition {
+		t.Helper()
+		in := TransitionInput{Key: key, AgentProgram: "claude", New: next, ObservedAt: at, Provenance: ProvenanceLive}
+		if prev != "" {
+			in.Previous = &prev
+		}
+		if order != nil {
+			in.Provenance, in.HerdrOrder = ProvenanceSnapshot, order
+		}
+		tr, err := NewTransition(in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return tr
+	}
+	ackAt := func(src AckSource, since int64, seen bool, at int64, order *uint64) Acknowledgement {
+		t.Helper()
+		a, err := NewAcknowledgement(AcknowledgementInput{Source: src, Key: key, FinishedSince: since, Seen: seen, ObservedAt: at, HerdrOrder: order})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return a
+	}
+	n := func(v uint64) *uint64 { return &v }
+	working := row("", StatusWorking, 100, nil)
+	done := row(StatusWorking, StatusDone, 200, nil)
+	for _, c := range []struct {
+		name    string
+		rows    []Transition
+		acks    []Acknowledgement
+		current *uint64
+		want    bool
+	}{
+		{"no row", []Transition{working, done}, nil, n(5), false},
+		{"another finish's row", []Transition{working, done}, []Acknowledgement{ackAt(AckSourceBoard, 150, true, 160, nil)}, n(5), false},
+		{"a board mark", []Transition{working, done}, []Acknowledgement{ackAt(AckSourceBoard, 200, true, 300, n(5))}, n(5), true},
+		{"an automatic mark", []Transition{working, done}, []Acknowledgement{ackAt(AckSourceHerdrFocus, 200, true, 300, n(5))}, n(5), true},
+		{"an automatic mark undone", []Transition{working, done},
+			[]Acknowledgement{ackAt(AckSourceHerdrFocus, 200, true, 300, n(5)), ackAt(AckSourceBoard, 200, false, 310, n(5))}, n(5), true},
+		{"an undo, no current order", []Transition{working, done},
+			[]Acknowledgement{ackAt(AckSourceHerdrFocus, 200, true, 300, n(5)), ackAt(AckSourceBoard, 200, false, 310, n(5))}, nil, true},
+		{"an undo, a turn missed after it", []Transition{working, done},
+			[]Acknowledgement{ackAt(AckSourceHerdrFocus, 200, true, 300, n(5)), ackAt(AckSourceBoard, 200, false, 310, n(5))}, n(8), false},
+		{"a mark, a turn missed after it", []Transition{working, done}, []Acknowledgement{ackAt(AckSourceHerdrFocus, 200, true, 300, n(5))}, n(8), false},
+		{"orders unknown", []Transition{working, done}, []Acknowledgement{ackAt(AckSourceBoard, 200, false, 300, nil)}, n(8), true},
+		{"not finished", []Transition{working, done, row(StatusDone, StatusWorking, 400, nil)},
+			[]Acknowledgement{ackAt(AckSourceBoard, 200, true, 300, nil)}, nil, false},
+		{"done to idle keeps it", []Transition{working, done, row(StatusDone, StatusIdle, 400, nil)},
+			[]Acknowledgement{ackAt(AckSourceBoard, 200, false, 300, nil)}, nil, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := FinishRowAt(Fold(c.rows), c.acks, c.rows[len(c.rows)-1], c.current); got != c.want {
+				t.Errorf("FinishRowAt %v, want %v", got, c.want)
+			}
+		})
+	}
+	if FinishRowAt(FoldResult{}, nil, working, nil) {
+		t.Error("FinishRowAt of an unknown fold")
+	}
+}
+
 func TestAckSourceValid(t *testing.T) {
 	for s, want := range map[AckSource]bool{
 		AckSourceBoard: true, AckSourceHerdrFocus: true, "": false, "other": false, "Board": false, "herdr-focus": false,

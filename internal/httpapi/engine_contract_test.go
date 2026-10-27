@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -228,8 +229,12 @@ func TestEngineContract(t *testing.T) {
 	t.Cleanup(func() { st.Close() })
 	fc := &scriptClient{status: map[string]*scriptSub[core.StatusEvent]{}}
 	fc.setSnapshot(contractSnapshot(contractPane("w1:p1", "t-1", core.StatusWorking), contractPane("w1:p2", "t-2", core.StatusIdle), shellPane("t-shell")))
+	// The engine's clock is the wall clock plus an offset the test moves, so
+	// a dwell in herdr's focus (ADR-0015) passes without waiting for it.
+	var offset atomic.Int64
+	clock := func() time.Time { return time.Now().Add(time.Duration(offset.Load())) }
 	e := engine.New(engine.Options{
-		Host: "mac", Server: "default", Client: fc, Sink: nopSink{}, Store: st,
+		Host: "mac", Server: "default", Client: fc, Sink: nopSink{}, Store: st, Clock: clock,
 		Environ: contractEnviron, Children: contractChildren, Session: contractSession, Transcript: contractTranscript})
 
 	// Every publication, as the engine itself publishes it.
@@ -422,6 +427,37 @@ func TestEngineContract(t *testing.T) {
 		t.Errorf("history acknowledgements %+v, want seen, undone, seen of %d", a, done4.WaitingSince)
 	}
 
+	// herdr's focus (ADR-0015): w1:p4 finishes again, the operator focuses
+	// its pane in herdr, stays 4 s by the engine's clock and moves to w1:p2.
+	// w1:p4 is in view while focused, then Seen and out of view, and w1:p2 in
+	// view: agent events for both, which the replay must apply.
+	fc.statusSub(t, "w1:p4").in <- herdr.Delivery[core.StatusEvent]{Event: core.StatusEvent{PaneID: "w1:p4", Status: core.StatusDone, AgentProgram: "claude"}}
+	n = await("w1:p4 done again", n, func(v engine.View) bool {
+		a, ok := agent(v, "w1:p4")
+		return ok && a.Status == core.StatusDone && !a.Seen
+	})
+	fc.lifecycleEvent(core.LifecycleEvent{Kind: core.LifecycleFocused, PaneID: "w1:p4", WorkspaceID: "w1"})
+	n = await("w1:p4 in view", n, func(v engine.View) bool {
+		a, ok := agent(v, "w1:p4")
+		b, _ := agent(v, "w1:p2")
+		return ok && a.InView && !a.Seen && !b.InView
+	})
+	offset.Add(int64(4 * time.Second))
+	fc.lifecycleEvent(core.LifecycleEvent{Kind: core.LifecycleFocused, PaneID: "w1:p2", WorkspaceID: "w1"})
+	n = await("w1:p4 seen by leaving its pane", n, func(v engine.View) bool {
+		a, ok := agent(v, "w1:p4")
+		b, _ := agent(v, "w1:p2")
+		return ok && a.Seen && !a.InView && b.InView
+	})
+	focus4, _ := agent(e.View(), "w1:p4")
+	acks, err := st.Acknowledgements(context.Background(), focus4.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(acks) != 4 || acks[3].Source() != core.AckSourceHerdrFocus || acks[3].FinishedSince() != focus4.WaitingSince || !acks[3].Seen() {
+		t.Errorf("acknowledgements %+v, want a fourth, herdr_focus, of the new finish", acks)
+	}
+
 	// herdr lost and back, the same instance (the shell kept its terminal),
 	// with both Agents' terminals replaced: each is removed and re-added
 	// under the same key.
@@ -575,8 +611,14 @@ func TestEngineContract(t *testing.T) {
 			continue
 		}
 		id := strconv.FormatUint(p4seqs[i], 10)
+		// A publication that removes w1:p4 and adds it again (its terminal
+		// replaced) carries the new Agent's first sight as an agent event.
+		readded := false
+		for _, ev := range evs {
+			readded = readded || ev.id == id && ev.event == eventRemoved && strings.Contains(ev.data, `"pane_id":"w1:p4"`)
+		}
 		want := eventAgent
-		if a.Status != p4[i-1].Status {
+		if a.Status != p4[i-1].Status && !readded {
 			want = eventTransition
 		}
 		found := false
@@ -592,8 +634,35 @@ func TestEngineContract(t *testing.T) {
 			t.Errorf("publication %d (w1:p4 %s seen %v): no %s event for it on the stream", p4seqs[i], a.Status, a.Seen, want)
 		}
 	}
-	if g, w := strings.Join(changes, " "), "working/false done/false done/true done/false done/true working/false"; g != w {
+	if g, w := strings.Join(changes, " "), "working/false done/false done/true done/false done/true working/false done/false done/true working/false"; g != w {
 		t.Errorf("w1:p4's published changes %q, want %q", g, w)
+	}
+
+	// The focus move reached the stream as agent events carrying in_view:
+	// w1:p4 in view, then w1:p4 seen and out of view beside w1:p2 in view.
+	onStream := func(pane string, parts ...string) bool {
+		for _, ev := range evs {
+			if ev.event != eventAgent || !strings.Contains(ev.data, `"pane_id":"`+pane+`"`) {
+				continue
+			}
+			all := true
+			for _, part := range parts {
+				all = all && strings.Contains(ev.data, part)
+			}
+			if all {
+				return true
+			}
+		}
+		return false
+	}
+	if !onStream("w1:p4", `"in_view":true`, `"seen":false`) {
+		t.Error("no agent event with w1:p4 in view")
+	}
+	if !onStream("w1:p4", `"in_view":false`, `"seen":true`) {
+		t.Error("no agent event with w1:p4 seen and out of view")
+	}
+	if !onStream("w1:p2", `"in_view":true`) {
+		t.Error("no agent event with w1:p2 in view")
 	}
 
 	// The scenarios above publish removals, a re-add under a new epoch and
