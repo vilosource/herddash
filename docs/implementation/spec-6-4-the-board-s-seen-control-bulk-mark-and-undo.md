@@ -159,6 +159,9 @@ tests above. The live-data design gate is the operator's dogfooding at the end o
   `render` gives a hidden bulk mark's focus to its group's first Box; `hideToast` moves focus
   from the bar to the Box it was about. The browser check asserts focus after a pill, an Undo and
   a bulk mark.
+- Round 1 outcome: both findings fixed (387496a); none deferred, none rejected. A refused Undo's
+  409 is accurate as worded: the engine refuses an undo only when the mark is current and the
+  pane's rows are held (`internal/engine/acknowledge.go`), so the mark does stand.
 
 ## Design Notes
 
