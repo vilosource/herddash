@@ -241,3 +241,18 @@ Fixed 1, deferred 0, rejected 0.
   ADR-0015 amended. Tests: `TestFocusFromSnapshot` "another event first" now expects the mark;
   "agreeing second read", "second read further on" and "restart of the pane moved to" fail without
   the fix; "restart of the pane moved from" fails with the from-pane discard removed.
+
+### 2026-10-27 — Review round 3 findings triaged
+
+Fixed 1, deferred 0, rejected 0.
+
+- `[medium]` `[fixed]` `seedSeen` left `rowSince` at 0 when `store.Acknowledgements` failed, so a
+  later leave passed `FinishHasRow = false` to `core.SeenOnLeave` and wrote a `herdr_focus` mark
+  over the operator's own `Mark unseen` (or Board mark) for that finish, which then decided that
+  finish after every later restart, against ADR-0015's rule that the operator's choice wins. A
+  failed read now sets `rowSince = fold.Since`, so it counts as a row and no leave marks that
+  finish; the Agent's next finish, a turn not observed, or a later seed that reads normally is
+  judged as usual, and Board clicks are unaffected (commit 2848a30). Test: `TestFocusAckReadFails`
+  (Mark unseen, restart with the read failing, a 10 s dwell and a leave: no `herdr_focus` row and
+  not Seen; then the read recovers and a new finish and leave write one `herdr_focus` row). It
+  fails with the fix reverted (Seen, one `herdr_focus` row) and passes under `-race -count=50`.

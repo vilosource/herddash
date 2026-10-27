@@ -541,7 +541,8 @@ type pane struct {
 	// when none: in force, as the leave rule's FinishHasRow, while the fold
 	// is Finished from that same instant (finishHasRow). Set when a row is
 	// written for the current finish and derived from the record at a seed,
-	// where a failed read counts as one (seedSeen); cleared once the fold leaves that finish or a turn not observed ends it.
+	// where a failed read counts as one (seedSeen); cleared once the fold
+	// leaves that finish or a turn not observed ends it.
 	rowSince int64
 }
 
