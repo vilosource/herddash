@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 10-16-2026 09:40
-last_updated: 10-27-2026 14:55
+last_updated: 10-27-2026 15:00
 project: herddash
 project_key: NOKEY
 tracking_system: file-system
@@ -99,7 +99,7 @@ development_status:
 
   # Epic 6: Acknowledging a Finished Agent (ADR-0014, vfkb 9aee0fc69560). Local -dev builds; the operator is asked only to dogfood.
   # Amended 2026-10-27 (operator decision while dogfooding, vfkb f14fa1cdfa89, ADR-0015): Seen also when the operator leaves the pane in herdr; Stories 6.6 to 6.9.
-  epic-6: in-progress  # 6.1 to 6.5 done (-dev 0.8.0-dev installed); 6.6 to 6.9 add Seen on leaving the pane (6.6 and 6.7 done)
+  epic-6: in-progress  # 6.1 to 6.9 done; Seen on leaving the pane (6.6 to 6.9) built; waiting on the operator's dogfooding of the 6.9 -dev build
   6-1-acknowledgements-in-the-record: done
   6-2-the-engine-acknowledges-a-finish: done
   6-3-write-routes-guarded-against-cross-site-requests: done
@@ -108,7 +108,7 @@ development_status:
   6-6-read-herdr-s-focus-and-record-where-a-mark-came-from: done
   6-7-the-engine-marks-a-finish-seen-when-the-operator-leaves-its-pane: done
   6-8-the-board-shows-in-view-and-offers-mark-unseen: done
-  6-9-documents-and-the-build-the-operator-dogfoods-again: backlog
+  6-9-documents-and-the-build-the-operator-dogfoods-again: done
   epic-6-retrospective: optional
 
 # Operator checkpoints and story-size notes carried from epics validation
