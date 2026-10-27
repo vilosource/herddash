@@ -588,19 +588,86 @@ func TestFocusFromSnapshot(t *testing.T) {
 			t.Errorf("w1:p3 %+v, want in view, not seen", v)
 		}
 	})
+	// Any event naming another pane than the one the held move left is
+	// that pane's leave: the events arrive in herdr's order, so focus left
+	// it. The event for w1:p1 is also a leave of w1:p3, after no dwell.
 	t.Run("another event first", func(t *testing.T) {
 		h, _, st, clock := startFocus(t, snap, nil)
 		h.focusOn("w1:p2")
 		clock.advance(10 * time.Second)
 		h.fake.setSnapshot(focused(snap, "w1:p3"))
 		h.reconcileRead()
-		h.focusOn("w1:p1") // a leave of w1:p3, after no dwell; w1:p2's move is unconfirmed
+		h.focusOn("w1:p1")
 		h.focusOn("w1:p3")
-		if v := h.viewOf("w1:p2"); v.Seen {
-			t.Errorf("w1:p2 %+v, want not seen", v)
+		if v := h.viewOf("w1:p2"); !v.Seen {
+			t.Errorf("w1:p2 %+v, want seen", v)
 		}
-		if n := len(st.ackList()); n != 0 {
-			t.Errorf("%d acknowledgements, want none", n)
+		if v := h.viewOf("w1:p3"); v.Seen || !v.InView {
+			t.Errorf("w1:p3 %+v, want in view, not seen", v)
+		}
+		if acks := focusAcks(st); len(acks) != 1 || acks[0].Key().PaneID != "w1:p2" {
+			t.Errorf("acknowledgements %+v, want one herdr_focus mark of w1:p2", acks)
+		}
+	})
+	// A second read agreeing with the first keeps the held move.
+	t.Run("agreeing second read", func(t *testing.T) {
+		h, _, st, clock := startFocus(t, snap, nil)
+		h.focusOn("w1:p2")
+		clock.advance(10 * time.Second)
+		h.fake.setSnapshot(focused(snap, "w1:p3"))
+		h.reconcileRead()
+		h.reconcileRead()
+		h.focusOn("w1:p3")
+		if acks := focusAcks(st); len(acks) != 1 || acks[0].Key().PaneID != "w1:p2" {
+			t.Errorf("acknowledgements %+v, want one herdr_focus mark of w1:p2", acks)
+		}
+	})
+	// A second read naming yet another pane moves the held move on; the
+	// pane left first is still the one an event leaves.
+	t.Run("second read further on", func(t *testing.T) {
+		h, _, st, clock := startFocus(t, snap, nil)
+		h.focusOn("w1:p2")
+		clock.advance(10 * time.Second)
+		h.fake.setSnapshot(focused(snap, "w1:p3"))
+		h.reconcileRead()
+		h.fake.setSnapshot(focused(snap, "w1:p1"))
+		h.reconcileRead()
+		h.focusOn("w1:p3")
+		h.focusOn("w1:p1")
+		if acks := focusAcks(st); len(acks) != 1 || acks[0].Key().PaneID != "w1:p2" {
+			t.Errorf("acknowledgements %+v, want one herdr_focus mark of w1:p2", acks)
+		}
+		if v := h.viewOf("w1:p1"); !v.InView {
+			t.Errorf("w1:p1 %+v, want in view", v)
+		}
+	})
+	// The pane moved to has its own dwell: its Agent starting a new turn
+	// does not change the leave of the pane moved from.
+	t.Run("restart of the pane moved to", func(t *testing.T) {
+		h, _, st, clock := startFocus(t, snap, nil)
+		h.focusOn("w1:p2")
+		clock.advance(10 * time.Second)
+		h.fake.setSnapshot(focused(snap, "w1:p3"))
+		h.reconcileRead()
+		h.say("w1:p3", core.StatusWorking)
+		h.focusOn("w1:p3")
+		if acks := focusAcks(st); len(acks) != 1 || acks[0].Key().PaneID != "w1:p2" {
+			t.Errorf("acknowledgements %+v, want one herdr_focus mark of w1:p2", acks)
+		}
+	})
+	// The pane moved from starting a new finish after the read discards the
+	// move: the dwell held was spent on the finish before.
+	t.Run("restart of the pane moved from", func(t *testing.T) {
+		h, _, st, clock := startFocus(t, snap, nil)
+		h.focusOn("w1:p2")
+		clock.advance(10 * time.Second)
+		h.fake.setSnapshot(focused(snap, "w1:p3"))
+		h.reconcileRead()
+		h.say("w1:p2", core.StatusWorking)
+		h.say("w1:p2", core.StatusDone)
+		h.focusOn("w1:p3")
+		if n := len(focusAcks(st)); n != 0 {
+			t.Errorf("%d herdr_focus rows, want none: w1:p2's finish began after the read", n)
 		}
 	})
 	t.Run("short dwell before the read", func(t *testing.T) {

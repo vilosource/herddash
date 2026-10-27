@@ -84,10 +84,14 @@ it; a `time.Time` keeps Go's monotonic reading, so a stepped wall clock does not
   focused before is **not** marked: only an observed `pane_focused` is a leave. A snapshot read that
   started before a `pane_focused` arrived is older than that event, so its focus is ignored.
   A read can also be newer than a `pane_focused` still on its way, the snapshot and the event stream
-  being separate connections. So such a move is held, and when the very next `pane_focused` names
-  the pane the snapshot moved to, that event is the leave of the pane focused before, judged with
-  the dwell it had when the snapshot was applied. Any other event, a later snapshot, a resync or a
-  restarted dwell of either pane discards it. *Amended 2026-10-27 by Story 6.7's review.*
+  being separate connections. So such a move is held, and the next `pane_focused` naming any pane
+  but the one moved from is the leave of that pane, judged with the dwell it had when the snapshot
+  was applied: events arrive in herdr's order, so focus left it, as it would have counted had no
+  snapshot come between. Later snapshots keep the move while they name a pane (another pane moves
+  the held move on to it); a resync, a snapshot naming no pane or the pane moved from, an event for
+  the pane moved from, a disconnect or a restarted dwell of the pane moved from discards it. The
+  pane moved to has its own dwell, which does not touch that leave. *Amended 2026-10-27 by Story
+  6.7's review, rounds 1 and 2.*
 - **The dwell restarts** whenever the focused pane's Agent enters a new finish or leaves one: when
   its fold's class or `Since` changes, a new Agent replaces it, or a turn herddash did not observe
   ends its acknowledgement (ADR-0014's amendment). herdr's `done` to `idle` within one finish moves

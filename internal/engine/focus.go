@@ -13,16 +13,20 @@ import (
 // pane is focused with its dwell starting now. Either way the event is newer
 // than any snapshot read already started, whose focus is then ignored. The
 // views of both panes change (in_view), and publish notes them.
+//
+// While a snapshot's move is held (snapshotFocus), any pane_focused naming
+// another pane than the one it moved from is also that pane's leave, judged
+// with the dwell held, as it would have been had no snapshot come between:
+// the events arrive in herdr's order, so focus left it.
 func (e *Engine) onFocus(id string) {
 	e.focusEvent = e.snapSeq
 	moved := e.focusMoved
 	e.focusMoved = nil
+	if moved != nil && id != moved.from {
+		e.log.Debug("focus", "pane", id, "left", moved.from, "dwell", moved.dwell.String(), "after", "snapshot")
+		e.leave(moved.from, moved.dwell)
+	}
 	if id == e.focusPane {
-		if moved != nil && moved.to == id {
-			// The event for the move a snapshot showed first: its leave.
-			e.log.Debug("focus", "pane", id, "left", moved.from, "dwell", moved.dwell.String(), "after", "snapshot")
-			e.leave(moved.from, moved.dwell)
-		}
 		return
 	}
 	now := e.clock()
@@ -99,23 +103,34 @@ type focusMove struct {
 //
 // But a read can also be newer than a pane_focused still on its way: the
 // snapshot and the lifecycle stream are separate connections. So a later
-// snapshot's move from a held pane is kept as focusMoved, and when the very
-// next pane_focused names the pane it moved to, that event is the move's
-// leave, judged with the dwell the pane left had when the snapshot was
-// applied. Any other pane_focused, a later snapshot, a reset or a restarted
-// dwell of either pane discards it.
+// snapshot's move from a held pane is kept as focusMoved, and the next
+// pane_focused naming any pane but the one moved from is that pane's leave
+// (onFocus), judged with the dwell it had when the snapshot was applied.
+// Later snapshots keep the move while they name a pane: the same one, or
+// another, which the move then goes to (focus went on through herdr while
+// its events were on their way). A reset, a snapshot naming no pane or the
+// pane moved from, a disconnect or a restarted dwell of the pane moved from
+// discards it.
 func (e *Engine) snapshotFocus(seq uint64, id string, reset bool) {
 	if e.focusEvent >= seq {
 		return
 	}
+	held := e.focusMoved
 	e.focusMoved = nil
 	if !reset && id == e.focusPane {
+		e.focusMoved = held
 		return
 	}
 	now := e.clock()
 	if id != e.focusPane {
 		e.log.Debug("focus from a snapshot", "pane", id, "was", e.focusPane)
-		if !reset && e.focusPane != "" && id != "" {
+		switch {
+		case reset || id == "":
+		case held != nil:
+			if id != held.from {
+				e.focusMoved = &focusMove{from: held.from, to: id, dwell: held.dwell}
+			}
+		case e.focusPane != "":
 			e.focusMoved = &focusMove{from: e.focusPane, to: id, dwell: now.Sub(e.focusSince)}
 		}
 	}
@@ -129,7 +144,9 @@ func (e *Engine) restartDwell(p *pane) {
 	if e.focusPane != "" && p.id == e.focusPane {
 		e.focusSince = e.clock()
 	}
-	if m := e.focusMoved; m != nil && (p.id == m.from || p.id == m.to) {
+	// A held move's leave is of the finish its pane had then. The pane
+	// moved to has its own dwell, which does not change that leave.
+	if m := e.focusMoved; m != nil && p.id == m.from {
 		e.focusMoved = nil
 	}
 }

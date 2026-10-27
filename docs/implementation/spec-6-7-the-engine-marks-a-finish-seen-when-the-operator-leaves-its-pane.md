@@ -226,3 +226,18 @@ at least 3 s focused during that finish: one `herdr_focus` row, written only whe
 row yet, so `Mark unseen` sticks across leaves and restarts. Focus is held in memory, set from
 snapshots without a leave, dropped at a disconnect, and never recorded. Every `AgentView` carries
 `in_view`, which the event stream and the Board's replay carry unchanged. Nothing was deferred.
+
+### 2026-10-27 — Review round 2 findings triaged
+
+Fixed 1, deferred 0, rejected 0.
+
+- `[low]` `[fixed]` Round 1's held snapshot move was still thrown away when the operator really had
+  read and left the pane: a second snapshot agreeing with the move cleared it, a restarted dwell of
+  the pane moved *to* cleared it, and an event for an intermediate pane (a flick A to B to C, the
+  snapshot naming C) cleared it, so A stayed Finished. `snapshotFocus` now keeps the move while a
+  later snapshot names a pane (moving it on to another), `restartDwell` discards it only for the
+  pane moved from, and `onFocus` treats any `pane_focused` naming another pane than the one moved
+  from as that pane's leave with the dwell held, besides the usual leave of the focused pane.
+  ADR-0015 amended. Tests: `TestFocusFromSnapshot` "another event first" now expects the mark;
+  "agreeing second read", "second read further on" and "restart of the pane moved to" fail without
+  the fix; "restart of the pane moved from" fails with the from-pane discard removed.
