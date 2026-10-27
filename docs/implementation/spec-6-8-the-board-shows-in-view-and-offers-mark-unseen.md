@@ -161,6 +161,12 @@ operator's dogfooding with live data (Story 6.9).
   already has an acknowledgement row, which the leave check never marks. Fixing it changes
   ADR-0015's view contract or its wording; recorded in `deferred-work.md`.
 
+### 2026-10-27 — Review round 2
+- `[low]` `[patch]` The in-view tag's `●` was read by a screen reader's virtual cursor ("black
+  circle in view") while the Seen pill's `✓` is `aria-hidden`. The dot is now its own
+  `aria-hidden` span (`IN_VIEW_DOT`, then `IN_VIEW_WORDS`); the tag's text is unchanged. The
+  browser check asserts the hidden dot, `order.test.mjs` the constants.
+
 ## Design Notes
 
 The tag and both pills follow from `boxKind`, so they cannot disagree with the class label, the
