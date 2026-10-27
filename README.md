@@ -16,12 +16,16 @@ different question: **what is every agent doing right now, and which ones are wa
 - Each agent labelled with the profile it runs under, so two `claude` panes on different
   subscriptions are told apart.
 - Every status change recorded, so "waiting 40 minutes" is a fact that survives a restart.
-- Read-only. No terminal, no prompts, no pane control: herdr already does those.
+- Read-only apart from one thing: you can mark a finished agent's result as seen, which
+  herddash records for itself and never tells herdr
+  ([ADR-0014](docs/adr/0014-acknowledging-a-finished-agent.md)). No terminal, no prompts, no
+  pane control: herdr already does those.
 
-Status: **pre-release, being dogfooded.** The recorder, the read-only API and the Board work;
-the first release is being prepared. Two browser interfaces for herdr already exist, so
-herddash is deliberately narrow: a read-only notification board backed by a recorder, running
-beside them. See [ADR-0001](docs/adr/0001-what-herddash-is.md) and
+Status: **pre-release, being dogfooded.** The recorder, the API and the Board work; the API is
+read-only except for the acknowledgement routes the Board's Seen buttons use, which accept
+requests only from the Board's own page. Two browser interfaces for herdr already exist, so
+herddash is deliberately narrow: a notification board backed by a recorder, running beside them,
+whose only control is marking a finished result seen. See [ADR-0001](docs/adr/0001-what-herddash-is.md) and
 [ADR-0003](docs/adr/0003-the-board-is-the-product.md).
 
 - [docs/how-herddash-works.md](docs/how-herddash-works.md) explains the design in plain

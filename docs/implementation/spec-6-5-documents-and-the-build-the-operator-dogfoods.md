@@ -138,3 +138,27 @@ whether the epic ships; on their OK it ships as one pull request and one release
   (`unable to open database file`); the backup was checked with `file:…?immutable=1` instead.
   `docs/install.md`'s schema check runs while the Daemon is up, when the `-shm` exists, and
   `-readonly` works there (checked against the running 0.7.1 before the upgrade, which printed 4).
+
+### 2026-10-27 — Epic 6 final review (documents)
+- `[medium]` `[patch]` `README.md` still called herddash, its API and its Board read-only. It now
+  says read-only apart from marking a finished result seen, whose routes accept requests only from
+  the Board's own page (ADR-0014).
+- `[low]` `[patch]` Other stale "read-only" text: `docs/config.example.toml`'s `bind`, the systemd
+  unit's `Description`, the `cmd/herddash` package comment and `runServe`'s comment now say
+  read-only apart from acknowledgement, or drop the claim.
+- `[low]` `[patch]` CLAUDE.md's "Repository state" now describes the title bar (Story 5.19,
+  ADR-0013: text logo, a summary that restates the Needs you count and herdr's connection, no
+  control, not a live region), heads the Epic 5 list as done, lists Story 5.19 in it and says what
+  v0.7.1 carried (the launchd start-delay note in `docs/install.md`).
+- `[low]` `[patch, partly rejected]` "With recording turned off, marking is refused" in
+  how-herddash-works and ADR-0014. The review said the shipped Daemon never reaches that mode;
+  that part is rejected: `restore` (`internal/engine/recorder.go`) sets `e.store = nil` for the
+  run when the saved state fails to load, so the shipped binary can answer 503 `recording_off`
+  (deferred-work's retro F-6 entry). What is true is that no setting turns recording off and that
+  with herdr refused by the version gate a mark gets 404 `unknown_agent`; both documents now say
+  so, and CLAUDE.md says which run gives the 503.
+- `[low]` `[patch]` The schema-6 migration the final review's engine fix needed is reflected in
+  CLAUDE.md, `docs/install.md`'s schema table, the spine's AD-10 and how-herddash-works. The
+  installed `-dev` database is at schema 5 and is migrated to 6 by the next `-dev` build;
+  `TestUpgradeFromSchema5` covers that path. `epics.md`'s Story 6.1 and 6.5 criteria, which name
+  schema 5, are the plan as it was cut and are left as they are.

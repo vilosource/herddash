@@ -166,6 +166,12 @@ Board.
   `Content-Type` header value, and one `Sec-Fetch-Site` value when present. A browser sends one of
   each, so a repeated header is refused as the matching failure.
 
+### 2026-10-27 — Epic 6 final review
+- `[low]` `[patch]` `httpapi.New`'s comment said `OPTIONS` is a 405 everywhere; an unknown or
+  malformed path gives 404 for every method, `OPTIONS` included. The comment now says 405 on a
+  read or write route and 404 elsewhere. Either way no preflight succeeds; CLAUDE.md, the spine
+  and ADR-0014 already limited the claim to the routes.
+
 ## Design Notes
 
 The guard is stateless, as ADR-0014 decided against a token. A cross-site page cannot set

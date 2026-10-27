@@ -69,8 +69,8 @@ const (
 // once its same-origin guard passes. It reads only through opts.View,
 // opts.Subscribe, opts.History and opts.Acknowledgements, and changes
 // anything only through opts.Acknowledge: it never calls herdr and never
-// writes to the store. It never sends a CORS header, and answers OPTIONS
-// with 405 everywhere. It panics if any of those five funcs is nil.
+// writes to the store. It never sends a CORS header. OPTIONS on a read or
+// write route is a 405; on any other path, like every method there, a 404. It panics if any of those five funcs is nil.
 func New(opts Options) *Handler {
 	if opts.View == nil {
 		panic("httpapi.New: Options.View is nil")

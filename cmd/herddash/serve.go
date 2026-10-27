@@ -38,8 +38,8 @@ const (
 // configuration as "herddash config" does, ensures the data directory, logs
 // JSON to herddash.log there, opens the database (so a second serve on the
 // same database fails at once) for the engine to record every Transition into,
-// listens on the configured loopback bind for the read-only HTTP surface
-// (ADR-0007), prints the address it serves on, and prints every version gate
+// listens on the configured loopback bind for the HTTP surface, read-only
+// apart from acknowledgement's write routes (ADR-0007, ADR-0014), prints the address it serves on, and prints every version gate
 // outcome, Agent, Transition, removal, Profile change, reconnect and resync to
 // stdout until ctx ends (exit 0). herdr being absent, gone or restarting never
 // ends it: the engine reconnects. Exit 1 is left for configuration, data

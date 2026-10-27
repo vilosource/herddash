@@ -314,12 +314,13 @@ spec, with its review triage log, is `docs/implementation/spec-<key>.md`. `go.mo
   built only by `core.NewAcknowledgement`, and `core.Seen`). `core.NewTransition` refuses a
   `HerdrOrder` on a `live` or `backfill` Transition (`core.ErrInvalidHerdrOrder`).
 - `internal/store`: the SQLite record (`modernc.org/sqlite`, WAL, flock-owned), plus the engine's
-  `server_state`, which is engine state, not the append-only record. Five migrations, 0001 to
-  0005; 0004 (Story 5.17) adds `server_state.released`, engine state only, and 0005 (Story 6.1)
-  adds the append-only `acknowledgements` table, swept by Retention with its Agent's rows. A
-  database is refused by a binary that knows an older schema (`store.ErrSchemaNewer`), so each
-  migration is a one-way door: 0.5.0 cannot open schema 4, and **0.7.x and earlier cannot open
-  schema 5**. Going back means restoring the backup taken before the upgrade (`docs/install.md`,
+  `server_state`, which is engine state, not the append-only record. Six migrations, 0001 to
+  0006; 0004 (Story 5.17) adds `server_state.released`, engine state only, 0005 (Story 6.1)
+  adds the append-only `acknowledgements` table, swept by Retention with its Agent's rows, and
+  0006 (ADR-0014's amendment) its nullable `herdr_order`. A database is refused by a binary that
+  knows an older schema (`store.ErrSchemaNewer`), so each migration is a one-way door: 0.5.0
+  cannot open schema 4, **0.7.x and earlier cannot open schema 5 or 6**, and the first Epic 6
+  `-dev` builds, which know schema 5, cannot open schema 6. Going back means restoring the backup taken before the upgrade (`docs/install.md`,
   "Before a build with a new schema") or removing the database. `store.AppendAcknowledgements` is
   called only by the engine (`callsite_test.go`).
 - `internal/httpapi`: the loopback API: `/api/state`, `/events` (SSE) and
@@ -335,15 +336,21 @@ spec, with its review triage log, is `docs/implementation/spec-<key>.md`. `go.mo
   JSON object with no unknown fields (400). No response carries a CORS header and `OPTIONS` is a
   405, so another page's request never gets through a preflight. They reach the engine only
   through `engine.Engine.Acknowledge`, which validates against its own state (404
-  `unknown_agent`, 409 `not_finished` or `stale_view`, 503 `recording_off`); it never calls
+  `unknown_agent`, 409 `not_finished` or `stale_view`, 503 `recording_off`, which only a run
+  whose saved state failed to load gives, since no setting turns recording off); it never calls
   herdr.
 - `internal/importer`: the plugin-log backfill.
 
 - The Board at `/`, with its files under `internal/httpapi/web/` embedded in the binary: the
   ordering and event logic is `order.mjs`, tested with `node --test` in CI, and
   `internal/httpapi/web/check/board-browser.mjs` is a headless-Chrome check of its drawing,
-  run by CI's `board-browser` job. Its approved design is `docs/design/board-design.md`. Its only
-  controls are acknowledgement's (ADR-0014, Story 6.4): a `✓ Seen` pill on each Finished Box, a
+  run by CI's `board-browser` job. Its approved design is `docs/design/board-design.md`. Above
+  the strips, sticky with them, is its title bar (Story 5.19, ADR-0013, released as v0.7.0): a
+  text logo (`herddash`, `herd` bold, after three bars in red, amber and green) and a summary
+  that only restates what the Board already shows, the Needs you count ("2 need you" or
+  "Nothing needs you") and herdr's connection (`herdr <version>` with a dot, or disconnected or
+  reconnecting), from `titleBar` in `order.mjs`; it holds no link or control and is not a live
+  region, and any new fact in it is a new decision. Its only controls are acknowledgement's (ADR-0014, Story 6.4): a `✓ Seen` pill on each Finished Box, a
   workspace heading's `✓ Mark N finished seen` with two or more unseen Finished Boxes, and a 6 s
   Undo bar; no keyboard shortcut. It changes nothing optimistically: a Box changes when the
   stream's `agent` event arrives.
@@ -377,9 +384,15 @@ And for every Agent, whatever its program:
   ends it, with no row written. `attention_class` stays `finished`; a seen Agent ranks with Idle
   (`class_rank` 2, Idle's newest-first start), so its Box turns grey, labelled SEEN, moves down
   among its group's Idle Boxes and is counted `N seen`, not finished. Background still ranks 3.
-  The state is derived from the record at every seed, so it survives a Daemon restart.
+  The state is derived from the record at every seed, so it survives a Daemon restart. Each
+  mark carries herdr's `state_change_seq` for the Status when a snapshot had read it, and a
+  snapshot showing the same Status at a higher one, in the run or at a restart, ends the mark:
+  the Agent ran a turn herddash did not observe (`core.SeenAt`, ADR-0014's amendment). With no
+  order known for the finish, a missed turn still goes unnoticed.
 
-Epic 5 has also made these exact so far:
+Epic 5 (v0.6.0, its title bar v0.7.0) also made these exact; v0.7.1 added only
+`docs/install.md`'s note that under launchd on macOS a new, ad-hoc signed binary starts about
+30 s late, after launchd refuses its first start (`OS_REASON_CODESIGNING`):
 
 - The Board treats a stream that sends nothing, keepalive included, for 35 s
   (`STREAM_SILENCE_MS`) as a lost Daemon: it dims, says so and reconnects. A skipped sequence
@@ -408,6 +421,7 @@ Epic 5 has also made these exact so far:
   5.17). Quit and restart in one terminal while the Daemon is down still join (spine AD-3).
 - A resumed subagent counts as background work until its notification closes it (Story 5.16,
   ADR-0009 amended).
+- The Board's title bar (Story 5.19, ADR-0013; see the Board above).
 
 `main` and `develop` are kept level; if they are not, a `develop` into `main` pull request is open
 or overdue.

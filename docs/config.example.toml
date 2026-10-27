@@ -45,7 +45,8 @@
 
 # --- Serving -----------------------------------------------------------------
 
-# Address for the Board and the read-only API. Only loopback addresses
+# Address for the Board and the API, read-only apart from the acknowledgement
+# ("Seen") routes the Board's own page uses (ADR-0014). Only loopback addresses
 # (127.0.0.0/8, ::1, localhost) are accepted, because authentication does not
 # exist yet.                                            Flag: --bind
 # bind = "127.0.0.1:7318"

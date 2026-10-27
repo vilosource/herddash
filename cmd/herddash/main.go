@@ -1,5 +1,5 @@
 // Command herddash records every herdr agent status transition and serves a
-// read-only view of them. So far it has the serve, import-plugin-log, config
+// view of them, read-only apart from acknowledging a finish (ADR-0014). So far it has the serve, import-plugin-log, config
 // and version subcommands; serve prints every Agent and Status change to
 // stdout.
 package main
