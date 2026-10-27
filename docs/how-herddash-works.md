@@ -1,8 +1,7 @@
 # How herddash works
 
-This is the design herddash is being built to, written for herdr users deciding whether to run it.
-Nothing is built yet. When the code exists it becomes the authority, and this page is updated to
-match it.
+This is how herddash works, written for herdr users deciding whether to run it. The code is the
+authority; this page is kept in step with it.
 
 ## What it is for
 
@@ -17,8 +16,9 @@ longest-waiting at the top. Each box says which profile the agent runs under, so
 on different subscriptions are told apart. It also says how long the agent has been waiting. That
 figure comes from a recorded history and survives restarts.
 
-It is read-only. It has no terminal, no prompt box, and no way to focus, close or type into a pane.
-herdr already does those. For a full browser client, see
+It changes nothing in herdr. It has no terminal, no prompt box, and no way to focus, close or type
+into a pane; herdr already does those. Its one control is herddash's own note that you have read a
+finished agent's result, **Seen** (below). For a full browser client, see
 [devswha/herdr-web-ui](https://github.com/devswha/herdr-web-ui), which herddash is designed to run
 beside.
 
@@ -58,8 +58,9 @@ herddash is one program, the **daemon**, that you run on the machine where herdr
 - **The history database** is a SQLite file. It records every status change, which profile owned
   the agent at the time, and where the record came from. Old records are deleted after 90 days by
   default.
-- **The web server** serves the board, a small read-only API and a live event stream, and listens
-  only on your own machine.
+- **The web server** serves the board, a small API and a live event stream, and listens only on
+  your own machine. Every route only reads, except the four that record a Seen, which accept a
+  request only from the board's own page.
 
 ## How a change reaches your screen
 
@@ -93,7 +94,40 @@ first, each with the profile at the time and where it came from (`live`, `snapsh
 `backfill`). Each part of the path is percent-encoded, so pane `w1:p1` may be sent as `w1%3Ap1`.
 A 404 means herddash holds no record for that agent: it was never seen, or its records are older
 than the retention period and have been deleted. Retention never deletes the change that started
-an agent's current state, so an agent on the board always has at least that row.
+an agent's current state, so an agent on the board always has at least that row. The body also
+carries `acknowledgements`: the agent's Seen marks and their undos, in the order they were made,
+each `{"finished_since", "seen", "observed_at"}` (`[]` when there are none).
+
+## Marking a finished agent Seen
+
+A finished agent stays finished until its next turn, however long ago you read its result. So each
+finished box carries a `✓ Seen` button. Press it once you have read the result, and the box turns
+grey, is labelled SEEN, moves down among the idle boxes of its workspace, and leaves the
+workspace's finished count, which lists it as `N seen` instead. A workspace heading with two or
+more unseen finished boxes offers `✓ Mark N finished seen`, which marks exactly the boxes it shows.
+For six seconds after each mark an Undo bar lets you take it back. There is no keyboard shortcut;
+the controls are ordinary buttons, so a keyboard-navigation extension such as Vimium reaches them.
+
+What a Seen mark does:
+
+- It names one exact finish: the agent and the moment its current finish began, the
+  `waiting_since` the API sends. A button pressed on a box that has since moved on is refused, and
+  nothing is marked.
+- It lasts until the agent's next change out of that finish: a new turn, a question for you, a new
+  agent in the pane, or a herdr restart. herdr's own `done` to `idle`, which happens when you look
+  at the pane in herdr, keeps it, because that is the same finish.
+- It is recorded in the history database as a row of its own, and an undo is a further row, so it
+  survives a restart of herddash and shows in the agent's history. With recording turned off,
+  marking is refused.
+- It reaches every open board through the event stream, as that agent's updated box.
+
+What it does not do:
+
+- **It never tells herdr.** herdr's own seen state, the status it reports and every other herdr
+  client are unchanged; herddash makes no call to herdr for it at all.
+- It changes no recorded status. The agent's class stays `finished` in the API, beside
+  `"seen": true`; only its place on the board and its colour change.
+- A box that needs you, or is idle, working or running background work, cannot be marked.
 
 ## Why the waiting time can be trusted
 
@@ -112,7 +146,11 @@ live box's time.
   client has no focus function at all, so it cannot clear a completion you have not looked at.
 - **Never read pane output.** No excerpts, no scrollback. The client has no output-reading function,
   so prompts and secrets on your screen never reach herddash's database.
-- **Never accept a change over the web.** Every route is read-only.
+- **Never accept a change over the web but an acknowledgement, and only from its own page.** Every
+  route only reads, except the four `POST` routes that mark or unmark Seen. Those accept a request only
+  when it names localhost, carries the board's own origin, the header `X-Herddash-Write: 1` and a
+  small JSON body; herddash answers no cross-origin preflight, so another web page you visit
+  cannot send one. A Seen mark is the only thing they can change.
 - **Never listen beyond your machine.** It binds to localhost, refuses to start on any other address
   until authentication exists, and rejects requests that do not name localhost. That last check
   stops a malicious web page from reading it through DNS tricks.
@@ -147,5 +185,6 @@ needs no runtime, no package manager and no root, and it requires herdr 0.9.5 or
 
 The binding design rules are the
 [architecture spine](planning/architecture/architecture-herddash-2026-10-14/ARCHITECTURE-SPINE.md).
-The decisions behind them are [ADR-0004 to ADR-0007](adr/README.md), and what herddash must do is
+The decisions behind them are [ADR-0004 to ADR-0014](adr/README.md), acknowledgement being
+[ADR-0014](adr/0014-acknowledging-a-finished-agent.md), and what herddash must do is
 the [PRD](prd.md).
