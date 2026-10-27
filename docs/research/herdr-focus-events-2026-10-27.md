@@ -58,6 +58,11 @@ The payloads carry exactly what the schema requires (`EventData` variants `works
 `workspace_id`) and nothing else: **no previous pane, no client, no timestamp, no sequence
 number.** herddash has to time a dwell from when it receives the event.
 
+*Correction, 2026-10-27 (ADR-0015 planning):* `gen` does not hold `SubscriptionTypePaneFocused` or
+its siblings, nor the `pane_focused` event data; it holds only the `EventKindPaneFocused` constant.
+genwire generates a selected subset of the schema, so `pane.focused` and `pane_focused` must be
+added to its `roots` before herddash can subscribe. The schema dump does define them.
+
 ### 2. Every focus change emits all three, ending with the pane landed on
 
 Every change of focus observed, from a client's keys or from an API call, emitted the same three

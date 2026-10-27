@@ -1,6 +1,7 @@
 # ADR-0014: Acknowledging a Finished Agent ("Seen")
 
-**Status: Accepted** on 2026-10-27 by the operator, who asked for the control and approved its
+**Status: Accepted; amended by [ADR-0015](0015-seen-when-you-leave-the-pane.md)** (2026-10-27:
+Seen also when the operator leaves the pane in herdr). Accepted on 2026-10-27 by the operator, who asked for the control and approved its
 design from a mock rendered with their live Board (vfkb 9aee0fc69560). It amends
 [ADR-0003](0003-the-board-is-the-product.md) (the Board gains its first controls),
 [ADR-0005](0005-append-only-transition-record.md) (the record gains a second append-only table),

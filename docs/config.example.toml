@@ -150,6 +150,10 @@ absent = "claude"
 #   one read of an Agent process's children, timeout            2 s
 #   Claude Code session record read, every                      2 s
 #   one session record read, timeout                            1 s
+#   a pane focused in herdr at least this long during a finish,
+#     then left for another pane, marks that finish Seen         3 s
+#     (ADR-0015; timed by herddash from the focus event it receives;
+#     a missed focus move never marks)
 #
 # Record
 #   Retention sweep, every (from the first ready connection)    1 h

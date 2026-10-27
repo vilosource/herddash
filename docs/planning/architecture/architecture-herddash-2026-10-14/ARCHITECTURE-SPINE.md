@@ -15,6 +15,8 @@ sources:
   - docs/adr/0001-what-herddash-is.md
   - docs/adr/0003-the-board-is-the-product.md
   - docs/adr/0014-acknowledging-a-finished-agent.md
+  - docs/adr/0015-seen-when-you-leave-the-pane.md
+  - docs/research/herdr-focus-events-2026-10-27.md
   - docs/research/herdr-socket-api.md
   - docs/research/herdr-on-this-machine.md
 companions: []
@@ -33,9 +35,9 @@ One **engine** goroutine is the only owner of current state and the only caller 
 
 | Layer | Package | Holds |
 | --- | --- | --- |
-| Core | `internal/core` | AgentKey, Agent, Transition and its constructor, Status, Attention Class, Waiting Time and exactness, sort key, history fold, Profile and Context Line rules, AgentView, ConnectionTruth; Acknowledgement, its constructor and the rule deciding whether a finish is Seen (ADR-0014) |
-| Engine | `internal/engine` | the actor: pane set, current state, reconcile and Retention timers, resync decisions, publishing views |
-| Adapter | `internal/herdr` | socket mechanics: dial, ping, snapshot, subscribe, stream-health signals, generated wire types |
+| Core | `internal/core` | AgentKey, Agent, Transition and its constructor, Status, Attention Class, Waiting Time and exactness, sort key, history fold, Profile and Context Line rules, AgentView, ConnectionTruth; Acknowledgement, its constructor and the rule deciding whether a finish is Seen (ADR-0014); the acknowledgement's source and the rule deciding whether leaving a focused pane marks its finish Seen, `core.SeenOnLeave` (ADR-0015) |
+| Engine | `internal/engine` | the actor: pane set, current state, reconcile and Retention timers, resync decisions, publishing views; herdr's focused pane and its dwell, in memory only (ADR-0015) |
+| Adapter | `internal/herdr` | socket mechanics: dial, ping, snapshot, subscribe, stream-health signals, generated wire types; reads focus (the `pane.focused` lifecycle kind and the snapshot's `focused_pane_id`, ADR-0015) and never sets it |
 | Adapter | `internal/procenv` | reading one process's environment, and its direct children with their arguments (linux: `/proc`; darwin: `kern.procargs2`, `kern.proc.all`; children added 2026-10-21 for Background); and Claude Code's session record for one process, exactly `<config dir>/sessions/<pid>.json`, decoding only `pid`, `status` and `statusUpdatedAt` (added 2026-10-21, ADR-0008: a second source of `blocked`, recorded as `observed_by = claude_session`), and `sessionId` and `cwd`, which name the session's transcript; and that transcript, exactly `<config dir>/projects/<cwd with every character but a letter or digit as "-", or with only "/" and "." as "-" when only that folder exists>/<sessionId>.jsonl`, tailed from an in-memory offset (the last 8 MiB at first sight, then at most 1 MiB of complete new lines per read), handing each line to `core.DecodeTranscriptLine` and keeping nothing of it (added 2026-10-21, ADR-0009: background tasks for the view only, never recorded); only with the operator's `claude_recaps` consent, the decoder also takes one more record, a non-sidechain `system` record of `subtype` `away_summary`, for its string `content` alone, the newest recap held in memory for the view, never recorded or logged (added 2026-10-22, ADR-0010); from 2026-10-23 (ADR-0010 amendment, Story 5.14), also a non-sidechain `system` record of `subtype` `local_command` whose `commandRun.command` is "recap", for the text inside its string content's `<local-command-stdout>` wrapper |
 | Adapter | `internal/store` | open with lock, migrations, append, history reads and fold input, Retention sweep; acknowledgements: batch append, per-Agent read, swept with their Agent (ADR-0014) |
 | Adapter | `internal/httpapi` | GET routes, SSE, embedded Board assets; the acknowledgement `POST` routes and their cross-site guard, which reach the engine by message (ADR-0014) |
@@ -218,7 +220,9 @@ so do `herdr` and the packages under it, `herdr/gen` and `herdr/gen/genwire` (AD
 - **Binds:** FR-6, FR-7, FR-8, FR-9, FR-9a, FR-11, FR-14
 - **Prevents:** history rewritten by a Profile Map edit, a resync or an import.
 - **Rule:** Transitions, resync markers and acknowledgements (ADR-0014, migration 0005, their own
-  table) are inserted and never updated; an undo is a further acknowledgement row. The only delete
+  table) are inserted and never updated; an undo is a further acknowledgement row. Each
+  acknowledgement records its source, `board` or `herdr_focus` (ADR-0015, migration 0007); the
+  engine writes a `herdr_focus` row only as a finish's first row. Focus itself is never recorded. The only delete
   is the Retention sweep, which removes an acknowledgement with its Agent's rows: by age, except a
   present Agent's rows for its current finish. For each Agent still present, it keeps every Transition from the one that began
   the current Attention Class onward, plus the latest `working` Transition of the current Agent:
@@ -234,7 +238,11 @@ so do `herdr` and the packages under it, `herdr/gen` and `herdr/gen/genwire` (AD
 - **Rule:** only `internal/herdr` opens the socket. It dials once per request and holds one
   long-lived connection per subscription, with each Agent pane's status subscription on its own
   connection. Its API has **no** focus method and **no** pane-output method; the capability is
-  absent, not merely unused. Wire types live in `internal/herdr/gen` and are mapped to core types at
+  absent, not merely unused. *Amended 2026-10-27 (ADR-0015):* it **reads** focus: the lifecycle
+  connection also subscribes to the global `pane.focused` kind, mapped to
+  `core.LifecycleFocused`, and the snapshot's `focused_pane_id` is mapped to
+  `core.Snapshot.FocusedPaneID`. Reading focus changes nothing in herdr; genwire's `forbidden` list
+  still refuses `pane.focus` and `agent.focus`. Wire types live in `internal/herdr/gen` and are mapped to core types at
   the package edge; no package outside `internal/herdr` imports `gen`, and `internal/herdr` uses
   only the standard library and `core` (ADR-0011, enforced by `arch_test.go`).
 
@@ -271,7 +279,8 @@ so do `herdr` and the packages under it, `herdr/gen` and `herdr/gen/genwire` (AD
     it. `httpapi` turns that list into `agent`, `removed`, `transition`, `resync` and `connection`
     events, in publish order. The client applies events in arrival order. An acknowledgement or
     undo (ADR-0014) is published as the `agent` event of each Agent whose view changed; it adds no
-    event name.
+    event name. So is a focus move (ADR-0015): the `agent` event of the pane left and of the pane
+    landed on, whose `in_view` changed, and of an automatic mark.
   - **Keepalive** (added 2026-10-23, ADR-0012).
     Every 15 s a stream also sends a `keepalive` event: a liveness event, not a change, with data
     `{}` and no `id:`, so `id:` stays the view sequence of real changes. A client that hears
@@ -315,10 +324,10 @@ so do `herdr` and the packages under it, `herdr/gen` and `herdr/gen/genwire` (AD
   The migrations so far: 0001 the record; 0002 `server_state` (AD-3); 0003 the transitions table's
   `observed_by` column (ADR-0008); 0004 `server_state.released` (Story 5.17); 0005 the append-only
   `acknowledgements` table (ADR-0014, Epic 6); 0006 its nullable `herdr_order` column (ADR-0014's
-  amendment). 0002 and 0004 change engine state only, outside the append-only record, so they
+  amendment); 0007 its `source` column, `'board'` for every earlier row (ADR-0015). 0002 and 0004 change engine state only, outside the append-only record, so they
   needed no ADR. Every migration is a one-way door for older binaries: a database at schema 4 is
-  refused by 0.5.0, which knows schema 3, one at schema 5 by 0.7.x, and one at schema 6 by a build
-  that knows schema 5, so going back means restoring or removing the database.
+  refused by 0.5.0, which knows schema 3, one at schema 5 by 0.7.x, one at schema 6 by a build
+  that knows schema 5, and one at schema 7 by a build that knows schema 6, so going back means restoring or removing the database.
 
 ### AD-11 — The engine decides; `internal/herdr` only does
 
@@ -341,6 +350,14 @@ so do `herdr` and the packages under it, `herdr/gen` and `herdr/gen/genwire` (AD
   subscription connection. The snapshot is the truth for which panes exist and their
   current Status, and any disagreement is recorded as a `snapshot` Transition. Buffered events are
   never replayed onto a snapshot. Events that arrive during a snapshot read cause another read.
+- **Focus (ADR-0015).** A `pane_focused` event is not a change of what a snapshot reads: it causes
+  no read and does not count as an event during one. The engine keeps the focused pane and its
+  dwell start, by its own clock, in memory. A `pane_focused` for another pane is a leave of the
+  previous one, which `core.SeenOnLeave` may turn into a `herdr_focus` acknowledgement (dwell at
+  least `seenDwell`, 3 s, within the current finish; the finish has no row yet). A connection's
+  first snapshot and a resync set the focused pane from `focused_pane_id`, counting from when the
+  engine applied it; a later snapshot that disagrees moves focus without a leave, unless a
+  `pane_focused` arrived after that read started. A missed focus move never marks.
 
 ### AD-12 — Waiting Time comes from the record, through one fold
 
@@ -485,7 +502,7 @@ SIGTERM. There is no container, no root and no system service.
 | Capability | Lives in | Governed by |
 | --- | --- | --- |
 | FR-1 to FR-5 Board | `internal/httpapi/web`, `internal/core` | AD-1, AD-6, AD-7 |
-| FR-5a Acknowledgement | `internal/core`, `internal/engine`, `internal/store`, `internal/httpapi` | AD-1, AD-2, AD-4, AD-6, AD-7, AD-10; ADR-0014 |
+| FR-5a Acknowledgement | `internal/core`, `internal/engine`, `internal/store`, `internal/httpapi`, `internal/herdr` (focus reads) | AD-1, AD-2, AD-4, AD-5, AD-6, AD-7, AD-10, AD-11; ADR-0014, ADR-0015 |
 | FR-6 to FR-8 Recording | `internal/engine`, `internal/herdr`, `internal/store` | AD-2, AD-4, AD-5, AD-11, AD-12 |
 | FR-9 Retention | engine timer, `store` sweep | AD-2, AD-4 |
 | FR-9a Backfill | `internal/importer`, `cmd/herddash` | AD-9, AD-13 |

@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 10-16-2026 09:40
-last_updated: 10-27-2026 12:00
+last_updated: 10-27-2026 18:00
 project: herddash
 project_key: NOKEY
 tracking_system: file-system
@@ -98,12 +98,17 @@ development_status:
   epic-5-retrospective: optional
 
   # Epic 6: Acknowledging a Finished Agent (ADR-0014, vfkb 9aee0fc69560). Local -dev builds; the operator is asked only to dogfood.
-  epic-6: done  # every story done; -dev 0.8.0-dev (5bcf6cb90b6b) installed 2026-10-27, ships on the operator's dogfooding OK
+  # Amended 2026-10-27 (operator decision while dogfooding, vfkb f14fa1cdfa89, ADR-0015): Seen also when the operator leaves the pane in herdr; Stories 6.6 to 6.9.
+  epic-6: in-progress  # 6.1 to 6.5 done (-dev 0.8.0-dev installed); 6.6 to 6.9 add Seen on leaving the pane
   6-1-acknowledgements-in-the-record: done
   6-2-the-engine-acknowledges-a-finish: done
   6-3-write-routes-guarded-against-cross-site-requests: done
   6-4-the-board-s-seen-control-bulk-mark-and-undo: done
   6-5-documents-and-the-build-the-operator-dogfoods: done
+  6-6-read-herdr-s-focus-and-record-where-a-mark-came-from: backlog
+  6-7-the-engine-marks-a-finish-seen-when-the-operator-leaves-its-pane: backlog
+  6-8-the-board-shows-in-view-and-offers-mark-unseen: backlog
+  6-9-documents-and-the-build-the-operator-dogfoods-again: backlog
   epic-6-retrospective: optional
 
 # Operator checkpoints and story-size notes carried from epics validation
@@ -142,6 +147,6 @@ action_items:
     owner: "dev"
     status: done  # superseded by Epic 6 (operator decision 2026-10-27, ADR-0014); Story 5.9 closed without running
   - epic: 6
-    action: "When Epic 6 is built and its -dev build installed (Story 6.5), ask the operator once to dogfood the Seen control; on their OK ship it as one PR and one release (vfkb 9aee0fc69560)"
+    action: "When Epic 6 is built and its -dev build installed (Story 6.9, moved from 6.5 by ADR-0015), ask the operator once to dogfood the Seen control with Seen on leaving the pane; on their OK ship it as one PR and one release (vfkb 9aee0fc69560, f14fa1cdfa89)"
     owner: "operator"
-    status: open  # Story 6.5 done; 0.8.0-dev (5bcf6cb90b6b) installed under launchd 2026-10-27, waiting on the operator
+    status: open  # dogfooding of 0.8.0-dev found Seen-on-leave missing (ADR-0015); asked again after Story 6.9

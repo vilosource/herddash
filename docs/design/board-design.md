@@ -1,7 +1,8 @@
 # Board design (Story 3.6)
 
 **Status: approved 2026-10-20, amended 2026-10-21 and 2026-10-27 (ADR-0014, the acknowledgement
-controls, from a mock the operator approved with their live Board).** On 2026-10-21 the operator approved, from a
+controls, from a mock the operator approved with their live Board; and ADR-0015, the in-view tag
+and the Mark unseen pill, decided by the operator while dogfooding).** On 2026-10-21 the operator approved, from a
 mock of their live Board, a layout that answers their first question, which workspace, tab and
 pane to go to: Needs you alone on top, every other Agent in its workspace's group, and each Box
 leading with its tab and pane position. This document describes the amended Board; where it
@@ -56,7 +57,9 @@ change a Box's height. Empty fields keep their row. The rows, in reading order:
    the tab's layout rectangles (`core.PanePositions`). It is part of the Box's location, with the
    workspace and tab, and the only thing that tells two Agents in one tab apart. *Added
    2026-10-27, ADR-0014:* a Finished Box, and no other kind, ends this line with its **Seen
-   pill** (see "Acknowledgement controls"), after the badge when there is one.
+   pill** (see "Acknowledgement controls"), after the badge when there is one. *Amended
+   2026-10-27, ADR-0015:* a Finished Box whose pane is focused in herdr shows the **in-view tag**
+   `● in view` before its Seen pill, and a Seen Box ends this line with a **Mark unseen pill**.
 2. **The workspace or the directory.** In the Needs you zone, the workspace (`0.875rem`,
    semibold). In a workspace group, whose heading already names the workspace, the directory
    (monospace, faint), truncated from the start (`…sted/path/to/the-project-name`) so the last
@@ -156,7 +159,9 @@ Needs you fill moved from red-orange to red so it cannot be mistaken for amber.
   leading edge in `--border-quiet`, flush with the page, a `SEEN` label in `--ink-faint`, its
   tab and Context Line in `--ink-muted`, and its Waiting Time in `--ink-faint` at weight 600, as
   Idle's: it is dealt with, so it recedes. It carries no Seen pill. Background takes precedence
-  over it.
+  over it. *Amended 2026-10-27, ADR-0015:* it carries a quiet `Mark unseen` pill instead, and it
+  looks the same whether the operator clicked Seen or the Daemon marked it when they left the
+  pane in herdr; the source is in the Agent's history, not on the Board.
 
 ## Zones and workspace groups
 
@@ -279,6 +284,47 @@ never on herdr: no focus, nothing sent to the pane.
 - **Disabled** while its request is in flight, and every control while the Boxes are dimmed or
   hidden: a Box the Board cannot vouch for is not one to mark.
 
+### Seen on leaving the pane, the in-view tag and Mark unseen
+
+*Added 2026-10-27, ADR-0015 (operator decision, vfkb f14fa1cdfa89).* The Daemon marks a finish
+Seen when the operator, after it began, had its pane focused in herdr for at least 3 s and then
+focused another pane. The Board draws the result exactly as a click's: the stream's `agent` event
+arrives with `seen` true, and the Box turns grey. No Undo bar appears for an automatic mark (the
+Board did not ask for it); `Mark unseen` takes it back.
+
+- **The in-view tag.** A Finished Box (kind `finished`, so not Background and not Seen) whose
+  AgentView has `in_view: true` shows `● in view` (`.in-view`) on its first line, after the
+  pane-position badge and before the Seen pill: `--text-label`, weight 600, in
+  `--finished-accent`, no border, no fill, the dot a filled circle in the same colour. Its title is
+  "Focused in herdr now. Leaving the pane after 3 s marks it seen." It is a label, not a control:
+  it is not focusable and does nothing on click. The Box's accessible name gains ", in view" after
+  its class label. No other kind shows it, Needs you included. herdr names a focused pane even with
+  no terminal attached, so on a detached herdr the tag stays on the pane last focused; it never
+  leads to a mark by itself.
+- **The Mark unseen pill.** A Seen Box (kind `seen`) ends its first line with `Mark unseen`
+  (`.unack`): the Seen pill's shape (`--text-label`, radius 999px, 1px border) but quiet, in
+  `--ink-muted` with a 1px `--border` edge, turning `--ink` with an `--ink-faint` edge on hover,
+  so it does not pull the eye back to a Box that has receded. Its title is "Mark not seen: show
+  this result as unread again" and its accessible name "Mark <tab> not seen". A click posts the
+  Box's exact finish (its key and `waiting_since`) to
+  `/api/agents/{host}/{server}/{epoch}/{pane}/unseen`. On success the Undo bar shows "Marked <tab>
+  not seen" for 6 s, whose `Undo` marks it seen again; a refusal shows the refusal bar, "Could not
+  mark it not seen" unless 409 or 503 as for Seen. After it the Box is Finished with its Seen pill,
+  and the Daemon will not mark that finish Seen again when the operator leaves the pane: their
+  explicit choice wins. It is disabled while in flight and while the Boxes are dimmed or hidden.
+
+The states a Box passes through, for the operator's three ways of working:
+
+| What the operator does | Box |
+|---|---|
+| Opens the pane, reads, leaves without prompting | Finished, `● in view` while there; Seen on leaving (after 3 s there) |
+| Opens it, prompts, leaves | Working; Finished, not in view, when the turn ends while they are elsewhere |
+| Stays and watches several turns, then leaves | Finished, `● in view`, after each finish; Seen on leaving |
+| Flicks through panes, under 3 s each | unchanged |
+| Away while an Agent finishes in the focused pane | Finished, `● in view`, until they come back and leave it |
+| herdr detached | never marked automatically |
+| Clicks `Mark unseen` | Finished with its Seen pill, and stays so for that finish |
+
 ## Responsive behaviour
 
 The layout runs from a side window of about 320px, with one column and a 16px gutter, to a wide
@@ -303,7 +349,8 @@ text, not only colour.
 ## Deliberately absent (NFR10, SM-C1)
 
 The Board has no controls but the acknowledgement controls (amended 2026-10-27, ADR-0014: the
-Seen pill, the heading's bulk mark and the Undo bar, none of which tells herdr anything): no
+Seen pill, the heading's bulk mark and the Undo bar; and ADR-0015: the Mark unseen pill; none of
+which tells herdr anything; the in-view tag is a label, not a control): no
 focus, send, kill or open-in-terminal action, no filters, no search, no settings and no keyboard
 shortcut. It shows no pane output, excerpts or scrollback, and no second data type
 per Box: no history or charts. The only counts are each workspace group's heading counts

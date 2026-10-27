@@ -1209,6 +1209,20 @@ story asks them again:
 Build order: the record and its rule, then the engine, then the write routes, then the Board, then
 the documents and the dogfooding build.
 
+*Amended 2026-10-27 (operator decision while dogfooding, vfkb f14fa1cdfa89,
+[ADR-0015](../adr/0015-seen-when-you-leave-the-pane.md)):* visiting a pane in herdr and leaving it
+did not mark its Box Seen. A Finished Agent now also becomes Seen when, after its finish began, its
+pane was focused in herdr for at least 3 s and focus then moved to another pane; a Board click
+still marks at once. herdr's `done`/`idle` is not used. herddash only reads focus (the global
+`pane.focused` event and the snapshot's `focused_pane_id`, observed in
+`docs/research/herdr-focus-events-2026-10-27.md`) and never calls a focus method. Automatic marks
+are rows with source `herdr_focus` (migration 0007, since the operator's database is already at
+schema 6); a Finished Box whose pane is focused shows `● in view`; a Seen Box offers `Mark unseen`,
+after which the Daemon never re-marks that finish. Stories 6.6 to 6.9 build it, in this order: what
+herdr says about focus and where a mark came from (adapter, core, store); the engine's focus
+tracking and automatic mark; the Board's tag and pill; the documents and a new dogfooding build.
+The epic's dogfooding checkpoint moves to the end of Story 6.9.
+
 ### Story 6.1: Acknowledgements in the record
 
 As the operator,
@@ -1471,3 +1485,235 @@ acknowledgement itself.
 **Then** `herddash version` prints the branch's commit, `/api/state` answers on loopback with `seen` on every Agent, the database is at schema 5 with the backup beside it, and a `POST` to `/api/seen` without `Origin` is refused with 403
 
 **And** the operator is then asked, once, to dogfood the Seen control; on their OK the epic ships as one pull request and one release
+
+### Story 6.6: Read herdr's focus, and record where a mark came from
+
+As the operator,
+I want herddash to read which pane herdr has focused, and every acknowledgement to say whether I clicked it or the Daemon inferred it,
+So that the automatic mark can be built on facts herdr reports and audited afterwards.
+
+Builds ADR-0015's adapter, core and record parts; no engine behaviour, view or Board change. In
+`internal/herdr/gen/genwire`, `roots` gain the `pane.focused` variant of `Subscription` and the
+`pane_focused` variant of `EventData`; `go generate ./internal/herdr/gen` regenerates `wire_gen.go`
+from the committed 0.9.5 schema (the drift test passes), and `forbidden` is unchanged
+(`pane.focus`, `agent.focus` and the output reads still refused). In `internal/herdr`,
+`lifecycleSubscriptions` gains `pane.focused` (and only that focus kind: not `tab.focused` or
+`workspace.focused`); a `pane_focused` line maps to `core.LifecycleEvent{Kind:
+core.LifecycleFocused, PaneID, WorkspaceID}` (a new `core.LifecycleKind`, `Valid`), one with no
+`pane_id` is delivered flagged unexpected as for the other kinds, and a `workspace_focused` or
+`tab_focused` line is dropped without a delivery; `mapSnapshot` maps
+`focused_pane_id` to `core.Snapshot.FocusedPaneID` (`""` when absent or null). Until Story 6.7 the
+engine's `onLifecycle` ignores `LifecycleFocused` entirely: it does not call `noteEvent` or
+`requestSnapshot`, so a focus event never causes a snapshot read. In `internal/core`:
+`AckSource` with `AckSourceBoard = "board"` and `AckSourceHerdrFocus = "herdr_focus"`;
+`AcknowledgementInput.Source` and `Acknowledgement.Source()`; `NewAcknowledgement` refuses any
+other value, the empty one included, wrapping `ErrInvalidAcknowledgement`, and refuses an undo
+(`Seen` false) with source `herdr_focus`; the pure rule `core.SeenOnLeave(in LeaveInput) bool`,
+`LeaveInput{View AgentView; FinishHasRow bool; Dwell, MinDwell time.Duration}`, true exactly when
+the view's class is `finished`, it is not Background and not seen, `WaitingSince > 0`,
+`FinishHasRow` is false and `Dwell >= MinDwell` (it reads no clock: `arch_test.go`). Migration
+`0007_acknowledgement_source.sql`: `ALTER TABLE acknowledgements ADD COLUMN source TEXT NOT NULL
+DEFAULT 'board' CHECK (source IN ('board', 'herdr_focus'))`. In `internal/store`, the one `INSERT`
+binds `source` and `Acknowledgements` reads it back through the constructor. The engine's Board
+path (`acknowledge`) passes `AckSourceBoard`. The history route's `acknowledgements` items gain
+`"source"`, always sent. `docs/research/herdr-socket-api.md` gets no change; the focus record is
+the evidence.
+
+**Acceptance Criteria:**
+
+**Given** a database at schema 6 with acknowledgement rows, and one at schema 5 with rows (the operator's `-dev` databases)
+**When** this binary opens each
+**Then** each is migrated to schema 7 in one transaction, every earlier row reads back with source `board` and its other columns unchanged, and a binary knowing only schema 6 refuses the migrated database with `store.ErrSchemaNewer` (the migration list truncated in a test)
+
+**Given** `AppendAcknowledgements` with a batch mixing `board` and `herdr_focus` rows and a test-only trigger raising `ABORT` on the second insert
+**When** it runs
+**Then** no row of the batch remains (a rollback forced after a row was written); without the trigger every row reads back with its source, across a store close and reopen
+
+**Given** a raw `INSERT` with `source = 'other'`
+**When** it runs against schema 7
+**Then** SQLite's CHECK refuses it; and `core.NewAcknowledgement` refuses `""`, `"other"` and an undo with source `herdr_focus`
+
+**Given** `core.SeenOnLeave` table-tested with no I/O
+**When** each input is tried
+**Then** it is true only for a Finished, non-Background, unseen view with a known `waiting_since`, no row for the finish and a dwell at or above the minimum; false at the minimum minus 1 ms, for Needs you, Idle, Working, Unknown, Background, an already seen view, and a finish with a row (`Mark unseen` sticks)
+
+**Given** the herdr fake socket in `internal/herdr`'s tests sending `workspace_focused`, `tab_focused`, `pane_focused` (copied from the focus record's transcript), a repeated `pane_focused` for the same pane, and a `pane_focused` without `pane_id`
+**When** `SubscribeLifecycle` reads them
+**Then** the subscribe request names `pane.focused` and no other focus kind, the first two lines are dropped without a delivery (neither an event nor an unexpected line, so herdr sending them, subscribed or not, never causes a snapshot read), each `pane_focused` is delivered as `LifecycleFocused` with its pane and workspace, the last is flagged unexpected, and the stream goes on; `forbidden_test.go` still proves `internal/herdr` has no focus method
+
+**Given** a snapshot fixture with `focused_pane_id` set, null and absent
+**When** it is mapped
+**Then** `core.Snapshot.FocusedPaneID` is the pane id, `""` and `""`
+
+**Given** the engine receiving `LifecycleFocused` events from the fake herdr in `internal/engine/fake_test.go` (which gains a way to emit them) during and between snapshot reads
+**When** the test counts snapshot reads
+**Then** the focus events cause none, and change no view (Story 6.7 gives them meaning)
+
+**Given** an Agent with a `board` and a `herdr_focus` row (the latter written directly through the store in the test)
+**When** its history is read
+**Then** each item carries its `source`
+
+**And** `go generate ./internal/herdr/gen` leaves no diff, and `go vet ./...`, `go test -race ./...`, `gofmt -l .`, `arch_test.go` and `callsite_test.go` pass, with no new import edge
+
+### Story 6.7: The engine marks a finish Seen when the operator leaves its pane
+
+As the operator,
+I want a result I read in herdr to be marked Seen when I move to another pane, and the Board to know which pane is focused,
+So that I do not have to click Seen for something I already read where I work.
+
+Builds ADR-0015's engine and view parts. The engine holds, per connection and in memory only, the
+focused pane id and its dwell start (`e.clock()`, a `time.Time`). `onLifecycle` handles
+`LifecycleFocused` without `noteEvent` or `requestSnapshot`: a `pane_focused` for the pane already
+focused changes nothing; one for another pane is a **leave** of the previous pane, then focuses the
+new one with its dwell starting now. A leave evaluates `core.SeenOnLeave` for the left pane's
+Agent, with `Dwell` = now minus its dwell start and `MinDwell` = `seenDwell` (new tunable
+`defaultSeenDwell = 3 * time.Second` in `tunables.go`, a package variable tests lower, listed in
+`docs/config.example.toml`, which the planning commit already did), after the Board mark's own
+conditions (present, published Agent under the epoch in force; fold known with `Since > 0`; no
+Profile-held rows; fold in the record). `FinishHasRow` comes from a per-pane flag, set whenever a
+row for the current finish is written (Board or automatic) or read at a seed (`seedSeen` reads the
+rows already; the flag is set when any row names the fold's `Since` and the rows are not refused
+by `core.SeenAt`'s order check) and cleared wherever `clearStaleSeen` or `missedTurn` ends the
+finish. A mark writes one row through `AppendAcknowledgements` with source `herdr_focus` and
+herdr's order when known, sets the pane seen and the flag, logs `acknowledgement` at info with
+`source=herdr_focus`, and publishes; a write failure is logged and changes nothing. The **dwell
+restarts at now** whenever the focused pane's fold changes class or `Since`, its pane gets a new
+Agent, or `missedTurn` ends its acknowledgement; `done` to `idle` within a finish does not restart
+it. At a connection's first snapshot and at every resync, the focused pane is
+`Snapshot.FocusedPaneID`, its dwell starting when the snapshot is applied, and any earlier focus is
+dropped without a leave. A later snapshot whose `FocusedPaneID` differs moves focus to it, dwell
+from now, **without** a leave, unless a `pane_focused` arrived after that read started (the event
+is newer and stands). Focus is never recorded. `core.AgentViewInput.InView` and `AgentView.InView`
+(`json:"in_view"`, always sent): true for the Agent whose pane is focused. A focus move publishes
+once, with `ChangeAgent` for each Agent whose view changed (the pane left, the pane landed on, and
+a mark). It does not change the sort key. The engine contract test
+(`internal/httpapi/engine_contract_test.go`) and its replay through `order.mjs` include `in_view`.
+
+**Acceptance Criteria:**
+
+**Given** a Finished Agent in pane A on the fake herdr, with the test's clock
+**When** `pane_focused` A arrives, the clock moves 3 s, and `pane_focused` B arrives
+**Then** A's view is `in_view` between the two events and not after, A is seen with `class_rank` 2, one `herdr_focus` row names A's `waiting_since`, and the publication for the leave carries `agent` changes for A and B only
+
+**Given** the same, with the clock moving 2.999 s before the leave; and a flick A, B, C, D with 1 s on each
+**When** the events arrive
+**Then** nothing is marked and no row is written (flicking through panes does not mark)
+
+**Given** pane A focused for 10 s with its Agent Working, then the Agent finishes (`done`) while A stays focused
+**When** focus moves to B 1 s after the finish, and in a second run 3 s after it
+**Then** the first does not mark (the dwell restarted at the finish) and the second does
+
+**Given** pane A focused, its Agent finishing into it while the operator is away, and no further focus event for an hour (reconcile snapshots naming A arriving meanwhile)
+**When** the hour passes
+**Then** A stays Finished and `in_view` with no row; **and when** `pane_focused` B then arrives, A is marked Seen (the dwell counted from the finish)
+
+**Given** a herdr with no focus events at all (detached), its snapshots naming a focused pane whose Agent is Finished
+**When** many reconciles pass
+**Then** nothing is ever marked; the pane is `in_view`
+
+**Given** a pane left after 3 s whose Agent is Needs you, Idle, Working, Unknown or Background, or is already seen
+**When** the leave is evaluated
+**Then** nothing is written; and a `done` to `idle` of an unfocused Finished Agent marks nothing (herdr's done/idle is not used)
+
+**Given** an automatic mark, then a Board `unseen` for that finish (`Mark unseen`)
+**When** the operator returns to the pane for 10 s and leaves again, and then the Daemon stops and starts over the same database and the snapshot shows the Status unchanged and the focus on that pane, and the operator leaves after 10 s more
+**Then** the Agent stays Finished each time and no further row is written (the explicit choice sticks, derived from the record across a restart)
+
+**Given** an automatic mark and a Daemon that stops and starts again over the same database
+**When** the first snapshot shows the Agent's Status unchanged
+**Then** its view is seen with the same `waiting_since`; **and** an Agent marked by the Board before a missed turn (herdr's order risen at the restart) is not seen and, focused 3 s and left, is marked again with a new `herdr_focus` row (the earlier rows do not count for the new turn)
+
+**Given** a focused pane A dwelt on for 10 s, and a reconnect that keeps the epoch during which the operator moved to B (the event missed), the snapshot after it naming B
+**When** the reconnect completes
+**Then** A is not marked (a missed focus move never marks), B is `in_view` with its dwell counted from the snapshot's application, and leaving B after 3 s marks B if it is Finished
+
+**Given** a reconcile snapshot naming pane C while the engine holds B, with no event (another client's view, finding 4), and in a second case a `pane_focused` C arriving while a snapshot read that started before it names B is in flight
+**When** each snapshot is applied
+**Then** in the first, focus moves to C and B is not marked; in the second, focus stays C
+
+**Given** a status `working` for pane A arriving just after `pane_focused` B (the prompt raced the leave) with A dwelt on 5 s
+**When** both are handled
+**Then** A ends Working, not seen, whatever the order the two events arrive in
+
+**Given** a leave during a Profile hold on the left pane, and a leave whose `AppendAcknowledgements` fails
+**When** each is evaluated
+**Then** nothing is marked, the failure is logged, the view and next publication are as if no leave happened, and a later leave of the same finish after 3 s more marks it
+
+**Given** 8 goroutines sending Board marks, undos and bulk requests while the fake herdr sends status events and `pane_focused` events for the same panes and the clock advances
+**When** the test runs under `go test -race -count=50` and `-cpu=1,4,8`
+**Then** it never races, hangs or deadlocks; every reply is the views or a typed error; after it settles each Agent's `seen` equals `core.SeenAt` of its record, no finish has more than one `herdr_focus` row, and no `herdr_focus` row follows a `board` row for the same finish
+
+**Given** the engine contract test driving the SSE handler
+**When** focus moves A to B and A is marked by the leave
+**Then** the stream carries `agent` events for A and B with `in_view` and `seen`, and the replay through `order.mjs` equals the published view
+
+**And** `internal/engine/fake_test.go` gains `pane_focused` events and a snapshot `focused_pane_id`; `go vet ./...`, `go test -race ./...`, `gofmt -l .`, `arch_test.go` and `callsite_test.go` pass, with no new import edge
+
+### Story 6.8: The Board shows "in view" and offers Mark unseen
+
+As the operator,
+I want to see which Finished Box is the pane I have open in herdr, and take back a Seen I disagree with,
+So that the automatic mark is visible before it happens and reversible after.
+
+Builds ADR-0015's Board part, exactly as `docs/design/board-design.md`'s "Seen on leaving the pane,
+the in-view tag and Mark unseen" section (written in the planning commit) gives it. In `order.mjs`
+(pure, `node --test`): `inViewTag(view)` true exactly when `boxKind(view) === "finished"` and
+`view.in_view === true`; the Box's accessible name gains ", in view" after the class label for such
+a Box; `unackLabel(view)` gives "Mark <tab> not seen"; `ackToast(views, false)` gives "Marked <tab>
+not seen" (or "Marked N Agents not seen"); `ackError(status, code, seen)` gives "Could not mark it
+not seen" for an unseen refusal outside 409 and 503. In `board.mjs`: a `span.in-view` (`● in view`,
+the design's title, not focusable) on the first line of a Finished Box with `in_view`, after the
+pane badge and before `button.ack`; a `button.unack` (`Mark unseen`, the design's title,
+`aria-label` "Mark <tab> not seen") on every Box of kind `seen` and no other kind; a click posts
+`{"waiting_since"}` to the per-Agent `unseen` route with the same headers as Seen, the button
+disabled in flight and every control while the Boxes are dimmed or hidden; on success the Undo bar
+shows "Marked <tab> not seen" for 6 s with an `Undo` that posts the per-Agent `seen` route; a
+refusal shows the refusal bar. Nothing is optimistic: the Box changes on the stream's `agent`
+event. CSS: `.in-view` and `.unack` as the design gives them, from existing tokens, so dark mode
+follows. The browser check's fake herdr (`internal/httpapi/web/check/board-browser.mjs`) gains the
+`pane.focused` subscription, `pane_focused` lines it can push, a moving `focused_pane_id` in its
+snapshot, and a lowered dwell through a test-only flag or environment variable, the smallest seam
+`cmd/herddash` can take (`HERDDASH_TEST_SEEN_DWELL_MS` honoured only when the check sets it, or an
+equivalent), so the check does not wait 3 s per step.
+
+**Acceptance Criteria:**
+
+**Given** `order.mjs`
+**When** `node --test` runs
+**Then** `inViewTag`, the accessible name, `unackLabel`, `ackToast` for unseen and `ackError` for unseen are table-tested, including: a Seen, a Background, a Needs you and an Idle view with `in_view` true show no tag; a Finished view with `in_view` false shows none
+
+**Given** the browser check against the real binary, its fake herdr and a temporary data directory, with Finished Agents in panes A and B and Needs you, Idle, Working and Background Agents beside them, focus on A in the snapshot
+**When** it runs
+**Then** it asserts: A's Box has `span.in-view` reading `● in view` and no other Box has one (Needs you included even when its pane is focused); after the fake pushes `pane_focused` B past the dwell, A's Box becomes `box--seen` with a `button.unack` and no `button.ack`, and B's Box carries the tag; clicking A's `Mark unseen` makes A Finished with its `button.ack`, and the bar reads `Marked <tab> not seen`, whose Undo makes A seen again; after a second `Mark unseen`, pushing `pane_focused` A, waiting past the dwell and pushing `pane_focused` B leaves A Finished; a flick A to B to C faster than the dwell marks nothing; and after `serve` stops and starts on the same data directory, A's state is as it was
+
+**And** CI's `board-browser` job runs these and fails when the `.in-view` or `.unack` rule is removed; `go test ./...`, `node --test internal/httpapi/web/` and `gofmt -l .` pass
+**And** the design gate is the operator's dogfooding with live data (Story 6.9), as for Story 6.4
+
+### Story 6.9: Documents, and the build the operator dogfoods again
+
+As the operator,
+I want the documents to describe Seen on leaving the pane, and a `-dev` build with it on my machine,
+So that I can dogfood the whole of Epic 6 and decide whether it ships.
+
+Updates `docs/how-herddash-works.md` (Seen on leave, in view, Mark unseen, that herddash reads
+herdr's focus and never sets it, and the caveats: several attached clients, another API client's
+focus call, `● in view` on a detached herdr), `CLAUDE.md` (the repository state: migration 0007 and
+its one-way door, the `pane.focused` subscription, `in_view`, the source column, the open
+checkpoint), `docs/install.md` (back up before installing a build with schema 7, which a build
+knowing schema 6 refuses), and `docs/implementation/deferred-work.md` for anything Stories 6.6 to
+6.8's reviews deferred without a story. Then builds a `-dev` binary of the branch, backs up the
+database while the launchd agent is stopped, installs it at `~/.local/bin/herddash` as Story 6.5
+did, starts the agent and checks it. It never touches the live herdr server and makes no
+acknowledgement itself.
+
+**Acceptance Criteria:**
+
+**Given** Stories 6.6 to 6.8 on this branch
+**When** the documents are read
+**Then** how-herddash-works, CLAUDE.md and install.md agree with ADR-0015 and the code (the focus subscription, the rule, `in_view`, migration 0007, `source`), and every deferral from those stories' reviews is in a story's criteria or in `deferred-work.md`
+
+**Given** the installed `-dev` binary under launchd
+**When** it is checked
+**Then** `herddash version` prints the branch's commit, `/api/state` answers with `seen` and `in_view` on every Agent and exactly one Agent `in_view` when herdr names a focused Agent pane, the database is at schema 7 with the backup beside it, the log shows the lifecycle subscription started with no snapshot storm from focus events, and a `POST` to `/api/seen` without `Origin` is still refused with 403
+
+**And** the operator is then asked, once, to dogfood Epic 6 with Seen on leave; on their OK the epic ships as one pull request and one release
