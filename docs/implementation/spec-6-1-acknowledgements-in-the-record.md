@@ -135,6 +135,16 @@ tests above.
   ordered by `id` alone, the single writer's append order; the test asserts a later row with an
   earlier clock stays last, and ADR-0014, migration 0005's comment and Story 6.1's criteria say so.
 
+### 2026-10-27 — Review triage, round 1
+- Fixed: the clock-ordering defect above (one finding, reported by two reviewers, merged). The
+  query fix landed in 33a06ec; this round adds
+  `TestAcknowledgementUndoSurvivesClockStepAcrossRestart`, which records a Seen and then its Undo
+  at an earlier wall clock in separate batches, closes and reopens the store, and checks that
+  `core.Seen` over the rows read back is false. It and `TestAppendAcknowledgements` both fail
+  with the old `ORDER BY observed_at, id` and pass with `ORDER BY id`.
+- Deferred: none.
+- Rejected: none.
+
 ## Design Notes
 
 The acknowledgements sweep runs after the transitions and markers deletes, inside the same

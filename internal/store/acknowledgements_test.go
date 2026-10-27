@@ -277,6 +277,41 @@ func TestAppendAcknowledgements(t *testing.T) {
 	}
 }
 
+// TestAcknowledgementUndoSurvivesClockStepAcrossRestart records a Seen, then
+// its Undo with a wall clock stepped back, in separate batches as the engine
+// would, closes the store and reopens it: core.Seen over the rows read back
+// must give the operator's last action, the Undo.
+func TestAcknowledgementUndoSurvivesClockStepAcrossRestart(t *testing.T) {
+	path := dbPath(t)
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := s.AppendAcknowledgements(ctx, []core.Acknowledgement{mustAck(t, keyP1, 100, true, 5_000)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AppendAcknowledgements(ctx, []core.Acknowledgement{mustAck(t, keyP1, 100, false, 4_000)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	acks, err := s.Acknowledgements(ctx, keyP1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := core.FoldResult{Known: true, Status: core.StatusDone, Class: core.ClassFinished, Since: 100}
+	if core.Seen(f, acks) {
+		t.Errorf("after a restart the undo recorded last, at an earlier clock, reads as seen")
+	}
+}
+
 // TestAppendAcknowledgementsRollsBack forces the second of three inserts to
 // fail, after the first was written: the batch errors and no row of it
 // remains.
