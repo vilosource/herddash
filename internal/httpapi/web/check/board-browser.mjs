@@ -933,11 +933,24 @@ async function focusChecks(browser) {
       b.boxes,
     );
 
+    // 2: beta may or may not have been marked when focus left it, depending
+    // on how fast the steps ran; a Board mark makes it Seen either way, so a
+    // Mark unseen pill is on the Board when it dims.
+    if (box(b, "w1:p2").kind === "finished") {
+      check("click on 2: beta's Seen pill is accepted", await click("w1:p2", "button.ack"), null);
+      b = await boardUntil("2: beta Seen", (x) => box(x, "w1:p2")?.kind === "seen");
+    }
+
     // serve stops and starts on the same data directory: every Box as it was.
     const kinds = (x) => JSON.stringify(x.boxes.map((y) => [y.pane, y.kind, y.acks, y.unacks]).sort());
     const beforeRestart = kinds(b);
     await d.stop();
-    await boardUntil("the Boxes dimmed", (x) => x.stale, PAST_GRACE_MS + 5000);
+    const dimmed = await boardUntil("the Boxes dimmed", (x) => x.stale, PAST_GRACE_MS + 5000);
+    check(
+      "dimmed: every Mark unseen pill is disabled (2: beta's included)",
+      box(dimmed, "w1:p2").unacks === 1 && dimmed.boxes.filter((x) => x.unacks).every((x) => x.unack.disabled === true),
+      dimmed.boxes,
+    );
     d = serve("focus", sock, addr, [], env);
     b = await ready("the focus Board after a restart");
     check(
