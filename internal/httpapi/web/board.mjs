@@ -18,7 +18,8 @@
 import {
   ACK_TOAST_MS,
   EVENT_NAMES,
-  IN_VIEW_TEXT,
+  IN_VIEW_DOT,
+  IN_VIEW_WORDS,
   IN_VIEW_TITLE,
   ackLabel,
   ackBody,
@@ -92,7 +93,12 @@ function fillBox(box, view, now) {
   // A Finished Box whose pane herdr has focused shows the in-view tag, a
   // label and not a control (ADR-0015).
   if (inViewTag(view)) {
-    const tag = el("span", "in-view", IN_VIEW_TEXT);
+    // The dot is decorative: hidden from assistive technology, like the
+    // Seen pill's icon, so a screen reader reads only "in view".
+    const tag = el("span", "in-view");
+    const dot = el("span", "in-view-dot", IN_VIEW_DOT);
+    dot.setAttribute("aria-hidden", "true");
+    tag.append(dot, " " + IN_VIEW_WORDS);
     tag.title = IN_VIEW_TITLE;
     wh.appendChild(tag);
   }

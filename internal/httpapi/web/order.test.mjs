@@ -57,7 +57,9 @@ import {
   REDO_STALE,
   REDO_OFF,
   REDO_FAILED,
+  IN_VIEW_DOT,
   IN_VIEW_TEXT,
+  IN_VIEW_WORDS,
   IN_VIEW_TITLE,
   inViewTag,
   ackLabel,
@@ -1634,6 +1636,8 @@ test("inViewTag: only a Finished Box whose pane herdr has focused", () => {
   ];
   for (const [name, v, want] of table) assert.equal(inViewTag(v), want, name);
   assert.equal(IN_VIEW_TEXT, "● in view");
+  assert.equal(IN_VIEW_DOT + " " + IN_VIEW_WORDS, IN_VIEW_TEXT);
+  assert.equal(IN_VIEW_WORDS, "in view");
   assert.equal(IN_VIEW_TITLE, "Focused in herdr now. Leaving the pane after 3 s marks it seen.");
 });
 

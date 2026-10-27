@@ -698,7 +698,8 @@ const FOCUS_BOARD = `JSON.stringify({
       cls: b.querySelector(".class")?.innerText,
       where: [...(b.querySelector(".where")?.children || [])].map((c) => c.tagName.toLowerCase() + "." + c.className),
       tags: b.querySelectorAll(".in-view").length,
-      tag: tag ? { text: tag.textContent, title: tag.title, tabIndex: tag.tabIndex, tagName: tag.tagName,
+      tag: tag ? { text: tag.textContent, title: tag.title,
+        dot: [...tag.querySelectorAll("[aria-hidden=true]")].map((d) => d.textContent), tabIndex: tag.tabIndex, tagName: tag.tagName,
         color: ts.color, weight: ts.fontWeight, border: ts.borderTopStyle } : null,
       acks: b.querySelectorAll("button.ack").length,
       unacks: b.querySelectorAll("button.unack").length,
@@ -784,9 +785,10 @@ async function focusChecks(browser) {
       b.boxes,
     );
     check(
-      "in view: ● in view with its title, a span that is not focusable, after the tab and before the Seen pill",
+      "in view: ● in view with its title, the dot aria-hidden, a span that is not focusable, after the tab and before the Seen pill",
       a0.tag.text === "● in view" && a0.tag.title === "Focused in herdr now. Leaving the pane after 3 s marks it seen." &&
         a0.tag.tagName === "SPAN" && a0.tag.tabIndex === -1 &&
+        JSON.stringify(a0.tag.dot) === JSON.stringify(["●"]) &&
         JSON.stringify(a0.where) === JSON.stringify(["span.tab", "span.in-view", "button.ack"]),
       a0,
     );

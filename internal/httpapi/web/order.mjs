@@ -277,8 +277,11 @@ export function ackPath(key, seen) {
 }
 
 // IN_VIEW_TEXT and IN_VIEW_TITLE are the in-view tag's text and title
-// (ADR-0015).
-export const IN_VIEW_TEXT = "● in view";
+// (ADR-0015). The tag draws IN_VIEW_DOT hidden from assistive technology,
+// as the Seen pill's icon is, and IN_VIEW_WORDS after it.
+export const IN_VIEW_DOT = "●";
+export const IN_VIEW_WORDS = "in view";
+export const IN_VIEW_TEXT = IN_VIEW_DOT + " " + IN_VIEW_WORDS;
 export const IN_VIEW_TITLE = "Focused in herdr now. Leaving the pane after 3 s marks it seen.";
 
 // inViewTag reports whether a Box shows the in-view tag (ADR-0015): a Box
