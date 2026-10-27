@@ -540,8 +540,8 @@ type pane struct {
 	// acknowledgement row for, of any source, mark or undo (ADR-0015), 0
 	// when none: in force, as the leave rule's FinishHasRow, while the fold
 	// is Finished from that same instant (finishHasRow). Set when a row is
-	// written for the current finish and derived from the record at a seed;
-	// cleared once the fold leaves that finish or a turn not observed ends it.
+	// written for the current finish and derived from the record at a seed,
+	// where a failed read counts as one (seedSeen); cleared once the fold leaves that finish or a turn not observed ends it.
 	rowSince int64
 }
 

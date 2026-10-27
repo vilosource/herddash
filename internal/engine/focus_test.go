@@ -391,6 +391,67 @@ func TestFocusMarkUnseenSticks(t *testing.T) {
 	}
 }
 
+// A restart whose read of the acknowledgements fails cannot know whether the
+// finish has the operator's own row, so no leave marks it: a Mark unseen
+// still wins. The Agent's next finish is judged as usual.
+func TestFocusAckReadFails(t *testing.T) {
+	setReconcileInterval(t, time.Hour)
+	clock := newManualClock()
+	st := newFakeStore(nil)
+	run := func(snap core.Snapshot) *harness {
+		t.Helper()
+		fake := newFakeClient(t, snap)
+		st.mu.Lock()
+		st.client = fake
+		st.mu.Unlock()
+		h := startRecording(t, fake, st, func(o *Options, _ *recorder) { o.Clock = clock.now })
+		h.awaitAgents(2)
+		return h
+	}
+	h := run(snapOf(agentPane("w1:p1", core.StatusDone), agentPane("w1:p2", core.StatusIdle)))
+	finish := h.viewOf("w1:p1")
+	if _, err := h.ack(true, itemOf(finish)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.ack(false, itemOf(finish)); err != nil {
+		t.Fatal(err)
+	}
+	h.stop()
+
+	st.mu.Lock()
+	st.ackReadErr = errBoom
+	st.mu.Unlock()
+	h = run(snapOf(agentPane("w1:p1", core.StatusDone), agentPane("w1:p2", core.StatusIdle)))
+	if v := h.viewOf("w1:p1"); v.Seen || v.WaitingSince != finish.WaitingSince {
+		t.Fatalf("restarted %+v, want the same finish, not seen", v)
+	}
+	h.focusOn("w1:p1")
+	clock.advance(10 * time.Second)
+	h.focusOn("w1:p2")
+	if v := h.viewOf("w1:p1"); v.Seen {
+		t.Errorf("left after a failed read %+v, want not seen: the Mark unseen wins", v)
+	}
+	if acks := focusAcks(st); len(acks) != 0 {
+		t.Fatalf("herdr_focus rows %+v after a failed read, want none", acks)
+	}
+
+	st.mu.Lock()
+	st.ackReadErr = nil
+	st.mu.Unlock()
+	h.say("w1:p1", core.StatusWorking)
+	clock.advance(time.Second)
+	next := h.say("w1:p1", core.StatusDone)
+	h.focusOn("w1:p1")
+	clock.advance(seenDwell)
+	h.focusOn("w1:p2")
+	if v := h.viewOf("w1:p1"); !v.Seen {
+		t.Errorf("the next finish left %+v, want seen", v)
+	}
+	if acks := focusAcks(st); len(acks) != 1 || acks[0].FinishedSince() != next.WaitingSince {
+		t.Errorf("herdr_focus rows %+v, want one for the next finish", acks)
+	}
+}
+
 // An automatic mark survives a restart; a turn herddash did not observe, in
 // the run or across a restart, ends a mark and lets a leave mark the new
 // finish afresh, the earlier rows not counting for it.

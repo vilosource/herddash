@@ -242,7 +242,11 @@ func (e *Engine) acknowledge(req AckRequest) ([]core.AgentView, error) {
 //
 // The same read decides whether the finish already has a row (ADR-0015),
 // by core.FinishRowAt: a row of an earlier turn with the same start does not
-// count, so after a turn not observed the automatic mark may write again.
+// count, so after a turn not observed the automatic mark may write again. A
+// failed read counts as a row: the record may hold the operator's own choice
+// for this finish, a Mark unseen above all, which a leave must not overrule,
+// so no leave marks this finish; the next one, or a later seed that reads,
+// is judged as usual.
 func (e *Engine) seedSeen(p *pane, last core.Transition) {
 	p.seenSince, p.rowSince = 0, 0
 	if e.store == nil || !p.seedHistory || !p.fold.Known || p.fold.Class != core.ClassFinished || p.fold.Since <= 0 {
@@ -251,6 +255,7 @@ func (e *Engine) seedSeen(p *pane, last core.Transition) {
 	acks, err := e.store.Acknowledgements(context.WithoutCancel(e.runCtx), e.key(p.id))
 	if err != nil {
 		e.log.Error("acknowledgements not read; the agent is shown not seen", "pane", p.id, "error", err.Error())
+		p.rowSince = p.fold.Since
 		return
 	}
 	if core.FinishRowAt(p.fold, acks, last, p.herdrSeq) {
