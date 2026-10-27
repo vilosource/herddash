@@ -80,7 +80,8 @@ CREATE INDEX acknowledgements_observed_at ON acknowledgements (observed_at);
 
 - Rows are inserted and never updated. An undo is a row with `seen = 0` for the same finish.
 - **Whether a finish is acknowledged is derived from the record**: the latest row, in recording
-  order (`observed_at`, then `id`), for the Agent's key and its current `Since` decides; no row
+  order (`id`, not `observed_at`, so a wall clock stepped back between a Seen and its Undo cannot
+  reorder them), for the Agent's key and its current `Since` decides; no row
   means not acknowledged. The rule is one pure function in `internal/core` (AD-1). So the state
   survives a Daemon restart with nothing else saved: the restart rebuilds the fold from the record
   (AD-12), gets the same `Since`, and reads the same rows.

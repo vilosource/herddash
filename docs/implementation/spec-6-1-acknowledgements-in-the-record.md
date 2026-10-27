@@ -70,7 +70,7 @@ the running service.
 - `internal/core/view.go` -- `AgentViewInput.Seen`, `AgentView.Seen` (`json:"seen"`, never
   omitted), `newSortKey` gains `seen` (rank 2 after Background's 3 is decided).
 - `internal/store/acknowledgements.go` -- new: `AppendAcknowledgements` (one prepared `INSERT`,
-  one transaction, no-op for none), `Acknowledgements` (ordered by `observed_at`, `id`; each row
+  one transaction, no-op for none), `Acknowledgements` (ordered by `id`, the recording order, not `observed_at`, which a stepped clock can reorder; each row
   rebuilt through the constructor).
 - `internal/store/sweep.go` -- `sweepAcknowledgements`, run third in `Sweep`'s transaction;
   `SweepResult.Acknowledgements`.
@@ -97,7 +97,7 @@ the running service.
   resync_markers and server_state byte-for-byte unchanged; schema-4 `prepare` with `ms[:4]` refuses
   with `ErrSchemaNewer`), `TestUpgradeFromSchema4RollsBack` (0005 plus a failing 0006 leaves schema
   4 and no acknowledgements objects), `TestAcknowledgementChecks`, `TestAppendAcknowledgements`
-  (column mapping, recording order by `observed_at` then `id`, epoch isolation),
+  (column mapping, recording order by `id` even when a later row's `observed_at` is earlier, epoch isolation),
   `TestAppendAcknowledgementsRollsBack` (a trigger aborts the second insert only when the first
   row is already in the table, so the failure proves a mid-transaction rollback),
   `TestAcknowledgementsSurviveReopen` (the story's seven cases plus done to idle, before and after
@@ -127,6 +127,13 @@ tests above.
 - `[false]` `[reject]` `AgentView.Seen` is set on a seen Background view — the story sets it
   whenever the input says so and the class is finished; Background only takes the rank, so the
   view still says what the record says.
+
+### 2026-10-27 — Review pass
+- `[low]` `[patch]` (two reviewers, same finding) `store.Acknowledgements` ordered by
+  `observed_at`, then `id`, so a wall clock stepped back between a Seen and its Undo put the undo
+  first and, after a restart, `core.Seen` read the opposite of the operator's last action. Now
+  ordered by `id` alone, the single writer's append order; the test asserts a later row with an
+  earlier clock stays last, and ADR-0014, migration 0005's comment and Story 6.1's criteria say so.
 
 ## Design Notes
 

@@ -1226,7 +1226,7 @@ bool`, true exactly when `f` is known, its class is `finished`, `f.Since > 0`, a
 says so and the class is `finished`; and the sort key's `class_rank` 2 (Idle's) for a seen,
 non-Background Agent. In `store`: `AppendAcknowledgements(ctx, []core.Acknowledgement) error`, one
 prepared `INSERT` in one transaction, all or nothing, a no-op for none; `Acknowledgements(ctx, key)
-([]core.Acknowledgement, error)`, one Agent's rows ordered by `observed_at`, then `id`, each rebuilt
+([]core.Acknowledgement, error)`, one Agent's rows ordered by `id` (recording order, not `observed_at`), each rebuilt
 through the constructor; and `Sweep` deleting acknowledgements in its existing transaction (a row
 older than the cutoff goes unless its key is present and its `finished_since` is at or after the
 present `Since`, or that `Since` is 0), counted in `SweepResult.Acknowledgements`. The `DELETE`

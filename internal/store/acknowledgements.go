@@ -51,7 +51,10 @@ func (s *Store) AppendAcknowledgements(ctx context.Context, acks []core.Acknowle
 }
 
 // Acknowledgements returns one Agent's acknowledgements in recording order:
-// by observed_at, then by id, the order they were appended. Each row is
+// by id, the order the single writer appended them. Not by observed_at: a
+// wall clock stepped back between a Seen and its Undo would otherwise put the
+// undo first and core.Seen would read the opposite of the operator's last
+// action. Each row is
 // rebuilt through core.NewAcknowledgement, so a row that no longer validates
 // is an error. core.Seen reads them in this order.
 func (s *Store) Acknowledgements(ctx context.Context, key core.AgentKey) ([]core.Acknowledgement, error) {
@@ -61,7 +64,7 @@ func (s *Store) Acknowledgements(ctx context.Context, key core.AgentKey) ([]core
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT id, finished_since, seen, observed_at
 		FROM acknowledgements WHERE host = ? AND server = ? AND epoch = ? AND pane_id = ?
-		ORDER BY observed_at, id`, key.Host, key.Server, epoch, key.PaneID)
+		ORDER BY id`, key.Host, key.Server, epoch, key.PaneID)
 	if err != nil {
 		return nil, fmt.Errorf("store: acknowledgements of %s: %w", key.PaneID, err)
 	}

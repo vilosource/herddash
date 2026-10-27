@@ -4,7 +4,7 @@
 -- the table is append-only: rows are inserted and never updated, an undo is a
 -- further row with seen = 0, and the Retention sweep is the only removal.
 -- Whether a finish is seen is derived: the latest row, in recording order
--- (observed_at, then id), for the key and the fold's current Since decides
+-- (id, never observed_at, which a stepped clock can reorder), for the key and the fold's current Since decides
 -- (core.Seen). As with any migration, a binary that knows only schema 4
 -- (0.7.x and earlier) refuses a database migrated to 5.
 

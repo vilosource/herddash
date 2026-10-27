@@ -242,7 +242,7 @@ func TestAppendAcknowledgements(t *testing.T) {
 	if err := s.AppendAcknowledgements(ctx, []core.Acknowledgement{
 		mustAck(t, keyP1, 100, true, 130),
 		mustAck(t, other, 100, true, 110),
-		mustAck(t, keyP1, 100, false, 120), // recorded later, observed earlier
+		mustAck(t, keyP1, 100, false, 120), // recorded later, observed earlier: a clock stepped back
 		mustAck(t, keyP1, 50, true, 130),
 	}); err != nil {
 		t.Fatal(err)
@@ -267,8 +267,9 @@ func TestAppendAcknowledgements(t *testing.T) {
 		}
 		desc = append(desc, fmt.Sprintf("%d:%v@%d", a.FinishedSince(), a.Seen(), a.ObservedAt()))
 	}
-	// observed_at, then id: the undo observed at 120 comes first.
-	if want := "100:false@120 100:true@130 50:true@130"; strings.Join(desc, " ") != want {
+	// Recording order is id alone: the undo, recorded after the Seen, stays
+	// after it although its clock reads earlier, so it is the last word.
+	if want := "100:true@130 100:false@120 50:true@130"; strings.Join(desc, " ") != want {
 		t.Errorf("acknowledgements %v, want %s", desc, want)
 	}
 	if none, err := s.Acknowledgements(ctx, core.AgentKey{Host: "mac", Server: "default", Epoch: 2, PaneID: "w1:p1"}); err != nil || len(none) != 0 {
