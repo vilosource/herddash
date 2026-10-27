@@ -164,6 +164,17 @@ tests above.
   engine's last state: ADR-0014 has the engine decide against its own state, and the reconnect's
   first snapshot ends the acknowledgement if the Status moved.
 
+### 2026-10-27 — Round 1 fixes
+- **Fixed:** the undo accepted during a Profile hold, the one defect confirmed by the code review
+  above and reported by two reviewers. It is fixed in 680f720: `onAcknowledge` refuses an undo
+  that would write while `p.holdRows` is set with `*StaleError` (`ErrStaleView`), so nothing is
+  written or published. The reply could not be built from `viewOf(p)` instead, because during a
+  hold `p.status` already carries unreleased rows and the reply would expose them.
+  `TestAckUndoRefusedDuringProfileHold` fails with the check disabled (`undo during a hold:
+  <nil>, want ErrStaleView`) and passes with it.
+- **Deferred:** none.
+- **Rejected:** none in this round.
+
 ## Design Notes
 
 The seen state is one integer per pane, the acknowledged class start, rather than a boolean, so it
