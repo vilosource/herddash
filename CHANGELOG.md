@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.1](https://github.com/vilosource/herddash/compare/v0.7.0...v0.7.1) (2026-10-26)
+
+
+### Documentation
+
+* **install:** a new binary starts about 30 s late under launchd on macOS ([#59](https://github.com/vilosource/herddash/issues/59)) ([0412d97](https://github.com/vilosource/herddash/commit/0412d97532f0ac650f3e6a3eaaa56daa0f69b8f3))
+
 ## [0.7.0](https://github.com/vilosource/herddash/compare/v0.6.0...v0.7.0) (2026-10-26)
 
 
