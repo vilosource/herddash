@@ -333,6 +333,7 @@ const ACK_BOARD = `JSON.stringify({
     const bulk = g.querySelector(".group-head button.ack-all");
     return {
       label: g.querySelector(".group-label").textContent,
+      labelWhole: (() => { const l = g.querySelector(".group-label"); return l.clientWidth > 0 && l.scrollWidth <= l.clientWidth; })(),
       counts: g.querySelector(".group-head .count").textContent,
       bulk: bulk ? { shown: !bulk.hidden && bulk.getBoundingClientRect().width > 0, text: bulk.textContent,
         aria: bulk.getAttribute("aria-label"), afterCounts: bulk.previousElementSibling?.classList.contains("count"), disabled: bulk.disabled } : null,
@@ -432,6 +433,19 @@ async function ackChecks(browser) {
         head(b, "solo").counts === "1 finished" && head(b, "solo").bulk && !head(b, "solo").bulk.shown,
       b.heads,
     );
+    // At phone width the counts and the bulk mark wrap below the workspace
+    // name rather than squeezing it to nothing.
+    await browser.send("Emulation.setDeviceMetricsOverride", { width: 390, height: 900, deviceScaleFactor: 1, mobile: false });
+    try {
+      const narrow = await boardUntil("the Board at 390 px", (x) => x.heads.length > 0);
+      check(
+        "at 390 px every workspace name is whole beside its counts and bulk mark",
+        narrow.heads.every((h) => h.labelWhole) && head(narrow, "probe").bulk.shown,
+        narrow.heads,
+      );
+    } finally {
+      await browser.send("Emulation.clearDeviceMetricsOverride", {});
+    }
 
     // Background (ADR-0009) takes precedence, seen or not; the fake herdr has
     // no Claude process, so the Daemon's state is sent through a stand-in

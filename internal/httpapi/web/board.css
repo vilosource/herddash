@@ -163,14 +163,17 @@ body {
    Every heading after the first on the page draws a thin rule above it. */
 .group + .group { margin-top: var(--space-5); }
 .group-head {
-  display: flex; align-items: baseline; gap: 0.6rem; min-width: 0;
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.25rem 0.6rem; min-width: 0;
   margin: 0 0 0.6rem;
   padding-top: var(--space-4);
   border-top: 1px solid var(--border);
 }
 .board > .zone:first-child > .group-head,
 .board > .zone:first-child > .group:first-of-type > .group-head { border-top: 0; padding-top: 0; }
+/* The name keeps its width (up to the line), so on a narrow page the counts and
+   the bulk mark wrap below it rather than squeezing it to nothing. */
 .group-label {
+  flex: 0 0 auto; max-width: 100%;
   margin: 0; min-width: 0;
   color: var(--ink);
   font-size: var(--text-group);
