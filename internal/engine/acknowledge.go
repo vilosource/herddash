@@ -176,7 +176,14 @@ func (e *Engine) acknowledge(req AckRequest) ([]core.AgentView, error) {
 		if !write[i] {
 			continue
 		}
-		a, err := core.NewAcknowledgement(core.AcknowledgementInput{Key: it.Key, FinishedSince: it.WaitingSince, Seen: req.Seen, ObservedAt: now})
+		in := core.AcknowledgementInput{Key: it.Key, FinishedSince: it.WaitingSince, Seen: req.Seen, ObservedAt: now}
+		if p := panes[i]; p.herdr == p.status {
+			// herdr's order for the Status acknowledged, when a snapshot
+			// has read it since it last changed: a restart compares it with
+			// the order herdr then shows (core.SeenAt).
+			in.HerdrOrder = p.herdrSeq
+		}
+		a, err := core.NewAcknowledgement(in)
 		if err != nil {
 			return nil, fmt.Errorf("engine: acknowledgement: %w", err)
 		}
@@ -210,9 +217,13 @@ func (e *Engine) acknowledge(req AckRequest) ([]core.AgentView, error) {
 
 // seedSeen derives p's acknowledgement from the record, once its fold has
 // been seeded from it (ADR-0014): only a Finished fold with a known start
-// can be acknowledged, so nothing else is read. A failed read is logged and
-// leaves the Agent unacknowledged: the Board shows more, never less.
-func (e *Engine) seedSeen(p *pane) {
+// can be acknowledged, so nothing else is read. last is the Agent's last
+// recorded Transition; with herdr's order for its Status now (p.herdrSeq),
+// core.SeenAt refuses an acknowledgement of an earlier turn that ended with
+// the same Status, which a Daemon down for a whole turn leaves behind. A
+// failed read is logged and leaves the Agent unacknowledged: the Board shows
+// more, never less.
+func (e *Engine) seedSeen(p *pane, last core.Transition) {
 	p.seenSince = 0
 	if e.store == nil || !p.seedHistory || !p.fold.Known || p.fold.Class != core.ClassFinished || p.fold.Since <= 0 {
 		return
@@ -222,8 +233,38 @@ func (e *Engine) seedSeen(p *pane) {
 		e.log.Error("acknowledgements not read; the agent is shown not seen", "pane", p.id, "error", err.Error())
 		return
 	}
-	if core.Seen(p.fold, acks) {
+	if core.SeenAt(p.fold, acks, last, p.herdrSeq) {
 		p.seenSince = p.fold.Since
 		e.log.Debug("agent seen since the record", "pane", p.id, "since", p.seenSince)
+	} else if core.Seen(p.fold, acks) {
+		e.log.Info("acknowledged finish ended by a turn not observed", "pane", p.id, "since", p.fold.Since,
+			"herdr_order", *p.herdrSeq)
 	}
+}
+
+// missedTurn handles a snapshot showing herdr's Status for p unchanged but
+// its order risen from was to now, with no live event between: herdr's
+// Status changed and came back while herddash was not told, so the Agent ran
+// a turn herddash did not observe. Its acknowledgement, of the finish before
+// that turn, ends; nothing is written, and the record's Status, unchanged,
+// stays as it is. A restart reaches the same answer from the order the
+// acknowledgement carries (core.SeenAt).
+func (e *Engine) missedTurn(p *pane, was, now uint64) {
+	if !seenNow(p) {
+		e.log.Debug("turn not observed", "pane", p.id, "status", p.herdr, "herdr_order", was, "now", now)
+		return
+	}
+	p.seenSince = 0
+	e.log.Info("acknowledged finish ended by a turn not observed", "pane", p.id, "since", p.fold.Since,
+		"herdr_order", was, "now", now)
+}
+
+// copyOrder copies a herdr order, so a pane never shares one with a
+// snapshot.
+func copyOrder(o *uint64) *uint64 {
+	if o == nil {
+		return nil
+	}
+	v := *o
+	return &v
 }

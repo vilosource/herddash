@@ -505,6 +505,11 @@ type pane struct {
 	// from it, set by Acknowledge, and cleared once the fold leaves that
 	// finish.
 	seenSince int64
+	// herdrSeq is herdr's state_change_seq for its Status p.herdr, as the
+	// latest snapshot read it, nil when unknown: before any read, and after
+	// a live event, which carries none. A later read showing the same Status
+	// with a higher one shows a turn herddash did not observe (missedTurn).
+	herdrSeq *uint64
 }
 
 // cause is why a resync runs: the reason the Sink and the record show, and,
@@ -1146,6 +1151,7 @@ func (e *Engine) onStatus(m statusMsg) {
 	// returns to the Status this event reports, in one row.
 	if ev.Status.Valid() {
 		p.herdr = ev.Status
+		p.herdrSeq = nil // a live event carries no order
 	}
 	e.setProgram(p, ev.AgentProgram)
 	// While the session record says waiting, a herdr change moves herdr's
@@ -1461,7 +1467,11 @@ func (e *Engine) apply(seq uint64, s core.Snapshot, resubscribe bool, before map
 			e.seen(p, a.Status, core.ProvenanceSnapshot, a.StateChangeSeq)
 		}
 		if wasKnown && p.liveDuring != seq && a.Status.Valid() {
+			if a.Status == p.herdr && p.herdrSeq != nil && a.StateChangeSeq != nil && *a.StateChangeSeq > *p.herdrSeq {
+				e.missedTurn(p, *p.herdrSeq, *a.StateChangeSeq)
+			}
 			p.herdr = a.Status // as onStatus: before a program change settles
+			p.herdrSeq = copyOrder(a.StateChangeSeq)
 		}
 		had := p.program
 		programChanged := e.setProgram(p, a.AgentProgram)
@@ -2711,6 +2721,8 @@ func (e *Engine) firstSight(p *pane, reportedAt int64) (skipped bool) {
 	if observedAt == 0 {
 		observedAt = reportedAt
 	}
+	// A live event leaves seenOrder nil: the order is a snapshot's alone.
+	p.herdrSeq = copyOrder(p.seenOrder)
 	ts, ok := e.historyOnce(p)
 	p.hist, p.histRead = nil, false
 	hist := core.Fold(ts)
@@ -2720,7 +2732,7 @@ func (e *Engine) firstSight(p *pane, reportedAt int64) (skipped bool) {
 	if hist.Known && hist.Status == p.status && ts[len(ts)-1].AgentProgram() == p.program {
 		e.log.Info("agent unchanged since the record", "pane", p.id, "status", p.status, "class", hist.Class, "since", hist.Since)
 		p.fold = hist
-		e.seedSeen(p)
+		e.seedSeen(p, ts[len(ts)-1])
 		return true
 	}
 	in := core.TransitionInput{
@@ -2753,7 +2765,7 @@ func (e *Engine) firstSight(p *pane, reportedAt int64) (skipped bool) {
 	e.record(t)
 	// After the record: a row it failed to append leaves the pane unrecorded,
 	// but its acknowledgement, of a finish the record holds, still stands.
-	e.seedSeen(p)
+	e.seedSeen(p, t)
 	if _, hasPrev := t.Previous(); !hasPrev && !p.unrecorded && e.released[p.id] {
 		// The released pane's next Agent now begins the record's rows for
 		// the pane: later starts may seed from them.

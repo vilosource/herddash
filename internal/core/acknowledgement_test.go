@@ -173,3 +173,87 @@ func TestAgentViewSeen(t *testing.T) {
 		t.Errorf("seen Background: background %v rank %d class %s, want true 3 finished", v.Background, v.SortKey.ClassRank, v.Class)
 	}
 }
+
+func TestAcknowledgementHerdrOrder(t *testing.T) {
+	in := AcknowledgementInput{Key: AgentKey{Host: "mac", Server: "default", Epoch: 2, PaneID: "w1:p1"},
+		FinishedSince: 100, Seen: true, ObservedAt: 200}
+	a, err := NewAcknowledgement(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := a.HerdrOrder(); ok {
+		t.Error("an acknowledgement made with no order reports one")
+	}
+	o := uint64(9)
+	in.HerdrOrder = &o
+	if a, err = NewAcknowledgement(in); err != nil {
+		t.Fatal(err)
+	}
+	o = 10 // the input's later change does not reach the row
+	if got, ok := a.HerdrOrder(); !ok || got != 9 {
+		t.Errorf("HerdrOrder %d %v, want 9", got, ok)
+	}
+}
+
+func TestSeenAt(t *testing.T) {
+	key := AgentKey{Host: "mac", Server: "default", Epoch: 1, PaneID: "w1:p1"}
+	row := func(prev, next Status, at int64, order *uint64) Transition {
+		t.Helper()
+		in := TransitionInput{Key: key, AgentProgram: "claude", New: next, ObservedAt: at, Provenance: ProvenanceLive}
+		if prev != "" {
+			in.Previous = &prev
+		}
+		if order != nil {
+			in.Provenance, in.HerdrOrder = ProvenanceSnapshot, order
+		}
+		tr, err := NewTransition(in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return tr
+	}
+	ackAt := func(since int64, seen bool, at int64, order *uint64) Acknowledgement {
+		t.Helper()
+		a, err := NewAcknowledgement(AcknowledgementInput{Key: key, FinishedSince: since, Seen: seen, ObservedAt: at, HerdrOrder: order})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return a
+	}
+	n := func(v uint64) *uint64 { return &v }
+	working := row("", StatusWorking, 100, nil)
+	doneLive := row(StatusWorking, StatusDone, 200, nil)
+	doneSnap := row(StatusWorking, StatusDone, 200, n(5))
+	fold := func(ts ...Transition) FoldResult { return Fold(ts) }
+	for _, c := range []struct {
+		name    string
+		rows    []Transition
+		acks    []Acknowledgement
+		current *uint64
+		want    bool
+	}{
+		{"no current order: Seen alone", []Transition{working, doneLive}, []Acknowledgement{ackAt(200, true, 300, n(5))}, nil, true},
+		{"orders unknown: Seen alone", []Transition{working, doneLive}, []Acknowledgement{ackAt(200, true, 300, nil)}, n(9), true},
+		{"the acknowledged order now", []Transition{working, doneLive}, []Acknowledgement{ackAt(200, true, 300, n(5))}, n(5), true},
+		{"a later turn missed after the mark", []Transition{working, doneLive}, []Acknowledgement{ackAt(200, true, 300, n(5))}, n(7), false},
+		{"the row's order, the mark's unknown", []Transition{working, doneSnap}, []Acknowledgement{ackAt(200, true, 300, nil)}, n(5), true},
+		{"a later turn missed, the row's order", []Transition{working, doneSnap}, []Acknowledgement{ackAt(200, true, 300, nil)}, n(7), false},
+		// done to idle after the mark: the mark's order is the done's, so the
+		// later row's decides, and a live one leaves Seen alone.
+		{"done to idle after the mark, live", []Transition{working, doneLive, row(StatusDone, StatusIdle, 400, nil)},
+			[]Acknowledgement{ackAt(200, true, 300, n(5))}, n(6), true},
+		{"done to idle after the mark, snapshot", []Transition{working, doneLive, row(StatusDone, StatusIdle, 400, n(6))},
+			[]Acknowledgement{ackAt(200, true, 300, n(5))}, n(6), true},
+		{"done to idle after the mark, then a turn missed", []Transition{working, doneLive, row(StatusDone, StatusIdle, 400, n(6))},
+			[]Acknowledgement{ackAt(200, true, 300, n(5))}, n(8), false},
+		{"undone", []Transition{working, doneLive}, []Acknowledgement{ackAt(200, true, 300, n(5)), ackAt(200, false, 310, n(5))}, n(5), false},
+		{"marked again after a missed turn", []Transition{working, doneLive},
+			[]Acknowledgement{ackAt(200, true, 300, n(5)), ackAt(200, true, 500, n(7))}, n(7), true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := SeenAt(fold(c.rows...), c.acks, c.rows[len(c.rows)-1], c.current); got != c.want {
+				t.Errorf("SeenAt %v, want %v", got, c.want)
+			}
+		})
+	}
+}

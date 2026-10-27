@@ -115,10 +115,16 @@ What a Seen mark does:
   nothing is marked.
 - It lasts until the agent's next change out of that finish: a new turn, a question for you, a new
   agent in the pane, or a herdr restart. herdr's own `done` to `idle`, which happens when you look
-  at the pane in herdr, keeps it, because that is the same finish.
+  at the pane in herdr, keeps it, because that is the same finish. A whole turn herddash did not
+  see (herddash stopped while the agent ran again, or events lost on the way) also ends it when
+  herdr's change counter shows the status changed and came back: herddash notes herdr's counter
+  with each mark and compares it with what herdr reports later. It cannot tell when no snapshot
+  had read the counter for that finish, which is the case for up to a minute after a finish it
+  learnt from a live event.
 - It is recorded in the history database as a row of its own, and an undo is a further row, so it
-  survives a restart of herddash and shows in the agent's history. With recording turned off,
-  marking is refused.
+  survives a restart of herddash and shows in the agent's history. There is no setting that turns
+  recording off, but if herddash cannot load its saved state at start it records nothing for that
+  run (and logs why); marking is then refused, because a mark it could not keep is not one.
 - It reaches every open board through the event stream, as that agent's updated box.
 
 What it does not do:

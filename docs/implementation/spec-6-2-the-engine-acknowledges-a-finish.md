@@ -175,6 +175,25 @@ tests above.
 - **Deferred:** none.
 - **Rejected:** none in this round.
 
+### 2026-10-27 — Epic 6 final review
+- `[medium]` `[patch]` An acknowledgement survived a whole turn herddash did not observe. With the
+  Daemon down (or a kept-epoch reconnect, or events lost between reads) while a seen Agent ran
+  again and finished, the first snapshot showed `done` as the record does, `firstSight` took the
+  matching path with the old `Since`, and `seedSeen` re-applied the old mark, so the new result
+  was drawn SEEN among the Idle Boxes. Confirmed by reading `firstSight`, `seedSeen` and the
+  snapshot path; `TestAckRestartMissedTurn` and `TestAckRestartMissedTurnRealStore` failed on the
+  old code. Fixed by carrying herdr's `state_change_seq` on the mark (migration 0006,
+  `acknowledgements.herdr_order`, nullable), `core.SeenAt` at every seed (the mark's order when it
+  was recorded at or after the last row, else the last row's), and, within a run, a pane's
+  `herdrSeq` from the latest snapshot, forgotten at every live event: a read showing the same
+  Status at a higher order ends the mark in force (`missedTurn`, `TestAckInRunMissedTurn`). A
+  structural change to the stored schema, so ADR-0014 gains a dated amendment in the same change.
+- `[low]` `[defer]` What the order cannot see: a finish learnt live and marked, then missed, before
+  any snapshot read its order (reconcile reads are 60 s apart), or a `done` to `idle` recorded
+  live after the mark. Routed to `deferred-work.md` with no story.
+- `[low]` `[defer]` The missed turn itself still records no Transition, so the later finish keeps
+  the earlier one's Waiting Time, as before Epic 6. Routed to `deferred-work.md` with no story.
+
 ## Design Notes
 
 The seen state is one integer per pane, the acknowledged class start, rather than a boolean, so it

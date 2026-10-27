@@ -21,6 +21,11 @@ type AcknowledgementInput struct {
 	Seen bool
 	// ObservedAt is the Daemon's clock when it was recorded, UTC Unix ms.
 	ObservedAt int64
+	// HerdrOrder is herdr's state_change_seq for the Agent's Status when the
+	// acknowledgement was made, as a snapshot read it; nil when unknown, as
+	// it is for a Status last learnt from a live event. Comparable only
+	// within the key's epoch, one herdr server instance.
+	HerdrOrder *uint64
 }
 
 // Acknowledgement is one row of the record's acknowledgements: the operator
@@ -32,6 +37,7 @@ type Acknowledgement struct {
 	finishedSince int64
 	seen          bool
 	observedAt    int64
+	herdrOrder    *uint64
 }
 
 // NewAcknowledgement validates in and builds an Acknowledgement. It refuses an
@@ -55,7 +61,12 @@ func NewAcknowledgement(in AcknowledgementInput) (Acknowledgement, error) {
 	case in.ObservedAt <= 0:
 		return bad("observed at", in.ObservedAt)
 	}
-	return Acknowledgement{key: in.Key, finishedSince: in.FinishedSince, seen: in.Seen, observedAt: in.ObservedAt}, nil
+	a := Acknowledgement{key: in.Key, finishedSince: in.FinishedSince, seen: in.Seen, observedAt: in.ObservedAt}
+	if in.HerdrOrder != nil {
+		o := *in.HerdrOrder
+		a.herdrOrder = &o
+	}
+	return a, nil
 }
 
 // Key is the acknowledged Agent's identity.
@@ -69,6 +80,15 @@ func (a Acknowledgement) Seen() bool { return a.seen }
 
 // ObservedAt is when the Daemon recorded it, UTC Unix ms.
 func (a Acknowledgement) ObservedAt() int64 { return a.observedAt }
+
+// HerdrOrder is herdr's state_change_seq for the Agent's Status when it was
+// recorded, and whether that was known.
+func (a Acknowledgement) HerdrOrder() (uint64, bool) {
+	if a.herdrOrder == nil {
+		return 0, false
+	}
+	return *a.herdrOrder, true
+}
 
 // Seen reports whether the Agent folded as f is acknowledged by acks, its
 // acknowledgements in recording order (ADR-0014). It holds exactly when f is
@@ -88,4 +108,38 @@ func Seen(f FoldResult, acks []Acknowledgement) bool {
 		}
 	}
 	return false
+}
+
+// SeenAt is Seen, also refusing an acknowledgement that herdr's ordering
+// shows is of an earlier turn with the same start (ADR-0014, amended
+// 2026-10-27). An Agent can run a whole turn herddash never observes (the
+// Daemon down, or events lost between two snapshot reads) and finish again:
+// its Status and so its fold are unchanged, but the result is new. last is
+// the Agent's last recorded Transition and current herdr's state_change_seq
+// for its Status now, nil when no snapshot read it. herdr's order as herddash
+// last knew it is the deciding acknowledgement's, when it was recorded at or
+// after last (so nothing changed between them), or else last's; herdr's order
+// rises on every Status change and on nothing else, so a current order above
+// it means the Status changed since and came back. When either order is
+// unknown, SeenAt is Seen. Acknowledgements and last are expected to be of the
+// Agent current names, in one epoch.
+func SeenAt(f FoldResult, acks []Acknowledgement, last Transition, current *uint64) bool {
+	if !Seen(f, acks) {
+		return false
+	}
+	if current == nil {
+		return true
+	}
+	var deciding Acknowledgement
+	for i := len(acks) - 1; i >= 0; i-- {
+		if acks[i].finishedSince == f.Since {
+			deciding = acks[i]
+			break
+		}
+	}
+	known, ok := deciding.HerdrOrder()
+	if !ok || deciding.observedAt < last.ObservedAt() {
+		known, ok = last.HerdrOrder()
+	}
+	return !ok || *current <= known
 }

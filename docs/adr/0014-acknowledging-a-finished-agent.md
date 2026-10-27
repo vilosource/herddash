@@ -112,8 +112,10 @@ CREATE INDEX acknowledgements_observed_at ON acknowledgements (observed_at);
   after the Agent moved on is harmless.
 - A bulk request is **all or nothing**: every item is validated first and the rows are written in
   one transaction. One stale item refuses the whole request, which then names the stale keys.
-- With recording off (no store, or recording turned off for the run) acknowledgement is refused
-  (503): an acknowledgement that does not survive a restart is not the decided feature.
+- With recording off (no store, which only tests run, or recording turned off for the run because
+  the engine's saved state could not be loaded at start; no setting turns it off) acknowledgement
+  is refused (503): an acknowledgement that does not survive a restart is not the decided feature.
+  With herdr refused by the version gate there are no Agents, so a mark is `404 unknown_agent`.
 - After a successful write, the engine updates its state and publishes once, with one `agent`
   change per Agent whose view changed. The reply carries the resulting views.
 - At an Agent's first sight seeded from the record, and whenever its fold is reseeded, the engine
@@ -229,3 +231,41 @@ its callers, guards `AppendAcknowledgements` as engine-only (`internal/engine` a
 - **Ending the acknowledgement at any Transition at all, `done` to `idle` included.** The operator
   looking at the pane in herdr would bring a seen Box back as Finished, the opposite of what
   looking means.
+
+## Amendment, 2026-10-27: herdr's order on an acknowledgement (migration 0006)
+
+Epic 6's final review found that "in force while the fold is Finished with the acknowledged
+`Since`" is not enough. An Agent can run a whole turn herddash never observes and finish again:
+the Daemon stopped (to install the next build, say) while the operator typed into the pane, or a
+reconnect that kept the epoch, or events lost between two snapshot reads. herdr then reports the
+same `done`, so no Transition is recorded, the fold keeps the old `Since`, and the old
+acknowledgement hid the new result as SEEN. Before Epic 6 the same gap only left a stale Waiting
+Time; with acknowledgement it hides a result the operator has not read.
+
+herdr's `state_change_seq` tells the two apart: it rises by one on every Status change and on
+nothing else, per server instance (the socket API record's finding Q3), so within one epoch a
+higher order with the same Status means the Status changed and came back.
+
+- **The acknowledgement carries herdr's order.** Migration 0006 adds
+  `acknowledgements.herdr_order INTEGER NULL CHECK (herdr_order IS NULL OR herdr_order >= 0)`:
+  herdr's `state_change_seq` for the Agent's Status when the operator marked it, as the latest
+  snapshot read it since that Status last changed; NULL when no snapshot has read it (a Status
+  learnt from a live event, which carries no order, until the next reconcile read) and on every
+  row recorded under schema 5. The table stays append-only. `core.AcknowledgementInput` gains
+  `HerdrOrder`.
+- **At a seed from the record** the rule is `core.SeenAt`: `core.Seen`, and, when the first
+  snapshot gives herdr's order now, that order is not above herdr's order as herddash last knew
+  it. That is the deciding acknowledgement's order when it was recorded at or after the Agent's
+  last Transition, or else that Transition's own (a snapshot row's `state_change_seq`). When
+  neither is known, `core.SeenAt` is `core.Seen`, as before.
+- **Within a run** the engine keeps herdr's order for each pane's Status from the latest snapshot,
+  forgetting it at every live event. A reconcile or resync read that shows the same Status at a
+  higher order, with no live event between, ends the acknowledgement in force, writing nothing,
+  exactly as a Transition out of the finish would. The record's Status, unchanged, stays as it is.
+- What it still cannot see: a turn missed when no order was ever known for the finish, that is,
+  a finish learnt live, marked and then missed before any snapshot read it (reconcile reads come
+  every 60 s), or a `done` to `idle` recorded live after the mark. Those keep the earlier rule.
+  The missed turn's own Transitions and Waiting Time are a separate, older gap
+  (`docs/implementation/deferred-work.md`).
+- Schema 6 is a one-way door like schema 5: a binary that knows only schema 5 (the earlier Epic 6
+  `-dev` builds) refuses a database migrated to 6, and 0.7.x refuses both.

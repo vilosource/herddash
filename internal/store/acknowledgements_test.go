@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 
@@ -113,9 +114,9 @@ func schema4(t *testing.T, path string) *sql.DB {
 
 var recordTables = []string{"transitions", "resync_markers", "server_state"}
 
-// TestUpgradeFromSchema4: a 0.7.x database with rows is migrated to schema 5
-// with every row unchanged, and a binary that knows only schema 4 then refuses
-// it with ErrSchemaNewer.
+// TestUpgradeFromSchema4: a 0.7.x database with rows is migrated to the
+// current schema with every row unchanged, and a binary that knows only
+// schema 4 then refuses it with ErrSchemaNewer.
 func TestUpgradeFromSchema4(t *testing.T) {
 	path := dbPath(t)
 	raw := schema4(t, path)
@@ -132,8 +133,8 @@ func TestUpgradeFromSchema4(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v := userVersion(t, s.db); v != 5 {
-		t.Errorf("user_version %d, want 5", v)
+	if v := userVersion(t, s.db); v != schemaVersion {
+		t.Errorf("user_version %d, want %d", v, schemaVersion)
 	}
 	for _, table := range recordTables {
 		if got := dumpTable(t, s.db, table); got != before[table] {
@@ -162,8 +163,8 @@ func TestUpgradeFromSchema4(t *testing.T) {
 	defer raw.Close()
 	raw.SetMaxOpenConns(1)
 	err = (&Store{db: raw}).prepare(context.Background(), path, ms[:4])
-	if !errors.Is(err, ErrSchemaNewer) || !strings.Contains(err.Error(), "version 5") || !strings.Contains(err.Error(), "up to 4") {
-		t.Errorf("schema-4 binary on a schema-5 database: %v, want ErrSchemaNewer naming 5 and 4", err)
+	if !errors.Is(err, ErrSchemaNewer) || !strings.Contains(err.Error(), fmt.Sprintf("version %d", schemaVersion)) || !strings.Contains(err.Error(), "up to 4") {
+		t.Errorf("schema-4 binary on a schema-%d database: %v, want ErrSchemaNewer naming %d and 4", schemaVersion, err, schemaVersion)
 	}
 }
 
@@ -213,6 +214,10 @@ func TestAcknowledgementChecks(t *testing.T) {
 	}
 	if err := insert(1, 1, 1); err != nil {
 		t.Errorf("a valid row refused: %v", err)
+	}
+	if _, err := s.db.Exec(`INSERT INTO acknowledgements (host, server, epoch, pane_id, finished_since, seen, observed_at, herdr_order)
+		VALUES ('h', 's', 1, 'w1:p1', 1, 1, 1, -1)`); err == nil {
+		t.Error("a negative herdr_order accepted")
 	}
 	if err := insert(1, 1, 0); err != nil {
 		t.Errorf("a valid undo refused: %v", err)
@@ -434,5 +439,89 @@ func TestAcknowledgementsSurviveReopen(t *testing.T) {
 		if before[c.name] != c.want || after[c.name] != c.want {
 			t.Errorf("%s: seen %v before the reopen and %v after, want %v", c.name, before[c.name], after[c.name], c.want)
 		}
+	}
+}
+
+// TestUpgradeFromSchema5: a database an Epic 6 -dev build left at schema 5,
+// with acknowledgements, is migrated to 6 with every row unchanged and its
+// acknowledgements read back with no herdr order; a new row's order round
+// trips; a binary that knows only schema 5 then refuses the database.
+func TestUpgradeFromSchema5(t *testing.T) {
+	path := dbPath(t)
+	ms, err := migrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := sql.Open("sqlite", (&url.URL{Scheme: "file", Path: path}).String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw.SetMaxOpenConns(1)
+	old := &Store{db: raw}
+	if err := old.prepare(context.Background(), path, ms[:5]); err != nil {
+		t.Fatal(err)
+	}
+	liveAt(t, old, keyP1, "", core.StatusWorking, 10)
+	liveAt(t, old, keyP1, core.StatusWorking, core.StatusDone, 20)
+	// Schema 5's own INSERT, which names no herdr_order.
+	if _, err := raw.Exec(`INSERT INTO acknowledgements (host, server, epoch, pane_id, finished_since, seen, observed_at)
+		VALUES ('mac', 'default', 1, 'w1:p1', 20, 1, 30)`); err != nil {
+		t.Fatal(err)
+	}
+	before := map[string]string{}
+	for _, table := range append(slices.Clone(recordTables), "acknowledgements") {
+		before[table] = dumpTable(t, raw, table)
+	}
+	raw.Close()
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := userVersion(t, s.db); v != schemaVersion {
+		t.Errorf("user_version %d, want %d", v, schemaVersion)
+	}
+	for _, table := range recordTables {
+		if got := dumpTable(t, s.db, table); got != before[table] {
+			t.Errorf("%s changed by the upgrade:\n got %s\nwant %s", table, got, before[table])
+		}
+	}
+	if got, want := dumpTable(t, s.db, "acknowledgements"), strings.ReplaceAll(before["acknowledgements"], "\n", " <nil>\n"); got != want {
+		t.Errorf("acknowledgements after the upgrade:\n got %s\nwant %s (each row with a NULL herdr_order)", got, want)
+	}
+	order := uint64(42)
+	a, err := core.NewAcknowledgement(core.AcknowledgementInput{Key: keyP1, FinishedSince: 20, Seen: true, ObservedAt: 40, HerdrOrder: &order})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AppendAcknowledgements(context.Background(), []core.Acknowledgement{a}); err != nil {
+		t.Fatal(err)
+	}
+	acks, err := s.Acknowledgements(context.Background(), keyP1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(acks) != 2 {
+		t.Fatalf("%d acknowledgements, want 2", len(acks))
+	}
+	if _, ok := acks[0].HerdrOrder(); ok {
+		t.Error("the schema-5 row reads back with a herdr order")
+	}
+	if got, ok := acks[1].HerdrOrder(); !ok || got != 42 {
+		t.Errorf("the new row's herdr order %d %v, want 42", got, ok)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err = sql.Open("sqlite", (&url.URL{Scheme: "file", Path: path}).String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+	raw.SetMaxOpenConns(1)
+	err = (&Store{db: raw}).prepare(context.Background(), path, ms[:5])
+	if !errors.Is(err, ErrSchemaNewer) || !strings.Contains(err.Error(), "version 6") || !strings.Contains(err.Error(), "up to 5") {
+		t.Errorf("schema-5 binary on a schema-6 database: %v, want ErrSchemaNewer naming 6 and 5", err)
 	}
 }

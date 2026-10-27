@@ -798,3 +798,191 @@ func TestAckConcurrent(t *testing.T) {
 		}
 	}
 }
+
+// paneAt is agentPane with herdr's state_change_seq set to order.
+func paneAt(id string, status core.Status, order uint64) core.PaneObservation {
+	p := agentPane(id, status)
+	p.Agent.StateChangeSeq = seq(order)
+	return p
+}
+
+// orderOf is an acknowledgement's herdr order, or -1 when it has none.
+func orderOf(a core.Acknowledgement) int64 {
+	if o, ok := a.HerdrOrder(); ok {
+		return int64(o)
+	}
+	return -1
+}
+
+func TestAckInRunMissedTurn(t *testing.T) {
+	// herdr's order for w1:p1's done is 7 when the operator marks it. A
+	// reconcile read later shows done again, at 9: herdr's Status changed
+	// and came back with no event reaching herddash, a turn not observed.
+	setReconcileInterval(t, time.Hour)
+	h, _, st := startAck(t, snapOf(paneAt("w1:p1", core.StatusDone, 7), paneAt("w1:p2", core.StatusIdle, 3)))
+	item := itemOf(h.viewOf("w1:p1"))
+	if _, err := h.ack(true, item); err != nil {
+		t.Fatal(err)
+	}
+	if acks := st.ackList(); len(acks) != 1 || orderOf(acks[0]) != 7 {
+		t.Fatalf("acknowledgements %v, want one carrying herdr's order 7", acks)
+	}
+	// The same order again: nothing happened.
+	h.reconcileTick()
+	h.fake.awaitSnapshotCall()
+	h.settle()
+	if v := h.viewOf("w1:p1"); !v.Seen {
+		t.Fatalf("after a read at the same order %+v, want seen", v)
+	}
+	rows := len(st.rowList())
+	h.fake.setSnapshot(snapOf(paneAt("w1:p1", core.StatusDone, 9), paneAt("w1:p2", core.StatusIdle, 3)))
+	h.reconcileTick()
+	h.fake.awaitSnapshotCall()
+	h.settle()
+	v := h.viewOf("w1:p1")
+	if v.Seen || v.Class != core.ClassFinished || v.WaitingSince != item.WaitingSince {
+		t.Errorf("after a turn not observed %+v, want Finished and not seen", v)
+	}
+	if n := len(st.ackList()); n != 1 {
+		t.Errorf("%d acknowledgements, want the mark alone: ending one writes nothing", n)
+	}
+	if n := len(st.rowList()); n != rows {
+		t.Errorf("%d rows, want %d: the Status did not change", n, rows)
+	}
+	// Marked again, the row carries the new order.
+	if _, err := h.ack(true, item); err != nil {
+		t.Fatal(err)
+	}
+	if acks := st.ackList(); len(acks) != 2 || orderOf(acks[1]) != 9 || !h.viewOf("w1:p1").Seen {
+		t.Errorf("acknowledgements %v, want a second carrying 9, and seen", acks)
+	}
+	// A live event carries no order: a finish learnt live is marked with
+	// none, and the next read's order is adopted, not compared.
+	h.say("w1:p1", core.StatusWorking)
+	live := h.say("w1:p1", core.StatusDone)
+	if _, err := h.ack(true, itemOf(live)); err != nil {
+		t.Fatal(err)
+	}
+	if acks := st.ackList(); len(acks) != 3 || orderOf(acks[2]) != -1 {
+		t.Errorf("acknowledgements %v, want a third with no order", acks)
+	}
+	h.fake.setSnapshot(snapOf(paneAt("w1:p1", core.StatusDone, 11), paneAt("w1:p2", core.StatusIdle, 3)))
+	h.reconcileTick()
+	h.fake.awaitSnapshotCall()
+	h.settle()
+	if v := h.viewOf("w1:p1"); !v.Seen {
+		t.Errorf("after the first read of a finish learnt live %+v, want still seen", v)
+	}
+	// From then on the order is known, and a rise ends the mark.
+	h.fake.setSnapshot(snapOf(paneAt("w1:p1", core.StatusDone, 14), paneAt("w1:p2", core.StatusIdle, 3)))
+	h.reconcileTick()
+	h.fake.awaitSnapshotCall()
+	h.settle()
+	if v := h.viewOf("w1:p1"); v.Seen {
+		t.Errorf("after a rise once the order was known %+v, want not seen", v)
+	}
+}
+
+func TestAckRestartMissedTurn(t *testing.T) {
+	// A previous run recorded w1:p1 finishing at 200 and the operator's mark.
+	// The Daemon restarts on the same herdr, whose first snapshot shows done:
+	// at the order the mark (or the last row) carried, the same finish; at a
+	// higher one, a later finish with the same Status and fold start.
+	key := core.AgentKey{Host: "mac", Server: "default", Epoch: 3, PaneID: "w1:p1"}
+	snapRow := func(t *testing.T, at int64, order uint64) core.Transition {
+		t.Helper()
+		prev := core.StatusWorking
+		tr, err := core.NewTransition(core.TransitionInput{Key: key, AgentProgram: "claude", Profile: "claude",
+			Previous: &prev, New: core.StatusDone, HerdrVersion: "0.9.5", ObservedAt: at,
+			Provenance: core.ProvenanceSnapshot, HerdrOrder: seq(order)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return tr
+	}
+	for _, c := range []struct {
+		name     string
+		snapRow  bool    // the done row came from a snapshot, at order 5
+		ackOrder *uint64 // the mark's order
+		now      uint64
+		seen     bool
+	}{
+		{"mark's order, unchanged", false, seq(5), 5, true},
+		{"mark's order, a turn missed", false, seq(5), 9, false},
+		{"row's order, unchanged", true, nil, 5, true},
+		{"row's order, a turn missed", true, nil, 9, false},
+		{"no order known", false, nil, 9, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			st := newFakeStore(nil)
+			done := stored(t, "w1:p1", core.StatusWorking, core.StatusDone, 200, core.ProvenanceLive)
+			if c.snapRow {
+				done = snapRow(t, 200, 5)
+			}
+			st.seed(stored(t, "w1:p1", "", core.StatusWorking, 100, core.ProvenanceLive), done)
+			a, err := core.NewAcknowledgement(core.AcknowledgementInput{Key: key, FinishedSince: 200, Seen: true, ObservedAt: 300, HerdrOrder: c.ackOrder})
+			if err != nil {
+				t.Fatal(err)
+			}
+			st.mu.Lock()
+			st.acks = append(st.acks, a)
+			st.mu.Unlock()
+			h := restartOn(t, snapOf(paneAt("w1:p1", core.StatusDone, c.now), agentPane("w1:p2", core.StatusIdle)), st, nil)
+			h.awaitAgents(2)
+			if v := h.viewOf("w1:p1"); v.Seen != c.seen || v.Class != core.ClassFinished {
+				t.Errorf("w1:p1 %+v, want Finished, seen %v", v, c.seen)
+			}
+			if n := len(st.ackList()); n != 1 {
+				t.Errorf("%d acknowledgements, want the seeded one: a restart writes none", n)
+			}
+		})
+	}
+}
+
+func TestAckRestartMissedTurnRealStore(t *testing.T) {
+	// The finding's case end to end: herdr's order rides the mark into the
+	// real record, and a Daemon down for a whole turn of w1:p1 finds it
+	// done again at a higher order, so the new result is not shown seen.
+	setReconcileInterval(t, time.Hour)
+	dir := filepath.Join(t.TempDir(), "data")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	clock := &jumpClock{}
+	run := func(order uint64) (*harness, *store.Store) {
+		t.Helper()
+		db := openStore(t, dir)
+		fake := newFakeClient(t, snapOf(paneAt("w1:p1", core.StatusDone, order), paneAt("w1:p2", core.StatusIdle, 3)))
+		h := startEngineWith(t, fake, func(o *Options, _ *recorder) {
+			o.Store = db
+			o.Clock = clock.now
+		})
+		h.awaitAgents(2)
+		return h, db
+	}
+	stop := func(h *harness, db *store.Store) {
+		t.Helper()
+		h.stop()
+		if err := db.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h, db := run(7)
+	if _, err := h.ack(true, itemOf(h.viewOf("w1:p1"))); err != nil {
+		t.Fatal(err)
+	}
+	stop(h, db)
+	h, db = run(7)
+	if v := h.viewOf("w1:p1"); !v.Seen {
+		t.Errorf("restarted at the mark's order %+v, want seen", v)
+	}
+	stop(h, db)
+	h, db = run(12)
+	if v := h.viewOf("w1:p1"); v.Seen || v.Class != core.ClassFinished {
+		t.Errorf("restarted after a turn not observed %+v, want Finished and not seen", v)
+	}
+	stop(h, db)
+}

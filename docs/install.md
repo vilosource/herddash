@@ -424,7 +424,8 @@ then means restoring a backup taken before the upgrade, and losing what was reco
 | Schema | First herddash that writes it |
 |---|---|
 | 4 | 0.6.0 (`server_state.released`) |
-| 5 | Epic 6, acknowledgement ("Seen", ADR-0014); 0.7.x and earlier refuse it |
+| 5 | Epic 6's first `-dev` builds, acknowledgement ("Seen", ADR-0014); 0.7.x and earlier refuse it |
+| 6 | Epic 6, herdr's order on an acknowledgement (ADR-0014's amendment); schema-5 builds refuse it |
 
 So before installing a build with a newer schema than the running one, take a backup with the
 Daemon stopped, exactly as above, and install the new binary while it is still stopped:
@@ -435,4 +436,4 @@ Daemon stopped, exactly as above, and install the new binary while it is still s
 2. Copy the database (above) and check `ls -l "$BACKUP"*` lists it.
 3. Install the new binary at `~/.local/bin/herddash`.
 4. Start the Daemon again (above), and check the database's schema once it is running:
-   `sqlite3 -readonly "$DB" 'PRAGMA user_version'` prints the new schema, for example `5`.
+   `sqlite3 -readonly "$DB" 'PRAGMA user_version'` prints the new schema, for example `6`.

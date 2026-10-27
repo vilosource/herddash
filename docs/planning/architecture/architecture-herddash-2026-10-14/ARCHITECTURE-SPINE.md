@@ -96,7 +96,9 @@ so do `herdr` and the packages under it, `herdr/gen` and `herdr/gen/genwire` (AD
   - **Seen** (added 2026-10-27, ADR-0014): a Finished Agent whose current finish is acknowledged
     (`AgentView.seen`) has `class_rank` 2, Idle's, so it sorts among the Idle Agents of its group
     by the same newest-first `start`; Background (3) still takes precedence over it. Its
-    `attention_class` stays `finished`.
+    `attention_class` stays `finished`. An acknowledgement carries herdr's `state_change_seq`
+    when known, so a turn herddash did not observe, which leaves the same Status and `Since`,
+    still ends it (`core.SeenAt`, ADR-0014's amendment).
 
   The Board does exactly three things beyond rendering. It advances the displayed Waiting Time from
   the view's start instant. It orders Boxes by the sort key. It draws a workspace header wherever
@@ -312,10 +314,11 @@ so do `herdr` and the packages under it, `herdr/gen` and `herdr/gen/genwire` (AD
 
   The migrations so far: 0001 the record; 0002 `server_state` (AD-3); 0003 the transitions table's
   `observed_by` column (ADR-0008); 0004 `server_state.released` (Story 5.17); 0005 the append-only
-  `acknowledgements` table (ADR-0014, Epic 6). 0002 and 0004 change engine state only, outside the
-  append-only record, so they needed no ADR. Every migration is a one-way door for older binaries:
-  a database at schema 4 is refused by 0.5.0, which knows schema 3, and one at schema 5 by 0.7.x,
-  so going back means restoring or removing the database.
+  `acknowledgements` table (ADR-0014, Epic 6); 0006 its nullable `herdr_order` column (ADR-0014's
+  amendment). 0002 and 0004 change engine state only, outside the append-only record, so they
+  needed no ADR. Every migration is a one-way door for older binaries: a database at schema 4 is
+  refused by 0.5.0, which knows schema 3, one at schema 5 by 0.7.x, and one at schema 6 by a build
+  that knows schema 5, so going back means restoring or removing the database.
 
 ### AD-11 — The engine decides; `internal/herdr` only does
 
