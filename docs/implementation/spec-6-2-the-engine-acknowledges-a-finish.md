@@ -50,7 +50,7 @@ Change the stored schema, the Sink interface, Retention's rule or the HTTP surfa
 |----------|--------------|---------------------------|-------|
 | Mark | Finished Agent, its view's `waiting_since` | one row; view `seen`, rank 2; one publication with one `agent` change; reply is that view | — |
 | Mark again | already seen | no row, no publication; reply the view | — |
-| Stale | `waiting_since` 1 ms off; Profile hold on the pane; fold not in the record (`unrecorded`) | nothing written or published | `*StaleError` naming the keys, `errors.Is(ErrStaleView)` |
+| Stale | `waiting_since` 1 ms off; Profile hold on the pane (a mark, or an undo that would write); fold not in the record (`unrecorded`, a mark) | nothing written or published | `*StaleError` naming the keys, `errors.Is(ErrStaleView)` |
 | Unknown | unknown pane; older epoch; another host or server; gate refused (no panes) | nothing | `ErrUnknownAgent` |
 | Not finished | Needs you, Idle (never worked), Working, Background | nothing | `ErrNotFinished` |
 | Bad request | no items; a key twice | nothing | `ErrBadRequest` |
@@ -147,7 +147,16 @@ tests above.
 - `[low]` `[accept]` An undo accepted while the pane's rows are held for a Profile lookup records
   its row and clears the state, but the published view keeps `seen` until the hold releases, as
   every view does during a hold (Story 5.4); the reply carries that view. The release's
-  publication shows it unseen. Documented here, no story needed.
+  publication shows it unseen. Documented here, no story needed. *Superseded by the review
+  below.*
+
+### 2026-10-27 — Code review
+- `[low]` `[patch]` (two reviewers) The undo accepted during a Profile hold, above, returned a
+  successful reply whose view still said `seen` with rank 2, contradicting ADR-0014's reply
+  carrying the resulting views. An undo that would write while the pane's rows are held is now
+  refused as stale, as a mark is; nothing is written or published. Once the hold ends the same
+  undo goes through. `TestAckUndoRefusedDuringProfileHold` covers it and fails without the
+  check.
 - `[low]` `[accept]` `clearStaleSeen` is redundant with `seenNow`'s comparison of the fold's
   `Since` (a mutation removing either leaves the tests green; removing `seedSeen` turns three
   restart and reseed tests red). It is kept so no stale class start lingers on a pane.
@@ -163,7 +172,8 @@ That makes `done` to `idle` keep it (neither class nor `Since` moves) and every 
 it, which is core's rule restated on the engine's in-memory fold; the concurrency test checks the
 two agree with the record. A mark is refused as stale while a hold is in progress or the pane's
 fold may not match the record (`unrecorded`), because the row would name a finish the record could
-fold differently after a restart. The acknowledgements read at a seed is not cancelled by shutdown,
+fold differently after a restart. An undo that would write is refused during a hold too, because
+the held view could not show it. The acknowledgements read at a seed is not cancelled by shutdown,
 for the reason `History` and `Sweep` are not.
 
 ## Verification

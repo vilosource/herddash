@@ -148,8 +148,14 @@ func (e *Engine) acknowledge(req AckRequest) ([]core.AgentView, error) {
 		panes[i] = p
 		if !req.Seen {
 			// An undo writes only for the finish acknowledged now; otherwise
-			// there is nothing to undo.
+			// there is nothing to undo. One that would write while the pane's
+			// rows are held is stale, as a mark is: the view keeps what was
+			// last released until the hold ends, so neither the reply nor a
+			// publication could show the undo.
 			write[i] = seenNow(p) && p.seenSince == it.WaitingSince
+			if write[i] && p.holdRows {
+				stale = append(stale, k)
+			}
 			continue
 		}
 		if p.view.Class != core.ClassFinished || p.view.Background {

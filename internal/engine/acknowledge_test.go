@@ -232,6 +232,42 @@ func TestAckRefusedDuringProfileHold(t *testing.T) {
 	}
 }
 
+// An undo that would write while the pane's rows are held is refused as
+// stale: the held view still shows the Agent seen, so a reply or publication
+// could not show the undo. Once the hold ends the same undo goes through.
+func TestAckUndoRefusedDuringProfileHold(t *testing.T) {
+	setProfileTimeout(t, wait)
+	h, env, st := startProfiledStore(t, oneAgent("claude", core.StatusDone), func(_ *fakeClient, env *fakeEnviron) {
+		env.set(p1PID, claudeVar, "/h/.claude-cldw")
+	})
+	h.rec.expect(t, "agent w1:p1 claude done profile=cldw")
+	h.fake.awaitSubscribe("w1:p1")
+	h.settle()
+	item := itemOf(viewOfP1(t, h))
+	if v, err := h.ack(true, item); err != nil || !v[0].Seen {
+		t.Fatalf("mark: %+v, %v", v, err)
+	}
+	env.hold()
+	h.lifecycle(core.LifecycleEvent{Kind: core.LifecycleAgentDetected, PaneID: "w1:p1", AgentProgram: "claude"})
+	h.awaitProcessCalls(2)
+	seq := h.engine.View().Seq
+	if _, err := h.ack(false, item); !errors.Is(err, ErrStaleView) {
+		t.Fatalf("undo during a hold: %v, want ErrStaleView", err)
+	}
+	h.unchanged(st, seq, 1)
+	if !viewOfP1(t, h).Seen {
+		t.Error("the refused undo cleared seen")
+	}
+	env.unblock()
+	h.settle()
+	if v, err := h.ack(false, item); err != nil || v[0].Seen || v[0].SortKey.ClassRank != 1 {
+		t.Fatalf("undo after the hold: %+v, %v", v, err)
+	}
+	if acks := st.ackList(); len(acks) != 2 || acks[1].Seen() {
+		t.Errorf("acknowledgements %+v, want the mark, then its undo", acks)
+	}
+}
+
 func TestAckRefusedBackground(t *testing.T) {
 	fastBackground(t)
 	kids := newFakeChildren()
