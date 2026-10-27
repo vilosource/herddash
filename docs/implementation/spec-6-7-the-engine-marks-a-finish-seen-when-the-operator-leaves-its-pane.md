@@ -187,6 +187,20 @@ rule removed (`TestFocusFromSnapshot`), `FinishHasRow` forced false
 `missedTurn` keeping the row (`TestFocusMarkAcrossRestartAndMissedTurn`), the disconnect drop
 removed, and it with the ready check (`TestFocusEventBeforeFirstSnapshot`).
 
+### 2026-10-27 — Review findings triaged
+
+- `[low]` `[fixed]` A snapshot read newer than a `pane_focused` still on its way (separate
+  connections) moved focus without a leave, and the event then counted as a repeat, so a real
+  read-then-leave went unmarked. `snapshotFocus` now holds such a move (`focusMove`), and the very
+  next `pane_focused` naming the snapshot's pane judges the leave with the dwell held when the
+  snapshot was applied; any other event, a later snapshot, a reset, a disconnect or a restarted
+  dwell of either pane discards it. ADR-0015 amended in the same change. Tests: three new
+  `TestFocusFromSnapshot` cases; "fresh read before its event" fails without the fix.
+- `[low]` `[defer]` `in_view` toggling redraws a Finished Box whole, recreating its Seen pill, so a
+  keyboard-focused pill (or a Vimium hint on it) is lost on every herdr focus move into or out of
+  that pane. Story 6.8 draws `in_view` and adds `Mark unseen`; its acceptance criteria now require
+  a redraw to keep focus on the same control.
+
 ## Verification
 
 **Commands** (Go 1.26.5 at `$HOME/.local/share/mise/installs/go/1.26.5/bin`, prepended to PATH):

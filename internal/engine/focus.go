@@ -15,7 +15,14 @@ import (
 // views of both panes change (in_view), and publish notes them.
 func (e *Engine) onFocus(id string) {
 	e.focusEvent = e.snapSeq
+	moved := e.focusMoved
+	e.focusMoved = nil
 	if id == e.focusPane {
+		if moved != nil && moved.to == id {
+			// The event for the move a snapshot showed first: its leave.
+			e.log.Debug("focus", "pane", id, "left", moved.from, "dwell", moved.dwell.String(), "after", "snapshot")
+			e.leave(moved.from, moved.dwell)
+		}
 		return
 	}
 	now := e.clock()
@@ -73,6 +80,14 @@ func (e *Engine) leave(id string, dwell time.Duration) {
 	e.noteView(p)
 }
 
+// focusMove is a focus move a snapshot showed before any pane_focused for it
+// arrived: from the pane focused before, with the dwell it had then, to the
+// snapshot's pane.
+type focusMove struct {
+	from, to string
+	dwell    time.Duration
+}
+
 // snapshotFocus applies the focus a snapshot read numbered seq names, id, ""
 // for none (ADR-0015). A read that started before the latest pane_focused
 // arrived is older than that event, and its focus is ignored. Otherwise, with
@@ -81,17 +96,30 @@ func (e *Engine) leave(id string, dwell time.Duration) {
 // later snapshot naming another pane than the one held moves the focus to it
 // the same way. Neither is a leave: only an observed pane_focused is, since a
 // snapshot's focus can move with no navigation (another client's view).
+//
+// But a read can also be newer than a pane_focused still on its way: the
+// snapshot and the lifecycle stream are separate connections. So a later
+// snapshot's move from a held pane is kept as focusMoved, and when the very
+// next pane_focused names the pane it moved to, that event is the move's
+// leave, judged with the dwell the pane left had when the snapshot was
+// applied. Any other pane_focused, a later snapshot, a reset or a restarted
+// dwell of either pane discards it.
 func (e *Engine) snapshotFocus(seq uint64, id string, reset bool) {
 	if e.focusEvent >= seq {
 		return
 	}
+	e.focusMoved = nil
 	if !reset && id == e.focusPane {
 		return
 	}
+	now := e.clock()
 	if id != e.focusPane {
 		e.log.Debug("focus from a snapshot", "pane", id, "was", e.focusPane)
+		if !reset && e.focusPane != "" && id != "" {
+			e.focusMoved = &focusMove{from: e.focusPane, to: id, dwell: now.Sub(e.focusSince)}
+		}
 	}
-	e.focusPane, e.focusSince = id, e.clock()
+	e.focusPane, e.focusSince = id, now
 }
 
 // restartDwell counts the dwell of p's pane from now when it is the focused
@@ -100,5 +128,8 @@ func (e *Engine) snapshotFocus(seq uint64, id string, reset bool) {
 func (e *Engine) restartDwell(p *pane) {
 	if e.focusPane != "" && p.id == e.focusPane {
 		e.focusSince = e.clock()
+	}
+	if m := e.focusMoved; m != nil && (p.id == m.from || p.id == m.to) {
+		e.focusMoved = nil
 	}
 }

@@ -564,6 +564,57 @@ func TestFocusFromSnapshot(t *testing.T) {
 			t.Errorf("w1:p3 left 3 s after a snapshot named it: %+v, want seen", v)
 		}
 	})
+	// The read is newer than a pane_focused still on its way, the two
+	// arriving on separate connections: the event that confirms the move
+	// the snapshot showed is the leave, with the dwell held when the
+	// snapshot was applied. Only the very next event can confirm it.
+	t.Run("fresh read before its event", func(t *testing.T) {
+		h, _, st, clock := startFocus(t, snap, nil)
+		h.focusOn("w1:p2")
+		clock.advance(10 * time.Second)
+		h.fake.setSnapshot(focused(snap, "w1:p3"))
+		h.reconcileRead()
+		if n := len(st.ackList()); n != 0 {
+			t.Fatalf("%d acknowledgements before the event, want none", n)
+		}
+		h.focusOn("w1:p3")
+		if v := h.viewOf("w1:p2"); !v.Seen || v.InView {
+			t.Errorf("w1:p2 %+v, want seen, not in view: the event confirms the leave", v)
+		}
+		if acks := focusAcks(st); len(acks) != 1 || acks[0].Key().PaneID != "w1:p2" {
+			t.Errorf("acknowledgements %+v, want one herdr_focus mark of w1:p2", acks)
+		}
+		if v := h.viewOf("w1:p3"); !v.InView || v.Seen {
+			t.Errorf("w1:p3 %+v, want in view, not seen", v)
+		}
+	})
+	t.Run("another event first", func(t *testing.T) {
+		h, _, st, clock := startFocus(t, snap, nil)
+		h.focusOn("w1:p2")
+		clock.advance(10 * time.Second)
+		h.fake.setSnapshot(focused(snap, "w1:p3"))
+		h.reconcileRead()
+		h.focusOn("w1:p1") // a leave of w1:p3, after no dwell; w1:p2's move is unconfirmed
+		h.focusOn("w1:p3")
+		if v := h.viewOf("w1:p2"); v.Seen {
+			t.Errorf("w1:p2 %+v, want not seen", v)
+		}
+		if n := len(st.ackList()); n != 0 {
+			t.Errorf("%d acknowledgements, want none", n)
+		}
+	})
+	t.Run("short dwell before the read", func(t *testing.T) {
+		h, _, st, clock := startFocus(t, snap, nil)
+		h.focusOn("w1:p2")
+		clock.advance(seenDwell - time.Second)
+		h.fake.setSnapshot(focused(snap, "w1:p3"))
+		h.reconcileRead()
+		clock.advance(10 * time.Second)
+		h.focusOn("w1:p3")
+		if n := len(st.ackList()); n != 0 {
+			t.Errorf("%d acknowledgements, want none: w1:p2 had %s when the read moved focus", n, seenDwell-time.Second)
+		}
+	})
 	t.Run("stale read", func(t *testing.T) {
 		h, _, st, _ := startFocus(t, snap, nil)
 		h.focusOn("w1:p2")

@@ -365,6 +365,9 @@ type Engine struct {
 	focusPane  string
 	focusSince time.Time
 	focusEvent uint64
+	// focusMoved is the leave a later snapshot's focus may stand for, held
+	// until the next pane_focused confirms or discards it (snapshotFocus).
+	focusMoved *focusMove
 }
 
 // pane is one tracked Agent pane.
@@ -964,7 +967,7 @@ func (e *Engine) disconnect() {
 	e.reconcileFrom = 0
 	// A focus move while the lifecycle stream is down is missed, and a
 	// missed move never marks: the next connection starts counting afresh.
-	e.focusPane, e.focusSince = "", time.Time{}
+	e.focusPane, e.focusSince, e.focusMoved = "", time.Time{}, nil
 }
 
 func (e *Engine) loop(ctx context.Context) {
