@@ -1,6 +1,7 @@
 # Board design (Story 3.6)
 
-**Status: approved 2026-10-20, amended 2026-10-21.** On 2026-10-21 the operator approved, from a
+**Status: approved 2026-10-20, amended 2026-10-21 and 2026-10-27 (ADR-0014, the acknowledgement
+controls, from a mock the operator approved with their live Board).** On 2026-10-21 the operator approved, from a
 mock of their live Board, a layout that answers their first question, which workspace, tab and
 pane to go to: Needs you alone on top, every other Agent in its workspace's group, and each Box
 leading with its tab and pane position. This document describes the amended Board; where it
@@ -53,7 +54,9 @@ change a Box's height. Empty fields keep their row. The rows, in reading order:
    more than one pane, a **pane-position badge** sits right-aligned on the same line: `left`,
    `right`, `middle`, `top`, `bottom`, or a pair such as `top-right`, computed by the Daemon from
    the tab's layout rectangles (`core.PanePositions`). It is part of the Box's location, with the
-   workspace and tab, and the only thing that tells two Agents in one tab apart.
+   workspace and tab, and the only thing that tells two Agents in one tab apart. *Added
+   2026-10-27, ADR-0014:* a Finished Box, and no other kind, ends this line with its **Seen
+   pill** (see "Acknowledgement controls"), after the badge when there is one.
 2. **The workspace or the directory.** In the Needs you zone, the workspace (`0.875rem`,
    semibold). In a workspace group, whose heading already names the workspace, the directory
    (monospace, faint), truncated from the start (`…sted/path/to/the-project-name`) so the last
@@ -69,7 +72,9 @@ change a Box's height. Empty fields keep their row. The rows, in reading order:
    (`codex`), in the quiet meta style; it is the part that gives way with an ellipsis in a narrow
    Box. On the right, in bold, the **class label** (uppercase text) and the **Waiting Time**,
    which is never truncated. Class Working with a Status other than `working` reads `IDLE`. An
-   Agent the Daemon marks `background` reads `BACKGROUND`, whatever its class. *Added
+   Agent the Daemon marks `background` reads `BACKGROUND`, whatever its class. *Added 2026-10-27,
+   ADR-0014:* a Finished Agent the Daemon marks `seen` reads `SEEN`, unless it is Background,
+   which comes first. *Added
    2026-10-21, ADR-0009:* the label carries the AgentView's `background_tasks` count: a Working
    Box with tasks open reads `WORKING · N bg`, a Background Box with more than one reads
    `BACKGROUND · N` (`BACKGROUND` alone for one); the count, set in the label's colour, keeps its
@@ -89,7 +94,8 @@ the layout and heights are exactly as above.
 The Box's hover `title` and its accessible name both carry everything, untruncated: workspace and
 tab, pane position, Context Line (or, *added 2026-10-22 for ADR-0010*, the full recap in its
 place), directory, heading, class, its background tasks in words
-("2 background tasks", added 2026-10-21 for ADR-0009) and Waiting Time. The rows carry no
+("2 background tasks", added 2026-10-21 for ADR-0009) and Waiting Time. A seen Box's class in
+its accessible name is `Seen` (ADR-0014). The rows carry no
 titles of their own, so hovering anywhere on the Box shows it all.
 
 *Changed 2026-10-21 at the operator's request, three times.* First, workspace › tab moved from
@@ -104,7 +110,8 @@ read `IDLE`, and the Box shrank to 8.25rem. `docs/design/board.html` predates al
 **Order.** Boxes arrive sorted by `sort_key`, `[zone, group, class_rank, start, key]`. Zone 0 is
 Needs you alone, longest wait first; zone 1 is every other Agent, grouped by workspace position
 and ranked Finished 1, Idle 2, Background 3, Working 4, Unknown 5, each class newest first, so a
-zone-1 `start` is the negated class start (operator decision 2026-10-21, which replaced Working
+zone-1 `start` is the negated class start; a seen Agent (ADR-0014, 2026-10-27) ranks 2 with Idle,
+by the same newest-first start, so it moves down among the Idle Boxes (operator decision 2026-10-21, which replaced Working
 1, Background 2, Finished 3, Idle 4, Unknown 5). A workspace herdr did not position gets its own
 group and header after the positioned ones (Story 5.13); such groups come in a stable but
 arbitrary order, a hash of the workspace id, each headed by its label or `(unlisted workspace)`.
@@ -144,15 +151,26 @@ Needs you fill moved from red-orange to red so it cannot be mistaken for amber.
   over Working for a `working` Agent whose main turn has ended while background tasks run. The dash, the
   label and its place right before Working carry it without colour.
 
+- **Seen is grey.** *Added 2026-10-27, ADR-0014.* A Finished Agent the operator marked seen
+  (the AgentView's `seen: true`, decided by the Daemon and never derived by the Board) has a 6px
+  leading edge in `--border-quiet`, flush with the page, a `SEEN` label in `--ink-faint`, its
+  tab and Context Line in `--ink-muted`, and its Waiting Time in `--ink-faint` at weight 600, as
+  Idle's: it is dealt with, so it recedes. It carries no Seen pill. Background takes precedence
+  over it.
+
 ## Zones and workspace groups
 
 *Amended 2026-10-21 (operator decision).* The top zone holds **Needs you alone**, longest wait
 first, flat across workspaces, under a plain visible "Needs you" heading. Below it, one group per
 workspace in herdr's workspace order (`headers` gives where each starts), each holding that
-workspace's Finished, then Idle, then Background, then Working, then Unknown Agents, each class
-most recent first: what to deal with first comes first (operator decision 2026-10-21). A group's
-heading is the workspace label, large and bold (`1.375rem`, 800), followed by its counts in muted
-meta text in the same order, `1 finished · 3 idle · 1 background · 2 working`, leaving out zeros. Every heading but the first on the page
+workspace's Finished, then Idle (with Seen among them, by the Daemon's order, ADR-0014), then
+Background, then Working, then Unknown Agents, each class most recent first: what to deal with
+first comes first (operator decision 2026-10-21). A group's heading is the workspace label, large
+and bold (`1.375rem`, 800), followed by its counts in muted meta text in the same order,
+`1 finished · 3 idle · 2 seen · 1 background · 2 working`, leaving out zeros; a seen Agent counts
+as seen, not finished, so the finished count is the results not yet read (amended 2026-10-27,
+ADR-0014). After the counts, at the right, the heading may show its bulk mark (see
+"Acknowledgement controls"). Every heading but the first on the page
 draws a 1px rule above it. The page adds no other dividers.
 
 The browser tab's title carries the Needs you count: `(2) herddash · Needs you` when two Agents
@@ -226,6 +244,41 @@ comes from another Daemon run (`run_id`), such as a Daemon restarted onto a new 
 reloads itself, so an open tab never draws new data with old code. A reconnect to the same run
 does not reload.
 
+## Acknowledgement controls
+
+*Added 2026-10-27, ADR-0014, from the mock the operator approved with their live Board (Story
+6.4).* The Board's only controls. They are ordinary buttons, reachable by Tab and by Vimium's
+link hints; **there is no keyboard shortcut**. They act on herddash's own acknowledgement and
+never on herdr: no focus, nothing sent to the pane.
+
+- **The Seen pill.** Every Finished Box, and no other kind, ends its first line with a pill,
+  `✓ Seen` (`.ack`): `--text-label`, weight 700, in `--finished-accent` with a 1px
+  `--finished-edge` border, radius 999px; on hover it inverts to a `--finished-edge` fill and
+  `--surface` text. Its title is "Mark seen: you have read this Agent's result" and its
+  accessible name "Mark <tab> seen". A click posts the Box's exact finish (its AgentKey and the
+  `waiting_since` it shows) to `/api/agents/{host}/{server}/{epoch}/{pane}/seen`.
+- **The seen Box.** The Board changes nothing optimistically: when the stream's `agent` event
+  arrives with `seen` true and the Daemon's rank 2, the Box turns grey, reads `SEEN` (see
+  "Emphasis by class"), loses its pill, moves down among the Idle Boxes of its group, and the
+  heading's finished count drops by one and shows `N seen`. It stays seen until the Agent's next
+  Transition out of that finish (a new turn, Needs you, a new Agent in the pane); herdr's own
+  `done` to `idle` within the finish keeps it. The next finish is a Finished Box with its pill.
+- **The heading's bulk mark.** A workspace heading with **2 or more** Finished Boxes shows
+  `✓ Mark N finished seen` (`.ack-all`) after its counts, at the right: a pill in
+  `--finished-accent` with a 1px `--border` border that turns `--finished-edge` on hover; its
+  accessible name is "Mark N finished Agents in <workspace> seen". With fewer it is hidden. A
+  click posts exactly the Finished Boxes the group shows, each by its exact finish, to
+  `/api/seen`, all or nothing; never "everything in this workspace".
+- **The Undo bar.** After a mark succeeds, a bar (`.toast`, `role="status"`) fixed at the bottom
+  centre, `--ink` background and `--surface` text, fades in over 150 ms with "Marked <tab> seen"
+  or "Marked N Agents seen" and an `Undo` button, and goes after **6 s**. Undo posts the same
+  items to the matching `unseen` route and closes the bar. A new mark replaces the bar and its
+  timer. A refused mark shows the bar for 6 s with no Undo: "It changed before it was marked;
+  nothing was marked" (409), "herddash is not recording; nothing was marked" (503), else "Could
+  not mark it seen". A refusal leaves the Box Finished, as it was.
+- **Disabled** while its request is in flight, and every control while the Boxes are dimmed or
+  hidden: a Box the Board cannot vouch for is not one to mark.
+
 ## Responsive behaviour
 
 The layout runs from a side window of about 320px, with one column and a 16px gutter, to a wide
@@ -242,14 +295,18 @@ Each Box is focusable and shows a 3px `--focus` outline offset outside it, and t
 toolbar's controls show the same outline. Boxes are focusable so that keyboard and screen-reader
 users can read a Box in full. Each Box's accessible name carries its workspace and tab, pane position, full
 Context Line (or the full recap in its place, ADR-0010), directory, heading, class label and Waiting Time ("at least" for a lower bound),
-and it is kept current as the time ticks. Focusing a Box does nothing else. Needs you is conveyed in
+and it is kept current as the time ticks. Focusing a Box does nothing else. The acknowledgement
+controls (ADR-0014) are buttons with accessible names; a Box redrawn without its pill keeps
+focus, and the Undo bar is a status region. Needs you is conveyed in
 text, not only colour.
 
 ## Deliberately absent (NFR10, SM-C1)
 
-The Board has no controls: no focus, send, kill or open-in-terminal action, no filters, no
-search and no settings. It shows no pane output, excerpts or scrollback, and no second data type
+The Board has no controls but the acknowledgement controls (amended 2026-10-27, ADR-0014: the
+Seen pill, the heading's bulk mark and the Undo bar, none of which tells herdr anything): no
+focus, send, kill or open-in-terminal action, no filters, no search, no settings and no keyboard
+shortcut. It shows no pane output, excerpts or scrollback, and no second data type
 per Box: no history or charts. The only counts are each workspace group's heading counts
 (amended 2026-10-21). It has no footer. The Board is the title bar (ADR-0013, 2026-10-26), Boxes,
-the Needs you and workspace headings and the two strips. Anything more needs an ADR superseding
-ADR-0003.
+the Needs you and workspace headings, the two strips and the Undo bar. Anything more needs an ADR
+superseding ADR-0003 and ADR-0014.

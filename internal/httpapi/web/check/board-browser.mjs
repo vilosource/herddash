@@ -4,7 +4,9 @@
 // strips (Story 3.9), including a hung Daemon (Story 5.11): serve is
 // SIGSTOPped with the stream left open, the Board must show the lost strip
 // and dim its Boxes once STREAM_SILENCE_MS passes, and clear both after
-// SIGCONT. Not embedded. CI's board-browser job runs it on ubuntu against the
+// SIGCONT, and the acknowledgement controls (ADR-0014, Story 6.4): the Seen
+// pill, the heading's bulk mark, the Undo bar, Seen across a status change
+// and a restart, and a page on another origin refused. Not embedded. CI's board-browser job runs it on ubuntu against the
 // runner's Google Chrome (Story 5.6); it also runs by hand:
 //
 //   go build -o /tmp/herddash ./cmd/herddash
@@ -22,9 +24,10 @@
 import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, existsSync } from "node:fs";
 import { createServer } from "node:net";
+import { createServer as createHTTPServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { STREAM_SILENCE_MS } from "../order.mjs";
+import { ACK_TOAST_MS, STREAM_SILENCE_MS, keyId, sortViews } from "../order.mjs";
 
 const binary = process.argv[2];
 if (!binary) {
@@ -87,9 +90,12 @@ const SNAPSHOT = {
   },
 };
 
-function fakeHerdr(path, version) {
+// fakeHerdr answers with snapshot() (SNAPSHOT by default) and keeps each
+// pane's status subscription, so push can send that pane a status change.
+function fakeHerdr(path, version, snapshot = () => SNAPSHOT) {
   let server = null;
   const conns = new Set();
+  const statusSubs = new Map(); // pane id -> its subscription's connections
   const handle = (conn) => {
     conns.add(conn);
     conn.on("close", () => conns.delete(conn));
@@ -109,20 +115,34 @@ function fakeHerdr(path, version) {
           reply({ type: "pong", version, protocol: 22 });
           break;
         case "session.snapshot":
-          reply(SNAPSHOT);
+          reply(snapshot());
           break;
         case "pane.process_info":
           reply({ type: "pane_process_info", process_info: { pane_id: req.params.pane_id, shell_pid: 1, foreground_processes: [] } });
           break;
-        case "events.subscribe":
+        case "events.subscribe": {
           reply({ type: "subscription_started" }); // held open until the client closes it
+          const sub = (req.params?.subscriptions || []).find((x) => x.type === "pane.agent_status_changed");
+          if (sub) {
+            if (!statusSubs.has(sub.pane_id)) statusSubs.set(sub.pane_id, new Set());
+            statusSubs.get(sub.pane_id).add(conn);
+            conn.on("close", () => statusSubs.get(sub.pane_id)?.delete(conn));
+          }
           break;
+        }
         default:
           conn.end();
       }
     });
   };
   return {
+    // subscribed reports whether pane has a live status subscription.
+    subscribed: (pane) => (statusSubs.get(pane)?.size || 0) > 0,
+    // push sends pane's status subscriptions a status change.
+    push(pane, status, workspace) {
+      const line = JSON.stringify({ data: { agent: "claude", agent_status: status, pane_id: pane, workspace_id: workspace }, event: "pane.agent_status_changed" });
+      for (const c of statusSubs.get(pane) || []) c.write(line + "\n");
+    },
     start() {
       return new Promise((r) => {
         server = createServer(handle);
@@ -228,7 +248,7 @@ const SNAP = `JSON.stringify({
 // Each Box in document order: where it sits and what its four rows say.
 const BOXES = `JSON.stringify({
   title: document.title,
-  headings: [...document.querySelectorAll("#board .group-head")].map((h) => h.textContent),
+  headings: [...document.querySelectorAll("#board .group-head")].map((h) => h.querySelector(".group-label").textContent + (h.querySelector(".count")?.textContent ?? "")),
   boxes: [...document.querySelectorAll("#board .box")].map((b) => ({
     kind: b.className,
     inGroup: !!b.closest(".group"),
@@ -241,6 +261,352 @@ const BOXES = `JSON.stringify({
     titleIsLabel: b.title !== "" && b.title === b.getAttribute("aria-label"),
   })),
 })`;
+
+// ---- Acknowledgement (ADR-0014, Story 6.4) ----
+
+// ACK_PANES are the acknowledgement check's Agents, one tab each: in
+// workspace probe a Needs you, a Working, three Finished and an Idle Agent;
+// in workspace solo one Finished Agent, so its heading has no bulk mark.
+const ACK_PANES = [
+  { pane: "w1:p1", ws: "w1", tab: "1: build", status: "working" },
+  { pane: "w1:p2", ws: "w1", tab: "2: review", status: "blocked" },
+  { pane: "w1:p3", ws: "w1", tab: "3: api", status: "done" },
+  { pane: "w1:p4", ws: "w1", tab: "4: docs", status: "done" },
+  { pane: "w1:p5", ws: "w1", tab: "5: tests", status: "done" },
+  { pane: "w1:p6", ws: "w1", tab: "6: notes", status: "idle" },
+  { pane: "w2:p1", ws: "w2", tab: "1: solo", status: "done" },
+];
+
+// ackSnapshot is herdr's snapshot of ACK_PANES at their current statuses.
+function ackSnapshot() {
+  const ws = { w1: "probe", w2: "solo" };
+  return {
+    type: "session_snapshot",
+    snapshot: {
+      version: "0.9.5",
+      protocol: 22,
+      workspaces: Object.entries(ws).map(([id, label], i) => {
+        const n = ACK_PANES.filter((p) => p.ws === id).length;
+        return { workspace_id: id, number: i + 1, label, focused: i === 0, pane_count: n, tab_count: n, active_tab_id: id + ":t1", agent_status: "working" };
+      }),
+      tabs: ACK_PANES.map((p, i) => ({
+        tab_id: p.pane.replace(":p", ":t"), workspace_id: p.ws, number: i + 1, label: p.tab, focused: i === 0, pane_count: 1, agent_status: p.status,
+      })),
+      panes: ACK_PANES.map((p, i) => ({
+        pane_id: p.pane, terminal_id: "t-" + p.pane, workspace_id: p.ws, tab_id: p.pane.replace(":p", ":t"), focused: i === 0,
+        cwd: "/srv/" + p.pane.replace(":", "-"), agent: "claude", agent_status: p.status, revision: 0,
+      })),
+      layouts: ACK_PANES.map((p) => ({
+        workspace_id: p.ws, tab_id: p.pane.replace(":p", ":t"), zoomed: false, focused_pane_id: p.pane,
+        area: { x: 0, y: 0, width: 120, height: 40 },
+        panes: [{ pane_id: p.pane, focused: true, rect: { x: 0, y: 0, width: 120, height: 40 } }],
+        splits: [],
+      })),
+      agents: ACK_PANES.map((p, i) => ({
+        terminal_id: "t-" + p.pane, agent: "claude", agent_status: p.status, workspace_id: p.ws, tab_id: p.pane.replace(":p", ":t"),
+        pane_id: p.pane, focused: i === 0, state_change_seq: i + 1, revision: 0,
+      })),
+    },
+  };
+}
+
+// ACK_BOARD is every Box and heading as the page draws them now.
+const ACK_BOARD = `JSON.stringify({
+  stale: document.getElementById("board").classList.contains("board--stale"),
+  boxes: [...document.querySelectorAll("#board .box")].map((b) => ({
+    pane: JSON.parse(b.dataset.key)[3],
+    key: b.dataset.key,
+    kind: b.className.replace("box box--", ""),
+    group: b.closest(".group")?.querySelector(".group-label")?.textContent ?? null,
+    label: b.getAttribute("aria-label"),
+    cls: b.querySelector(".class")?.innerText,
+    acks: b.querySelectorAll("button.ack").length,
+    ackText: b.querySelector("button.ack")?.textContent ?? null,
+    ackAria: b.querySelector("button.ack")?.getAttribute("aria-label") ?? null,
+    ackTitle: b.querySelector("button.ack")?.title ?? null,
+    ackLast: b.querySelector(".where")?.lastElementChild?.matches("button.ack") ?? false,
+    ackDisabled: b.querySelector("button.ack")?.disabled ?? null,
+    edge: getComputedStyle(b).borderLeftColor,
+    edgeWidth: getComputedStyle(b).borderLeftWidth,
+  })),
+  heads: [...document.querySelectorAll("#board .group")].map((g) => {
+    const bulk = g.querySelector(".group-head button.ack-all");
+    return {
+      label: g.querySelector(".group-label").textContent,
+      counts: g.querySelector(".group-head .count").textContent,
+      bulk: bulk ? { shown: !bulk.hidden && bulk.getBoundingClientRect().width > 0, text: bulk.textContent,
+        aria: bulk.getAttribute("aria-label"), afterCounts: bulk.previousElementSibling?.classList.contains("count"), disabled: bulk.disabled } : null,
+    };
+  }),
+  toast: (() => {
+    const t = document.querySelector(".toast");
+    if (!t) return null;
+    const u = t.querySelector(".toast-undo");
+    return { on: t.classList.contains("toast--on"), role: t.getAttribute("role"), text: t.querySelector(".toast-text")?.textContent,
+      undo: !!u && !u.hidden, position: getComputedStyle(t).position, visible: getComputedStyle(t).visibility === "visible" };
+  })(),
+  tokens: (() => {
+    const p = document.createElement("div");
+    document.body.appendChild(p);
+    const c = (v) => { p.style.color = "var(" + v + ")"; return getComputedStyle(p).color; };
+    const out = { quiet: c("--border-quiet"), finished: c("--finished-edge") };
+    p.remove();
+    return out;
+  })(),
+})`;
+
+async function ackChecks(browser) {
+  const sock = join(root, "ack.sock");
+  const statuses = new Map(ACK_PANES.map((p) => [p.pane, p]));
+  const herdr = fakeHerdr(sock, "0.9.5", ackSnapshot);
+  await herdr.start();
+  let d = serve("ack", sock, "127.0.0.1:0");
+  const addr = await d.addr();
+  const base = "http://" + addr;
+  const board = async () => JSON.parse(await browser.eval(ACK_BOARD));
+  const boardUntil = (what, cond, ms) =>
+    until(what, async () => {
+      const b = await board();
+      return cond(b) ? b : null;
+    }, ms);
+  const box = (b, pane) => b.boxes.find((x) => x.pane === pane);
+  const head = (b, label) => b.heads.find((h) => h.label === label);
+  const state = async () => JSON.parse(await (await fetch(base + "/api/state")).text());
+  const viewOf = async (pane) => (await state()).agents.find((a) => a.key.pane_id === pane);
+  const click = (pane, sel) =>
+    browser.eval(`(() => {
+      const b = [...document.querySelectorAll("#board .box")].find((x) => JSON.parse(x.dataset.key)[3] === ${JSON.stringify(pane)});
+      const btn = b?.querySelector(${JSON.stringify(sel)});
+      if (!btn || btn.disabled) return false;
+      btn.click();
+      return true;
+    })()`);
+  const clickIn = (label, sel) =>
+    browser.eval(`(() => {
+      const g = [...document.querySelectorAll("#board .group")].find((x) => x.querySelector(".group-label").textContent === ${JSON.stringify(label)});
+      const btn = g?.querySelector(${JSON.stringify(sel)});
+      if (!btn || btn.disabled || btn.hidden) return false;
+      btn.click();
+      return true;
+    })()`);
+  // push changes a pane's status at the fake herdr, for its snapshot and its
+  // status subscription alike.
+  const push = async (pane, status) => {
+    await until(pane + "'s status subscription", () => herdr.subscribed(pane));
+    const p = statuses.get(pane);
+    p.status = status;
+    herdr.push(pane, status, p.ws);
+  };
+  try {
+    await browser.open(base + "/");
+    let b = await boardUntil("the acknowledgement Board", (x) => x.boxes.length === ACK_PANES.length && !x.stale);
+    // Every status subscription is up before anything is marked, so no
+    // Profile lookup or resync is still settling.
+    await until("every status subscription", () => ACK_PANES.every((p) => herdr.subscribed(p.pane)));
+
+    const finished = b.boxes.filter((x) => x.kind === "finished");
+    check(
+      "Seen pill on every Finished Box, at the end of its first line, and on no other kind",
+      finished.length === 4 &&
+        b.boxes.every((x) => (x.kind === "finished" ? x.acks === 1 && x.ackLast : x.acks === 0)) &&
+        ["needs_you", "working", "idle"].every((k) => b.boxes.some((x) => x.kind === k)),
+      b.boxes,
+    );
+    const docs0 = box(b, "w1:p4");
+    check(
+      "Seen pill: ✓ Seen, its title and an accessible name naming the tab",
+      docs0.ackText === "✓Seen" && docs0.ackAria === "Mark 4: docs seen" && docs0.ackTitle === "Mark seen: you have read this Agent's result",
+      docs0,
+    );
+    check(
+      "heading: probe offers ✓ Mark 3 finished seen after its counts; solo, with one, offers none",
+      head(b, "probe").counts === "3 finished · 1 idle · 1 working" && head(b, "probe").bulk.shown && head(b, "probe").bulk.afterCounts &&
+        head(b, "probe").bulk.text === "✓ Mark 3 finished seen" && head(b, "probe").bulk.aria === "Mark 3 finished Agents in probe seen" &&
+        head(b, "solo").counts === "1 finished" && head(b, "solo").bulk && !head(b, "solo").bulk.shown,
+      b.heads,
+    );
+
+    // Background (ADR-0009) takes precedence, seen or not; the fake herdr has
+    // no Claude process, so the Daemon's state is sent through a stand-in
+    // EventSource with background set on two Finished Agents, one seen.
+    {
+      const sent = await state();
+      for (const a of sent.agents) {
+        if (a.key.pane_id === "w1:p3") a.background = true;
+        if (a.key.pane_id === "w1:p5") Object.assign(a, { background: true, seen: true });
+      }
+      const { result: added } = await browser.send("Page.addScriptToEvaluateOnNewDocument", {
+        source: `window.EventSource = class extends EventTarget {
+          static CLOSED = 2;
+          readyState = 1;
+          constructor() {
+            super();
+            window.standIn = (window.standIn || 0) + 1;
+            setTimeout(() => this.dispatchEvent(new MessageEvent("state", { data: ${JSON.stringify(JSON.stringify(sent))}, lastEventId: "1" })), 0);
+          }
+          close() {}
+        };`,
+      });
+      await browser.open(base + "/");
+      const x = await boardUntil("the stand-in Background Boxes", (y) => y.boxes.filter((z) => z.kind === "background").length === 2, 5000);
+      check(
+        "Background Boxes, a seen one included, carry no Seen pill",
+        x.boxes.filter((z) => z.kind === "background").every((z) => z.acks === 0 && /Background/.test(z.label)) &&
+          head(x, "probe").counts === "1 finished · 1 idle · 2 background · 1 working" && !head(x, "probe").bulk.shown,
+        x,
+      );
+      await browser.send("Page.removeScriptToEvaluateOnNewDocument", { identifier: added.identifier });
+      await browser.open(base + "/");
+      await boardUntil("the real stream back", (y) => y.boxes.length === ACK_PANES.length && !y.stale && y.boxes.some((z) => z.kind === "finished"));
+    }
+
+    // One Box marked seen with its pill.
+    const before = await viewOf("w1:p4");
+    check("click on the Seen pill is accepted", await click("w1:p4", "button.ack"), null);
+    b = await boardUntil("4: docs drawn Seen", (x) => box(x, "w1:p4")?.kind === "seen" && x.toast?.on);
+    const docs = box(b, "w1:p4");
+    const after = await viewOf("w1:p4");
+    check(
+      "marked: the Box is box--seen, labelled SEEN, its accessible name says Seen, no pill",
+      docs.cls === "SEEN" && /, Seen, /.test(docs.label) && !/Finished/.test(docs.label) && docs.acks === 0,
+      docs,
+    );
+    check(
+      "marked: the Daemon recorded it (seen, class finished, rank 2, the same waiting_since)",
+      after.seen === true && after.attention_class === "finished" && after.sort_key[2] === 2 && after.waiting_since === before.waiting_since,
+      { before, after },
+    );
+    check(
+      "marked: the .box--seen rule draws its quiet 6px edge, not Finished's blue",
+      docs.edge === b.tokens.quiet && docs.edge !== b.tokens.finished && docs.edgeWidth === "6px",
+      { docs, tokens: b.tokens },
+    );
+    {
+      const probe = b.boxes.filter((x) => x.group === "probe");
+      const kinds = probe.map((x) => x.kind);
+      const want = sortViews((await state()).agents)
+        .filter((v) => v.workspace === "probe" && v.sort_key[0] !== 0)
+        .map((v) => keyId(v.key));
+      check(
+        "marked: the Box moved after the group's Finished Boxes, among its Idle, in the Daemon's order",
+        JSON.stringify(probe.map((x) => x.key)) === JSON.stringify(want) &&
+          kinds.lastIndexOf("finished") < kinds.indexOf("seen") &&
+          kinds.indexOf("seen") < kinds.indexOf("working") &&
+          Math.abs(kinds.indexOf("seen") - kinds.indexOf("idle")) === 1,
+        { kinds, want, got: probe.map((x) => x.key) },
+      );
+    }
+    check(
+      "marked: the heading drops one finished, shows 1 seen, and offers 2",
+      head(b, "probe").counts === "2 finished · 1 idle · 1 seen · 1 working" && head(b, "probe").bulk.text === "✓ Mark 2 finished seen",
+      b.heads,
+    );
+    check(
+      "marked: the Undo bar, fixed, role status, says Marked 4: docs seen with an Undo",
+      b.toast.on && b.toast.visible && b.toast.role === "status" && b.toast.position === "fixed" && b.toast.text === "Marked 4: docs seen" && b.toast.undo,
+      b.toast,
+    );
+
+    // Undo returns it.
+    const undone = await browser.eval(`(() => { const u = document.querySelector(".toast-undo"); if (!u || u.disabled) return false; u.click(); return true; })()`);
+    b = await boardUntil("4: docs back to Finished", (x) => box(x, "w1:p4")?.kind === "finished");
+    check(
+      "Undo: the bar closes and the Box is Finished again, with its pill and the heading's 3",
+      undone && !b.toast.on && box(b, "w1:p4").acks === 1 && head(b, "probe").counts === "3 finished · 1 idle · 1 working" &&
+        (await viewOf("w1:p4")).seen === false,
+      b,
+    );
+
+    // Marked again: the bar goes by itself after 6 s; the Box stays seen.
+    await click("w1:p4", "button.ack");
+    await boardUntil("the Undo bar again", (x) => x.toast?.on && box(x, "w1:p4")?.kind === "seen");
+    const shownAt = Date.now();
+    b = await boardUntil("the Undo bar to go", (x) => !x.toast.on, ACK_TOAST_MS + 4000);
+    const shown = Date.now() - shownAt;
+    check("the Undo bar is gone after 6 s, the Box still seen", shown > ACK_TOAST_MS - 1500 && box(b, "w1:p4").kind === "seen", { shown, toast: b.toast });
+
+    // The heading's bulk mark: exactly the two unseen Finished Boxes.
+    check("bulk: the heading's button is accepted", await clickIn("probe", "button.ack-all"), null);
+    b = await boardUntil("both marked by the heading", (x) => box(x, "w1:p3")?.kind === "seen" && box(x, "w1:p5")?.kind === "seen" && x.toast?.on);
+    {
+      const views = (await state()).agents;
+      const seen = views.filter((v) => v.seen).map((v) => v.key.pane_id).sort();
+      check(
+        "bulk: marks exactly the group's Finished Agents, the bar says Marked 2 Agents seen",
+        JSON.stringify(seen) === JSON.stringify(["w1:p3", "w1:p4", "w1:p5"]) && b.toast.text === "Marked 2 Agents seen" && b.toast.undo,
+        { seen, toast: b.toast },
+      );
+    }
+    check(
+      "bulk: the heading now counts 3 seen and its button is hidden; solo is untouched",
+      head(b, "probe").counts === "1 idle · 3 seen · 1 working" && !head(b, "probe").bulk.shown &&
+        box(b, "w2:p1").kind === "finished" && box(b, "w2:p1").acks === 1,
+      b.heads,
+    );
+
+    // A new turn ends the acknowledgement; the next finish is Finished.
+    await push("w1:p4", "working");
+    b = await boardUntil("4: docs working", (x) => box(x, "w1:p4")?.kind === "working");
+    check("a seen Agent that goes working is Working, without a pill", box(b, "w1:p4").acks === 0, box(b, "w1:p4"));
+    await push("w1:p4", "done");
+    b = await boardUntil("4: docs finished again", (x) => box(x, "w1:p4")?.kind === "finished");
+    check(
+      "and when it finishes again it is a Finished Box with its pill",
+      box(b, "w1:p4").acks === 1 && head(b, "probe").counts === "1 finished · 1 idle · 2 seen · 1 working",
+      b,
+    );
+
+    // A page on another origin (another loopback port) cannot mark it.
+    {
+      const v = await viewOf("w1:p4");
+      const target = base + "/api/agents/" + [v.key.host, v.key.server, String(v.key.epoch), v.key.pane_id].map(encodeURIComponent).join("/") + "/seen";
+      const page = `<!doctype html><meta charset="utf-8"><title>other</title><script>
+        fetch(${JSON.stringify(target)}, { method: "POST", headers: { "Content-Type": "application/json", "X-Herddash-Write": "1" },
+          body: JSON.stringify({ waiting_since: ${v.waiting_since} }) })
+          .then((r) => { window.result = { status: r.status }; }, (e) => { window.result = { error: String(e) }; });
+      </script>`;
+      const other = createHTTPServer((_, res) => res.writeHead(200, { "Content-Type": "text/html" }).end(page));
+      await new Promise((r) => other.listen(0, "127.0.0.1", r));
+      try {
+        await browser.open("http://127.0.0.1:" + other.address().port + "/");
+        const result = await until("the other origin's request", async () => browser.eval("window.result"), 10000);
+        const after = await viewOf("w1:p4");
+        check(
+          "a page on another loopback origin cannot POST to the per-Agent route (no preflight answer, or 403)",
+          (result.error !== undefined || result.status === 403) && after.seen === false && after.waiting_since === v.waiting_since,
+          { result, after },
+        );
+      } finally {
+        await new Promise((r) => other.close(r));
+      }
+      await browser.open(base + "/");
+      b = await boardUntil("the Board after the other origin", (x) => x.boxes.length === ACK_PANES.length && !x.stale);
+      check("and the Board still shows that Box Finished", box(b, "w1:p4").kind === "finished" && box(b, "w1:p4").acks === 1, box(b, "w1:p4"));
+    }
+
+    // While the Daemon is gone the Boxes dim and every control is disabled;
+    // after serve restarts on the same data directory, Seen is still Seen.
+    await d.stop();
+    b = await boardUntil("the Boxes dimmed", (x) => x.stale, PAST_GRACE_MS + 5000);
+    check(
+      "dimmed: every Seen pill and bulk mark disabled",
+      b.boxes.filter((x) => x.acks).every((x) => x.ackDisabled === true) && b.heads.every((h) => h.bulk.disabled),
+      b,
+    );
+    d = serve("ack", sock, addr);
+    b = await boardUntil("the Board back after a restart", (x) => !x.stale && x.boxes.length === ACK_PANES.length, 40000);
+    check(
+      "after serve restarts on the same data directory, the seen Boxes are still seen",
+      ["w1:p3", "w1:p5"].every((p) => box(b, p).kind === "seen" && box(b, p).cls === "SEEN") &&
+        box(b, "w1:p4").kind === "finished" && head(b, "probe").counts === "1 finished · 1 idle · 2 seen · 1 working" &&
+        b.boxes.filter((x) => x.acks).every((x) => x.ackDisabled === false),
+      b,
+    );
+  } finally {
+    await d.stop();
+    await herdr.stop();
+  }
+}
 
 async function main() {
   const browser = await chrome();
@@ -558,6 +924,9 @@ async function main() {
     check("advisory: amber strip, Boxes shown", kinds(s).join() === "advisory" && !s.stale, s);
     await d.stop();
     await herdrOld.stop();
+
+    // 4. The acknowledgement controls (ADR-0014).
+    await ackChecks(browser);
 
     // The skipped-publication case's own warning is expected; nothing else is.
     const unexpected = browser.warnings.filter((w) => !SKIPPED_WARNING.test(w));

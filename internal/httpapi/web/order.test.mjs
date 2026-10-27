@@ -42,6 +42,17 @@ import {
   tasksLabel,
   documentTitle,
   groupCounts,
+  unseenFinished,
+  ackBody,
+  ackPath,
+  ackToast,
+  ackError,
+  ACK_STALE,
+  ACK_OFF,
+  ACK_FAILED,
+  ACK_TOAST_MS,
+  SEEN_LABEL,
+  isSeen,
   inNeedsYou,
   paneLabel,
   tabLabel,
@@ -355,7 +366,7 @@ test("golden fixture: needs you alone on top, then each group finished, idle, ba
   const { top, groups } = layout(fixture.input.map((i) => i.view).reverse());
   assert.ok(top.length > 0);
   for (const v of top) assert.equal(v.attention_class, "needs_you");
-  const rank = { finished: 1, idle: 2, background: 3, working: 4, unknown: 5 };
+  const rank = { finished: 1, idle: 2, seen: 2, background: 3, working: 4, unknown: 5 };
   for (const g of groups) {
     const ranks = g.views.map((v) => rank[boxKind(v)]);
     assert.deepEqual(ranks, ranks.slice().sort((a, b) => a - b), g.label);
@@ -1432,4 +1443,134 @@ test("titleBar: herdr's connection, in the strips' order of precedence", () => {
   assert.deepEqual([at({ ...conn, connected: false }, true).link, at({ ...conn, connected: false }, true).linkText], ["lost", "Reconnecting…"]);
   assert.deepEqual([at(null, false).link, at(null, false).linkText], ["none", "herdr"]);
   assert.deepEqual([at({ ...conn, herdr_version: "" }, false).linkText], ["herdr"]);
+});
+
+// ---- Acknowledgement (ADR-0014, Story 6.4) ----
+
+const ackView = (pane, tab, extra = {}) => ({
+  key: { host: "h", server: "s", epoch: 3, pane_id: pane },
+  tab,
+  workspace: "probe",
+  status: "done",
+  attention_class: "finished",
+  waiting_since: 1000 + pane.length,
+  seen: false,
+  ...extra,
+});
+
+test("seen: the Daemon's field, drawn as its own kind, after Background", () => {
+  const f = ackView("w1:p1", "api");
+  const s = { ...f, seen: true };
+  assert.equal(isSeen(s), true);
+  assert.equal(isSeen(f), false);
+  assert.equal(isSeen({ ...f, seen: "true" }), false, "only a true boolean is seen");
+  assert.equal(boxKind(f), "finished");
+  assert.equal(boxKind(s), "seen");
+  assert.equal(boxKind({ ...s, status: "idle" }), "seen", "done to idle within the finish keeps it");
+  // A seen Agent whose background work opens is Background, as the Daemon ranks it 3.
+  assert.equal(boxKind({ ...s, background: true }), "background");
+  assert.equal(classLabel({ ...s, background: true }), BACKGROUND_LABEL);
+  assert.equal(SEEN_LABEL, "Seen");
+  assert.equal(classLabel(s), "Seen");
+  assert.equal(classLabel(f), "Finished");
+  // A view without the field (an older Daemon) is never seen.
+  const { seen, ...noField } = f;
+  assert.equal(boxKind(noField), "finished");
+});
+
+test("seen box label says Seen, not Finished", () => {
+  const s = { ...ackView("w1:p1", "api"), seen: true, heading: "claude", directory: "/srv" };
+  const label = boxLabel(s, 1000 + 60000);
+  assert.match(label, /, Seen, /);
+  assert.doesNotMatch(label, /Finished/);
+});
+
+test("group counts: seen after idle, not counted finished", () => {
+  const w = { status: "working", attention_class: "working" };
+  const f = { status: "done", attention_class: "finished" };
+  const i = { status: "idle", attention_class: "working" };
+  const s = { status: "done", attention_class: "finished", seen: true };
+  const b = { status: "done", attention_class: "finished", background: true };
+  assert.equal(groupCounts([w, f, i, i, i, s, s, b, w]), "1 finished · 3 idle · 2 seen · 1 background · 2 working");
+  assert.equal(groupCounts([s]), "1 seen");
+  // A seen Background Agent counts once, as Background.
+  assert.equal(groupCounts([{ ...s, background: true }]), "1 background");
+});
+
+test("group counts: marking one Finished view drops one finished and adds 1 seen", () => {
+  const views = [ackView("w1:p1", "a"), ackView("w1:p2", "b"), { status: "idle", attention_class: "working" }];
+  assert.equal(groupCounts(views), "2 finished · 1 idle");
+  const after = [views[0], { ...views[1], seen: true }, views[2]];
+  assert.equal(groupCounts(after), "1 finished · 1 idle · 1 seen");
+});
+
+test("unseenFinished: the Finished Boxes only", () => {
+  const f1 = ackView("w1:p1", "a");
+  const f2 = ackView("w1:p2", "b");
+  const s = { ...ackView("w1:p3", "c"), seen: true };
+  const bg = { ...ackView("w1:p4", "d"), background: true };
+  const n = { ...ackView("w1:p5", "e"), status: "blocked", attention_class: "needs_you" };
+  const i = { ...ackView("w1:p6", "f"), status: "idle", attention_class: "working" };
+  const w = { ...ackView("w1:p7", "g"), status: "working", attention_class: "working" };
+  assert.deepEqual(unseenFinished([f1, s, bg, n, i, w, f2]), [f1, f2]);
+  assert.deepEqual(unseenFinished([s, bg]), []);
+  assert.deepEqual(unseenFinished([]), []);
+});
+
+test("ackBody: each view's key and waiting_since, in order, nothing else", () => {
+  const a = { ...ackView("w1:p1", "a"), waiting_since: 111, sort_key: [1, 1, 1, -111, "x"] };
+  const b = { ...ackView("w1:p2", "b"), waiting_since: 222 };
+  assert.deepEqual(ackBody([a, b]), {
+    agents: [
+      { key: { host: "h", server: "s", epoch: 3, pane_id: "w1:p1" }, waiting_since: 111 },
+      { key: { host: "h", server: "s", epoch: 3, pane_id: "w1:p2" }, waiting_since: 222 },
+    ],
+  });
+  assert.deepEqual(ackBody([]), { agents: [] });
+});
+
+test("ackPath: the per-Agent route, each segment escaped", () => {
+  assert.equal(ackPath({ host: "h", server: "s", epoch: 3, pane_id: "w1:p1" }, true), "/api/agents/h/s/3/w1%3Ap1/seen");
+  assert.equal(ackPath({ host: "a/b", server: "s v", epoch: 10, pane_id: "p" }, false), "/api/agents/a%2Fb/s%20v/10/p/unseen");
+});
+
+test("ackToast: one tab by name, several by count, undo says not seen", () => {
+  const a = ackView("w1:p1", "2: api");
+  const b = ackView("w1:p2", "3: docs");
+  assert.equal(ackToast([a], true), "Marked 2: api seen");
+  assert.equal(ackToast([a, b], true), "Marked 2 Agents seen");
+  assert.equal(ackToast([a], false), "Marked 2: api not seen");
+  assert.equal(ackToast([a, b], false), "Marked 2 Agents not seen");
+  // An empty tab falls back to the workspace, as the Box's first line does.
+  assert.equal(ackToast([{ ...a, tab: "" }], true), "Marked probe seen");
+});
+
+test("ackError: 409 stale, 503 not recording, anything else a plain failure", () => {
+  const table = [
+    [409, "stale_view", ACK_STALE],
+    [409, "not_finished", ACK_STALE],
+    [503, "recording_off", ACK_OFF],
+    [404, "unknown_agent", ACK_FAILED],
+    [403, "origin_not_allowed", ACK_FAILED],
+    [500, "store_failed", ACK_FAILED],
+    [0, "", ACK_FAILED],
+  ];
+  for (const [status, code, want] of table) assert.equal(ackError(status, code), want, status + " " + code);
+  assert.equal(ACK_STALE, "It changed before it was marked; nothing was marked");
+  assert.equal(ACK_OFF, "herddash is not recording; nothing was marked");
+  assert.equal(ACK_FAILED, "Could not mark it seen");
+  assert.equal(ACK_TOAST_MS, 6000);
+});
+
+test("layout: a seen view sits after its group's Finished views, by the Daemon's rank 2", () => {
+  const mk = (pane, rank, start, extra) => ({ ...view([1, 5, rank, start], "h", "s", 1, pane), workspace: "probe", ...extra });
+  const f1 = mk("p1", 1, -300, { status: "done", attention_class: "finished" });
+  const f2 = mk("p2", 1, -200, { status: "done", attention_class: "finished" });
+  const s = mk("p3", 2, -250, { status: "done", attention_class: "finished", seen: true });
+  const i = mk("p4", 2, -100, { status: "idle", attention_class: "working" });
+  const w = mk("p5", 4, -50, { status: "working", attention_class: "working" });
+  const { groups } = layout([w, s, i, f2, f1]);
+  assert.equal(groups.length, 1);
+  assert.deepEqual(groups[0].views.map(boxKind), ["finished", "finished", "seen", "idle", "working"]);
+  assert.equal(groups[0].counts, "2 finished · 1 idle · 1 seen · 1 working");
 });
