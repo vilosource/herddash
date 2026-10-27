@@ -146,6 +146,20 @@ tests above. The live-data design gate is the operator's dogfooding at the end o
 - `[low]` `[patch]` The existing browser check read a heading's whole `textContent`, which now
   includes the hidden bulk mark's text; it reads the label and counts instead.
 
+### 2026-10-27 — Review round 1
+- `[low]` `[patch]` A refused Undo showed a refused mark's text ("nothing was marked") while the
+  mark stood, reversing the self-review's accept above. `ackError` takes `seen`; a refused Undo
+  reads `It changed before the undo; it is still marked seen` (409), `herddash is not recording;
+  it is still marked seen` (503) or `Could not undo it; it is still marked seen`. Tested in
+  `order.test.mjs`.
+- `[low]` `[patch]` Focus fell to the page when a focused control was disabled (the pill or the
+  heading's bulk mark while its request is in flight, Undo when the Daemon is lost), when a
+  heading's bulk mark was hidden, and when the Undo bar closed with Undo focused. `setDisabled`
+  moves focus to the control's Box (the group's first Box for a heading) before disabling it;
+  `render` gives a hidden bulk mark's focus to its group's first Box; `hideToast` moves focus
+  from the bar to the Box it was about. The browser check asserts focus after a pill, an Undo and
+  a bulk mark.
+
 ## Design Notes
 
 The seen Box's place comes from the Daemon's sort key (rank 2, Idle's newest-first start), so

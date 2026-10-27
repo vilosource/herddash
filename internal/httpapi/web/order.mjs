@@ -288,13 +288,20 @@ export const ACK_STALE = "It changed before it was marked; nothing was marked";
 export const ACK_OFF = "herddash is not recording; nothing was marked";
 export const ACK_FAILED = "Could not mark it seen";
 
-// ackError is the bar's text for a refused mark, by the response's status
-// (0 when the request never got one) and error code: a 409 (the Agent moved
-// on, or is no longer Finished), a 503 (recording off), else a plain failure.
-export function ackError(status, code) {
-  if (status === 409) return ACK_STALE;
-  if (status === 503) return ACK_OFF;
-  return ACK_FAILED;
+// UNDO_STALE, UNDO_OFF and UNDO_FAILED are the bar's text for a refused
+// Undo: the mark stands, so they never say nothing was marked.
+export const UNDO_STALE = "It changed before the undo; it is still marked seen";
+export const UNDO_OFF = "herddash is not recording; it is still marked seen";
+export const UNDO_FAILED = "Could not undo it; it is still marked seen";
+
+// ackError is the bar's text for a refused mark (seen true) or Undo (seen
+// false), by the response's status (0 when the request never got one) and
+// error code: a 409 (the Agent moved on, is no longer Finished, or is held),
+// a 503 (recording off), else a plain failure.
+export function ackError(status, code, seen = true) {
+  if (status === 409) return seen ? ACK_STALE : UNDO_STALE;
+  if (status === 503) return seen ? ACK_OFF : UNDO_OFF;
+  return seen ? ACK_FAILED : UNDO_FAILED;
 }
 
 // ACK_TOAST_MS is how long the Undo bar, or a refusal's bar, shows.

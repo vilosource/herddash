@@ -50,6 +50,9 @@ import {
   ACK_STALE,
   ACK_OFF,
   ACK_FAILED,
+  UNDO_STALE,
+  UNDO_OFF,
+  UNDO_FAILED,
   ACK_TOAST_MS,
   SEEN_LABEL,
   isSeen,
@@ -1560,6 +1563,20 @@ test("ackError: 409 stale, 503 not recording, anything else a plain failure", ()
   assert.equal(ACK_OFF, "herddash is not recording; nothing was marked");
   assert.equal(ACK_FAILED, "Could not mark it seen");
   assert.equal(ACK_TOAST_MS, 6000);
+});
+
+test("ackError: a refused Undo says the mark stands, never that nothing was marked", () => {
+  const table = [
+    [409, "stale_view", UNDO_STALE],
+    [503, "recording_off", UNDO_OFF],
+    [404, "unknown_agent", UNDO_FAILED],
+    [0, "", UNDO_FAILED],
+  ];
+  for (const [status, code, want] of table) assert.equal(ackError(status, code, false), want, status + " " + code);
+  for (const t of [UNDO_STALE, UNDO_OFF, UNDO_FAILED]) {
+    assert.ok(!t.includes("nothing was marked"), t);
+    assert.ok(t.endsWith("it is still marked seen"), t);
+  }
 });
 
 test("layout: a seen view sits after its group's Finished views, by the Daemon's rank 2", () => {

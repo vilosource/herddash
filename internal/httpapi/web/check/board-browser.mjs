@@ -338,6 +338,12 @@ const ACK_BOARD = `JSON.stringify({
         aria: bulk.getAttribute("aria-label"), afterCounts: bulk.previousElementSibling?.classList.contains("count"), disabled: bulk.disabled } : null,
     };
   }),
+  focus: (() => {
+    const a = document.activeElement;
+    const k = a?.closest?.("[data-key]");
+    return { box: k ? JSON.parse(k.dataset.key)[3] : null, isBox: !!k && a === k,
+      group: a?.closest?.(".group")?.querySelector(".group-label")?.textContent ?? null, body: a === document.body || !a };
+  })(),
   toast: (() => {
     const t = document.querySelector(".toast");
     if (!t) return null;
@@ -378,6 +384,7 @@ async function ackChecks(browser) {
       const b = [...document.querySelectorAll("#board .box")].find((x) => JSON.parse(x.dataset.key)[3] === ${JSON.stringify(pane)});
       const btn = b?.querySelector(${JSON.stringify(sel)});
       if (!btn || btn.disabled) return false;
+      btn.focus();
       btn.click();
       return true;
     })()`);
@@ -466,6 +473,7 @@ async function ackChecks(browser) {
     b = await boardUntil("4: docs drawn Seen", (x) => box(x, "w1:p4")?.kind === "seen" && x.toast?.on);
     const docs = box(b, "w1:p4");
     const after = await viewOf("w1:p4");
+    check("marked: focus stays on the Box whose pill was pressed, not the page", b.focus.box === "w1:p4" && b.focus.isBox, b.focus);
     check(
       "marked: the Box is box--seen, labelled SEEN, its accessible name says Seen, no pill",
       docs.cls === "SEEN" && /, Seen, /.test(docs.label) && !/Finished/.test(docs.label) && docs.acks === 0,
@@ -508,7 +516,7 @@ async function ackChecks(browser) {
     );
 
     // Undo returns it.
-    const undone = await browser.eval(`(() => { const u = document.querySelector(".toast-undo"); if (!u || u.disabled) return false; u.click(); return true; })()`);
+    const undone = await browser.eval(`(() => { const u = document.querySelector(".toast-undo"); if (!u || u.disabled) return false; u.focus(); u.click(); return true; })()`);
     b = await boardUntil("4: docs back to Finished", (x) => box(x, "w1:p4")?.kind === "finished");
     check(
       "Undo: the bar closes and the Box is Finished again, with its pill and the heading's 3",
@@ -516,6 +524,7 @@ async function ackChecks(browser) {
         (await viewOf("w1:p4")).seen === false,
       b,
     );
+    check("Undo: focus moves from the closing bar to the Box it undid, not the page", b.focus.box === "w1:p4" && b.focus.isBox, b.focus);
 
     // Marked again: the bar goes by itself after 6 s; the Box stays seen.
     await click("w1:p4", "button.ack");
@@ -526,6 +535,7 @@ async function ackChecks(browser) {
     check("the Undo bar is gone after 6 s, the Box still seen", shown > ACK_TOAST_MS - 1500 && box(b, "w1:p4").kind === "seen", { shown, toast: b.toast });
 
     // The heading's bulk mark: exactly the two unseen Finished Boxes.
+    await browser.eval(`(() => { const g = [...document.querySelectorAll("#board .group")].find((x) => x.querySelector(".group-label").textContent === "probe"); g?.querySelector("button.ack-all")?.focus(); })()`);
     check("bulk: the heading's button is accepted", await clickIn("probe", "button.ack-all"), null);
     b = await boardUntil("both marked by the heading", (x) => box(x, "w1:p3")?.kind === "seen" && box(x, "w1:p5")?.kind === "seen" && x.toast?.on);
     {
@@ -543,6 +553,7 @@ async function ackChecks(browser) {
         box(b, "w2:p1").kind === "finished" && box(b, "w2:p1").acks === 1,
       b.heads,
     );
+    check("bulk: the hidden heading button hands focus to its group's first Box, not the page", b.focus.isBox && b.focus.group === "probe", b.focus);
 
     // A new turn ends the acknowledgement; the next finish is Finished.
     await push("w1:p4", "working");

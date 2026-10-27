@@ -261,10 +261,14 @@ toast.append(toastText, toastUndo);
 document.body.appendChild(toast);
 let toastTimer = null;
 let toastAction = null;
+// toastFocus is the keyId of the Box the bar is about: when the bar closes
+// with its Undo button focused, focus goes to that Box, not to the page.
+let toastFocus = null;
 
-function showToast(text, undo) {
+function showToast(text, undo, focusId) {
   toastText.textContent = text;
   toastAction = undo;
+  toastFocus = focusId ?? null;
   toastUndo.hidden = !undo;
   toast.classList.add("toast--on");
   clearTimeout(toastTimer);
@@ -276,6 +280,12 @@ function hideToast() {
   clearTimeout(toastTimer);
   toastTimer = null;
   toastAction = null;
+  if (toast.contains(document.activeElement)) {
+    const b = toastFocus && boxes.get(toastFocus);
+    if (b && b.box.isConnected) b.box.focus({ preventScroll: true });
+    else document.activeElement.blur();
+  }
+  toastFocus = null;
   toast.classList.remove("toast--on");
 }
 
@@ -328,18 +338,26 @@ async function acknowledge(views, seen, how) {
     if (how.group !== undefined) pendingGroups.delete(how.group);
     syncControls();
   }
-  if (!res.ok) showToast(ackError(res.status, res.code), null);
-  else if (seen) showToast(ackToast(views, true), () => acknowledge(views, false, { bulk: how.bulk }));
+  if (!res.ok) showToast(ackError(res.status, res.code, seen), null, ids[0]);
+  else if (seen) showToast(ackToast(views, true), () => acknowledge(views, false, { bulk: how.bulk }), ids[0]);
+}
+
+// setDisabled disables or enables btn. A browser drops a focused control's
+// focus to the page when it is disabled, so focus first moves to target (a
+// Box), keeping the operator's place on the Board.
+function setDisabled(btn, off, target) {
+  if (off && !btn.disabled && btn === document.activeElement && target?.isConnected) target.focus({ preventScroll: true });
+  btn.disabled = off;
 }
 
 // syncControls enables or disables every acknowledgement control.
 function syncControls() {
   for (const [id, b] of boxes) {
     const btn = b.box.querySelector("button.ack");
-    if (btn) btn.disabled = controlsOff || pending.has(id);
+    if (btn) setDisabled(btn, controlsOff || pending.has(id), b.box);
   }
-  for (const [id, g] of groups) g.bulk.disabled = controlsOff || pendingGroups.has(id);
-  toastUndo.disabled = controlsOff;
+  for (const [id, g] of groups) setDisabled(g.bulk, controlsOff || pendingGroups.has(id), g.grid.querySelector(".box"));
+  setDisabled(toastUndo, controlsOff, toastFocus && boxes.get(toastFocus)?.box);
 }
 
 // drawnStrips is the stripsKey of the strips drawn, and stripTick the
@@ -416,6 +434,10 @@ function render() {
   // A control inside a Box counts as its Box: a Box redrawn without its pill
   // keeps the focus.
   let focused = document.activeElement?.closest?.("[data-key]")?.dataset?.key;
+  // A heading's bulk mark that this render hides would drop focus to the
+  // page; its group keeps it instead (below).
+  let bulkFocus;
+  for (const [id, g] of groups) if (g.bulk === document.activeElement) bulkFocus = id;
   if (status.hideBoxes) {
     if (focused) hiddenFocus = focused;
   } else if (hiddenFocus) {
@@ -446,6 +468,7 @@ function render() {
     groupIds.add(id);
     const ge = groupFor(id, g.label, g.counts);
     drawBulk(ge, g.label, g.views);
+    if (bulkFocus === id && ge.bulk.hidden && !focused) focused = keyId(g.views[0].key);
     place(ge.grid, g.views.map((v) => boxFor(v, now)));
     groupEls.push(ge.group);
   }
