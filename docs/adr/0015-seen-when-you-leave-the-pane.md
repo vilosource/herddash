@@ -77,7 +77,11 @@ it; a `time.Time` keeps Go's monotonic reading, so a stepped wall clock does not
 - **At a connection's first snapshot (a Daemon start, a reconnect) and at a resync**, the focused
   pane is the snapshot's `focused_pane_id`, with its dwell starting when the engine applied that
   snapshot: nothing before the engine saw it counts. Any focus held before the resync is dropped
-  without a leave.
+  without a leave. While a resync is under way, from its start until that snapshot is applied, no
+  leave is judged: tracked state may be stale, which is why it runs. A `pane_focused` that arrives
+  while the resync's read is in flight makes that read older than it, so the event's pane stays
+  focused, but its dwell still starts when the snapshot is applied. *Amended 2026-10-28 by Story
+  6.9's final review.*
 - **A reconcile snapshot (or any later read) whose `focused_pane_id` differs from the engine's** is
   a focus move the engine did not see as an event: a missed event, or another client's view (record,
   finding 4). The focused pane becomes the snapshot's, with its dwell starting now, and the pane
@@ -89,9 +93,13 @@ it; a `time.Time` keeps Go's monotonic reading, so a stepped wall clock does not
   was applied: events arrive in herdr's order, so focus left it, as it would have counted had no
   snapshot come between. Later snapshots keep the move while they name a pane (another pane moves
   the held move on to it); a resync, a snapshot naming no pane or the pane moved from, an event for
-  the pane moved from, a disconnect or a restarted dwell of the pane moved from discards it. The
-  pane moved to has its own dwell, which does not touch that leave. *Amended 2026-10-27 by Story
-  6.7's review, rounds 1 and 2.*
+  the pane moved from or a disconnect discards it, and a restarted dwell of the pane moved from
+  drops its leave. The pane moved to has its own dwell, which does not touch that leave. But while
+  the move is held, the pane moved to is known only from the snapshot: its own `pane_focused`,
+  saying the operator arrives there, may still be on its way behind the event at hand. So an event
+  naming another pane is **not** a leave of the pane moved to; focus moves to the event's pane
+  without one. An event leaves only a pane that was focused while no move was held. *Amended 2026-10-27 by Story 6.7's review, rounds 1 and 2, and 2026-10-28 by Story
+  6.9's final review.*
 - **The dwell restarts** whenever the focused pane's Agent enters a new finish or leaves one: when
   its fold's class or `Since` changes, a new Agent replaces it, or a turn herddash did not observe
   ends its acknowledgement (ADR-0014's amendment). herdr's `done` to `idle` within one finish moves
@@ -216,8 +224,9 @@ only by the engine.
 - **`● in view` on a detached herdr** shows on the pane last focused. It never leads to a mark by
   itself: a mark needs an observed leave.
 - A Daemon restart keeps every mark (they are rows), loses only the in-memory focus and dwell, and
-  starts counting again from the first snapshot. A leave within 3 s of a restart or resync does not
-  mark, even if the operator had been reading longer.
+  starts counting again from the first snapshot. A leave during a resync, or within 3 s of a
+  restart or of the snapshot that ends a resync, does not mark, even if the operator had been
+  reading longer.
 - The record grows by at most one automatic row per finish.
 - ADR-0014's statement that "an acknowledgement says the operator has read a result" now also
   covers the Daemon's inference of it from focus; the row's `source` says which.

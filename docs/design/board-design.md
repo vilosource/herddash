@@ -325,7 +325,7 @@ The states a Box passes through, for the operator's three ways of working:
 | Stays and watches several turns, then leaves | Finished, `● in view`, after each finish; Seen on leaving |
 | Flicks through panes, under 3 s each | unchanged |
 | Away while an Agent finishes in the focused pane | Finished, `● in view`, until they come back and leave it |
-| herdr detached | never marked automatically |
+| herdr detached | never marked automatically, unless another program calls a herdr focus method |
 | Clicks `Mark unseen` | Finished with its Seen pill, and stays so for that finish |
 
 ## Responsive behaviour

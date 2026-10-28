@@ -163,7 +163,8 @@ herdr for at least 3 seconds and focus then moved to another pane. The row it re
   focus was and starts counting again from what herdr reports at start, so a leave within
   3 seconds of a restart does not mark, and focus moves made while herddash was stopped are simply
   missed. The same reset happens when herddash reconnects to herdr or reads herdr's whole state
-  again after losing a pane's updates: the time already spent on a pane before then does not count.
+  again after losing a pane's updates: the time already spent on a pane before then does not count,
+  and leaving a pane while that read is under way does not mark it.
 
 herddash only **reads** focus: herdr's `pane_focused` events and the focused pane its snapshot
 names. It never calls a focus function, so reading focus changes nothing in herdr. herdr's own

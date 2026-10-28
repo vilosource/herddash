@@ -396,7 +396,8 @@ also marks it Seen.
   in herdr for at least 3 s and focus then moved to another pane. A pane focused for less (flicking
   through panes) is not marked. A Board click still marks at once.
 - A finish into the focused pane while the operator is away stays Finished until they come back
-  and leave that pane. A detached herdr never marks anything. Needs you, Idle, Working, Unknown and
+  and leave that pane. A detached herdr never marks anything, unless another program calls one of
+  herdr's focus methods, which reads like the operator moving. Needs you, Idle, Working, Unknown and
   Background are never marked.
 - A Finished Box whose pane is herdr's focused pane shows `● in view`.
 - A Seen Box offers `Mark unseen`; after it, the Daemon never marks that finish Seen again. The

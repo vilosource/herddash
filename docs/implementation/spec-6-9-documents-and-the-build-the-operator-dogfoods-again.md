@@ -154,3 +154,32 @@ as one pull request and one release.
   says the reset happens on a reconnect and a resync too, not only on a restart.
 - Deferred: none.
 - Rejected: none.
+
+### 2026-10-28 — Final review
+
+Fixed 3, deferred 0, rejected 0.
+
+- `[low]` `[fixed]` While a snapshot's move was held, `onFocus` treated any `pane_focused` naming
+  another pane as a leave of the pane the move went to, which was known only from the snapshot and
+  whose own `pane_focused` could still be on its way: hold w1:p2 to w1:p3, a second read moves it
+  to w1:p1, then a delayed `pane_focused` w1:p3 3 s or more later marked w1:p1 Seen although the
+  operator was arriving there. `onFocus` now moves focus to the event's pane with no leave while a
+  move is held, so an event leaves only a pane focused while no move was held; `restartDwell` of
+  the pane moved from now drops the move's leave but keeps the move held, so that pane stays
+  unleavable too. ADR-0015 amended. Tests in `TestFocusFromSnapshot`: "event behind the read",
+  "delayed event after two reads" (the review's scenario) and "restart of the pane moved from, then
+  another event" fail without the fix; "disagrees" now expects the event to mark only w1:p2, not
+  the snapshot's w1:p3.
+- `[low]` `[fixed]` PRD FR-5a's amendment and `board-design.md`'s state table said a detached
+  herdr never marks, without ADR-0015's qualifier that another API client's focus call emits
+  `pane_focused` and reads like a leave. Both now carry it.
+- `[low]` `[fixed]` ADR-0015 and how-herddash-works said time before a resync does not count, but
+  leaves were judged during the resync with the dwell from before it, and a `pane_focused` arriving
+  while the ending read was in flight made `snapshotFocus` skip the reset. `leave` now judges
+  nothing while `e.resyncing`, and a reset applies to a read older than the latest event too (the
+  event's pane stays focused, its dwell restarts, any held move is dropped). ADR-0015 and
+  how-herddash-works now say a leave during a resync, or within 3 s of the snapshot that ends it,
+  does not mark. Tests in `TestFocusResyncResets`: "leave during the resync" and "same pane during
+  the ending read" fail without the fix.
+- Deferred: none.
+- Rejected: none.
