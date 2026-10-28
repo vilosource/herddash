@@ -49,13 +49,11 @@ The tracking file's `action_items` name the operator checkpoints. Those of Epics
 - **Story 4.3** had its day of dogfooding before release-please PR #2 was merged, at 0.1.0.
 
 Epic 5 shipped as v0.6.0 (PR #55). Story 5.9 is superseded: the operator decided PRD §8 Q1
-directly on 2026-10-27 (ADR-0014), and its checkpoint is closed. One is open:
-- **Epic 6 (acknowledging a Finished Agent, "Seen") is built** on `feat/epic-6-acknowledgement`,
-  Stories 6.1 to 6.9 done. Dogfooding Story 6.5's build led the operator to add Seen when they
-  leave the pane in herdr (ADR-0015, Stories 6.6 to 6.9), so the checkpoint moved to the end of
-  Story 6.9, whose `-dev` build (schema 7) is the one dogfooded. The operator is asked once to
-  dogfood it; on their OK the epic ships as one pull request and one release. Until then nothing
-  of Epic 6 is merged.
+directly on 2026-10-27 (ADR-0014), and its checkpoint is closed. So is Epic 6's:
+- **Epic 6 (acknowledging a Finished Agent, "Seen", ADR-0014 and ADR-0015)** was built as
+  Stories 6.1 to 6.9. Dogfooding Story 6.5's build led the operator to add Seen when they leave
+  the pane in herdr (Stories 6.6 to 6.9). The operator dogfooded Story 6.9's `-dev` build
+  (schema 7) and approved it on 2026-10-28; it ships as one pull request and one release.
 
 The architecture spine at
 `docs/planning/architecture/architecture-herddash-2026-10-14/ARCHITECTURE-SPINE.md` is binding on
@@ -291,8 +289,8 @@ No npm, no build step for assets. Web assets are embedded in the binary.
 
 **Epics 1 to 5 are done, released as v0.1.0 to v0.7.1** (Epic 5 as v0.6.0, its title bar as
 v0.7.0). **Epic 6, acknowledging a Finished Agent ("Seen", ADR-0014 and ADR-0015), is built** on
-`feat/epic-6-acknowledgement` and installed locally as a `-dev` build, waiting on the operator's
-dogfooding (see "How the build runs").
+`feat/epic-6-acknowledgement`, dogfooded by the operator and approved on 2026-10-28 to ship as
+one pull request and one release (see "How the build runs").
 `docs/implementation/sprint-status.yaml` is the authority on which story is next; each story's
 spec, with its review triage log, is `docs/implementation/spec-<key>.md`. `go.mod` declares
 `go 1.26.0` and three direct dependencies: `modernc.org/sqlite` v1.60.1,

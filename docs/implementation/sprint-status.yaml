@@ -99,7 +99,7 @@ development_status:
 
   # Epic 6: Acknowledging a Finished Agent (ADR-0014, vfkb 9aee0fc69560). Local -dev builds; the operator is asked only to dogfood.
   # Amended 2026-10-27 (operator decision while dogfooding, vfkb f14fa1cdfa89, ADR-0015): Seen also when the operator leaves the pane in herdr; Stories 6.6 to 6.9.
-  epic-6: in-progress  # 6.1 to 6.9 done; Seen on leaving the pane (6.6 to 6.9) built; waiting on the operator's dogfooding of the 6.9 -dev build
+  epic-6: done  # 6.1 to 6.9 done; the operator dogfooded the 6.9 -dev build and approved shipping on 2026-10-28
   6-1-acknowledgements-in-the-record: done
   6-2-the-engine-acknowledges-a-finish: done
   6-3-write-routes-guarded-against-cross-site-requests: done
@@ -149,4 +149,4 @@ action_items:
   - epic: 6
     action: "When Epic 6 is built and its -dev build installed (Story 6.9, moved from 6.5 by ADR-0015), ask the operator once to dogfood the Seen control with Seen on leaving the pane; on their OK ship it as one PR and one release (vfkb 9aee0fc69560, f14fa1cdfa89)"
     owner: "operator"
-    status: open  # dogfooding of 0.8.0-dev found Seen-on-leave missing (ADR-0015); asked again after Story 6.9
+    status: done  # 2026-10-28: the operator dogfooded the 6.9 -dev build (schema 7) and approved; shipped as one PR and one release
