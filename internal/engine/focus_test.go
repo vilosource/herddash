@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/vilosource/herddash/internal/core"
+	"github.com/vilosource/herddash/internal/herdr"
 )
 
 // startFocus starts a viewed, recording engine on snap with a manual clock,
@@ -616,6 +617,56 @@ func TestFocusEventBeforeFirstSnapshot(t *testing.T) {
 	if n := len(st.ackList()); n != 0 {
 		t.Errorf("%d acknowledgements, want none", n)
 	}
+}
+
+// The snapshot that ends a resync resets focus as a connection's first one
+// does (ADR-0015): any focus held before it is dropped without a leave, and
+// the dwell of the pane it names starts when it is applied, even when that
+// pane was already focused.
+func TestFocusResyncResets(t *testing.T) {
+	snap := snapOf(agentPane("w1:p1", core.StatusDone), agentPane("w1:p2", core.StatusDone), agentPane("w1:p3", core.StatusDone))
+	resync := func(h *harness) {
+		h.t.Helper()
+		h.fake.statusSub("w1:p1").health(&herdr.Health{Kind: herdr.HealthClosed, Err: errors.New("EOF")})
+		h.rec.awaitCount(h.t, "resync closed", 1)
+		h.fake.awaitStatusSubs("w1:p1", 2)
+		h.settle()
+	}
+	// The resync moves focus to another pane: no move is held, so the event
+	// that follows it is not a leave of the pane focused before.
+	t.Run("another pane", func(t *testing.T) {
+		h, _, st, clock := startFocus(t, snap, nil)
+		h.focusOn("w1:p2")
+		clock.advance(10 * time.Second)
+		h.fake.setSnapshot(focused(snap, "w1:p3"))
+		resync(h)
+		if v := h.viewOf("w1:p3"); !v.InView {
+			t.Errorf("w1:p3 after the resync %+v, want in view", v)
+		}
+		h.focusOn("w1:p3")
+		if v := h.viewOf("w1:p2"); v.Seen || v.InView {
+			t.Errorf("w1:p2 %+v, want neither seen nor in view: the resync dropped its focus", v)
+		}
+		if n := len(st.ackList()); n != 0 {
+			t.Errorf("%d acknowledgements, want none", n)
+		}
+	})
+	// The resync names the pane already focused: its dwell starts again.
+	t.Run("same pane", func(t *testing.T) {
+		h, _, st, clock := startFocus(t, snap, nil)
+		h.focusOn("w1:p2")
+		clock.advance(10 * time.Second)
+		h.fake.setSnapshot(focused(snap, "w1:p2"))
+		resync(h)
+		clock.advance(time.Second)
+		h.focusOn("w1:p3")
+		if v := h.viewOf("w1:p2"); v.Seen {
+			t.Errorf("w1:p2 left 1 s after the resync: %+v, want not seen", v)
+		}
+		if n := len(st.ackList()); n != 0 {
+			t.Errorf("%d acknowledgements, want none", n)
+		}
+	})
 }
 
 // A snapshot whose focus differs from the engine's moves it without a leave
