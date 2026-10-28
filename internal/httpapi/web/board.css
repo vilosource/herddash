@@ -1,7 +1,8 @@
 /* The Board (Story 3.7), in the design the operator approved on 2026-10-20 and amended on
    2026-10-21 (Needs you alone on top, every other Agent in its workspace's group, the tab and
    pane position first): docs/design/board-design.md. System fonts only.
-   The connection and version strips are Story 3.9's, in the same design. */
+   The connection and version strips are Story 3.9's, in the same design. The acknowledgement
+   controls are ADR-0014's (Story 6.4), from the mock the operator approved on 2026-10-27. */
 
 /* ---- Tokens: light (default) ---- */
 :root {
@@ -162,14 +163,17 @@ body {
    Every heading after the first on the page draws a thin rule above it. */
 .group + .group { margin-top: var(--space-5); }
 .group-head {
-  display: flex; align-items: baseline; gap: 0.6rem; min-width: 0;
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.25rem 0.6rem; min-width: 0;
   margin: 0 0 0.6rem;
   padding-top: var(--space-4);
   border-top: 1px solid var(--border);
 }
 .board > .zone:first-child > .group-head,
 .board > .zone:first-child > .group:first-of-type > .group-head { border-top: 0; padding-top: 0; }
+/* The name keeps its width (up to the line), so on a narrow page the counts and
+   the bulk mark wrap below it rather than squeezing it to nothing. */
 .group-label {
+  flex: 0 0 auto; max-width: 100%;
   margin: 0; min-width: 0;
   color: var(--ink);
   font-size: var(--text-group);
@@ -307,11 +311,98 @@ body {
 .box--idle .where, .box--idle .context { color: var(--ink-muted); }
 .wait--none { color: var(--ink-faint); }
 
+/* Seen (ADR-0014, approved 2026-10-27): a Finished Agent the operator marked read. Grey, with
+   a quiet leading edge where Finished has its blue one, labelled SEEN, the Waiting Time without
+   emphasis, as Idle's; it sits among the Idle Boxes. */
+.box--seen {
+  border-left: 6px solid var(--border-quiet);
+  padding-left: calc(var(--space-4) - 5px);
+}
+.box--seen .class { color: var(--ink-faint); }
+.box--seen .where, .box--seen .context { color: var(--ink-muted); }
+.box--seen .wait { color: var(--ink-faint); font-weight: 600; }
+
+/* ---- Acknowledgement controls (ADR-0014): ordinary buttons, no key binding ---- */
+/* The Seen pill, at the end of a Finished Box's first line. */
+.ack {
+  flex: none; margin-left: auto;
+  display: inline-flex; align-items: center; gap: 0.3rem;
+  padding: 0.15rem 0.55rem;
+  font: inherit; font-size: var(--text-label); font-weight: 700; line-height: 1.25;
+  color: var(--finished-accent);
+  background: transparent;
+  border: 1px solid var(--finished-edge);
+  border-radius: 999px;
+  cursor: pointer;
+}
+.pane + .ack { margin-left: var(--space-2); }
+.ack:hover:not(:disabled) { background: var(--finished-edge); color: var(--surface); }
+/* The in-view tag (ADR-0015): a label, not a control, before a Finished Box's Seen pill when
+   herdr has its pane focused. Text only, in the Finished accent; the dot is the same colour. */
+.in-view {
+  flex: none; margin-left: auto;
+  font-size: var(--text-label); font-weight: 600; line-height: 1.25;
+  color: var(--finished-accent);
+  white-space: nowrap;
+}
+.pane + .in-view, .in-view + .ack { margin-left: var(--space-2); }
+/* Mark unseen (ADR-0015), at the end of a Seen Box's first line: the Seen pill's shape, quiet,
+   so it does not pull the eye back to a Box that has receded. */
+.unack {
+  flex: none; margin-left: auto;
+  padding: 0.15rem 0.55rem;
+  font: inherit; font-size: var(--text-label); font-weight: 600; line-height: 1.25;
+  color: var(--ink-muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.pane + .unack { margin-left: var(--space-2); }
+.unack:hover:not(:disabled) { color: var(--ink); border-color: var(--ink-faint); }
+/* A workspace heading's bulk mark, after its counts, shown with 2 or more Finished Boxes. */
+.ack-all {
+  flex: none; margin-left: auto; align-self: center;
+  padding: 0.15rem 0.6rem;
+  font: inherit; font-size: var(--text-label); font-weight: 600; line-height: 1.25;
+  color: var(--finished-accent);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.ack-all:hover:not(:disabled) { border-color: var(--finished-edge); }
+.ack-all[hidden] { display: none; }
+.ack:disabled, .unack:disabled, .ack-all:disabled, .toast-undo:disabled { opacity: 0.55; cursor: default; }
+/* The Undo bar: fixed at the bottom centre for 6 s after a mark, or a refusal's text. */
+.toast {
+  position: fixed; left: 50%; bottom: var(--space-5); z-index: 3;
+  transform: translate(-50%, 1rem);
+  display: flex; align-items: center; gap: var(--space-4);
+  max-width: calc(100% - 2 * var(--space-4));
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-4);
+  background: var(--ink); color: var(--surface);
+  border-radius: var(--radius);
+  font-size: var(--text-meta);
+  box-shadow: 0 6px 24px rgb(0 0 0 / 0.25);
+  opacity: 0; visibility: hidden; pointer-events: none;
+}
+.toast--on { opacity: 1; visibility: visible; transform: translate(-50%, 0); pointer-events: auto; }
+.toast-undo {
+  font: inherit; font-weight: 700; color: var(--surface);
+  background: transparent; border: 1px solid currentColor; border-radius: 0.35rem;
+  padding: 0.15rem 0.6rem; cursor: pointer;
+}
+.toast-undo[hidden] { display: none; }
+
 /* Disconnected, or the Daemon's stream lost: every Box dimmed, never hidden. */
 .board--stale .box { opacity: var(--stale-opacity); filter: saturate(0.35); }
 
 @media (prefers-reduced-motion: no-preference) {
   .box { transition: opacity 200ms ease, filter 200ms ease; }
+  .toast { transition: opacity 150ms ease, transform 150ms ease, visibility 150ms; }
 }
 
 .sr-only {

@@ -1,6 +1,8 @@
 # ADR-0006: How herddash speaks to herdr
 
-**Status: Accepted (amended 2026-10-16).** Written 2026-10-15 during the architecture run, under the operator's
+**Status: Accepted (amended 2026-10-16; amended by [ADR-0015](0015-seen-when-you-leave-the-pane.md) on
+2026-10-27: the lifecycle subscription also reads `pane.focused`, and the snapshot's
+`focused_pane_id` is read).** Written 2026-10-15 during the architecture run, under the operator's
 delegation. It draws on [herdr-socket-api.md](../research/herdr-socket-api.md) and the PRD addendum
 §B. Claims that record marks UNVERIFIED are marked UNVERIFIED here too, and milestone 1 exercises
 them against a herdr 0.9.5 binary.

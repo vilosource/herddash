@@ -10,13 +10,16 @@ import (
 )
 
 // Recorder is what the engine needs from the store (AD-4, AD-9): the
-// record's two appends, one Agent's history to fold, the Retention sweep,
-// and the engine's own state across Daemon restarts. *store.Store provides it; tests provide a fake. Only the
+// record's appends, one Agent's history to fold and its acknowledgements to
+// apply (ADR-0014), the Retention sweep, and the engine's own state across
+// Daemon restarts. *store.Store provides it; tests provide a fake. Only the
 // engine goroutine calls it.
 type Recorder interface {
 	Append(t core.Transition) error
 	History(ctx context.Context, key core.AgentKey) ([]core.Transition, error)
 	AppendResyncMarker(m store.ResyncMarker) error
+	AppendAcknowledgements(ctx context.Context, acks []core.Acknowledgement) error
+	Acknowledgements(ctx context.Context, key core.AgentKey) ([]core.Acknowledgement, error)
 	Sweep(ctx context.Context, cutoff int64, present []store.Present) (store.SweepResult, error)
 	LoadServerState(host, server string) (store.ServerState, bool, error)
 	SaveServerState(host, server string, st store.ServerState) error

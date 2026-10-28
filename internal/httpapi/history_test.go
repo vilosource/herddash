@@ -8,22 +8,47 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/vilosource/herddash/internal/core"
 	"github.com/vilosource/herddash/internal/engine"
+	"github.com/vilosource/herddash/internal/store"
 )
 
 // noHistory is a History with no rows for any key.
 func noHistory(context.Context, core.AgentKey) ([]core.Transition, error) { return nil, nil }
 
-// fakeHistory serves fixed rows per key and records every key it is asked for.
+// noAcknowledgements is an Acknowledgements with no rows for any key.
+func noAcknowledgements(context.Context, core.AgentKey) ([]core.Acknowledgement, error) {
+	return nil, nil
+}
+
+// noAcknowledge is an Acknowledge that refuses every request as recording
+// off; a test that reaches it by mistake sees a 503.
+func noAcknowledge(context.Context, engine.AckRequest) ([]core.AgentView, error) {
+	return nil, engine.ErrRecordingOff
+}
+
+// fakeHistory serves fixed rows per key and records every key it is asked
+// for; acks are its acknowledgement rows, ackErr fails their read.
 type fakeHistory struct {
-	rows  map[core.AgentKey][]core.Transition
-	err   error
-	calls []core.AgentKey
+	rows     map[core.AgentKey][]core.Transition
+	err      error
+	calls    []core.AgentKey
+	acks     map[core.AgentKey][]core.Acknowledgement
+	ackErr   error
+	ackCalls []core.AgentKey
+}
+
+func (f *fakeHistory) Acknowledgements(_ context.Context, key core.AgentKey) ([]core.Acknowledgement, error) {
+	f.ackCalls = append(f.ackCalls, key)
+	if f.ackErr != nil {
+		return nil, f.ackErr
+	}
+	return f.acks[key], nil
 }
 
 func (f *fakeHistory) History(_ context.Context, key core.AgentKey) ([]core.Transition, error) {
@@ -81,7 +106,7 @@ func historyFixture(t *testing.T) *fakeHistory {
 
 func newHistoryHandler(f *fakeHistory, log *slog.Logger) http.Handler {
 	v := testView()
-	return New(Options{View: func() engine.View { return v }, Subscribe: noSubscribe, History: f.History, Logger: log})
+	return New(Options{View: func() engine.View { return v }, Subscribe: noSubscribe, History: f.History, Acknowledge: noAcknowledge, Acknowledgements: f.Acknowledgements, Logger: log})
 }
 
 // errorMessage returns the message of a JSON error body.
@@ -107,10 +132,13 @@ func TestHistoryFound(t *testing.T) {
 	if len(f.calls) != 1 || f.calls[0] != liveKey {
 		t.Errorf("History called with %v, want [%v]", f.calls, liveKey)
 	}
+	if len(f.ackCalls) != 1 || f.ackCalls[0] != liveKey {
+		t.Errorf("Acknowledgements called with %v, want [%v]", f.ackCalls, liveKey)
+	}
 	want := `{"key":{"host":"mac","server":"default","epoch":2,"pane_id":"w1:p1"},"transitions":[` +
 		`{"agent_program":"claude","profile":"work","new":"working","herdr_order":41,"herdr_version":"0.9.5","observed_at":1000,"provenance":"snapshot","possibly_spurious":false},` +
 		`{"agent_program":"claude","profile":"work","previous":"working","new":"blocked","herdr_version":"0.9.5","observed_at":2000,"provenance":"live","possibly_spurious":false,"observed_by":"claude_session"},` +
-		`{"agent_program":"claude","profile":"work","previous":"blocked","new":"working","herdr_version":"0.9.5","observed_at":3000,"provenance":"live","possibly_spurious":false}]}`
+		`{"agent_program":"claude","profile":"work","previous":"blocked","new":"working","herdr_version":"0.9.5","observed_at":3000,"provenance":"live","possibly_spurious":false}],"acknowledgements":[]}`
 	if got := w.Body.String(); got != want {
 		t.Errorf("body\n%s\nwant\n%s", got, want)
 	}
@@ -197,6 +225,123 @@ func TestHistoryOrder(t *testing.T) {
 	}
 	if g, want := strings.Join(order, " "), "working@500 idle@500 blocked@900 done@100"; g != want {
 		t.Errorf("order %q, want %q", g, want)
+	}
+}
+
+func mustAck(t *testing.T, key core.AgentKey, since int64, seen bool, at int64) core.Acknowledgement {
+	t.Helper()
+	a, err := core.NewAcknowledgement(core.AcknowledgementInput{Source: core.AckSourceBoard, Key: key, FinishedSince: since, Seen: seen, ObservedAt: at})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return a
+}
+
+// TestHistoryAcknowledgements serves an Agent's acknowledgement rows in an
+// order no sort would produce (an undo observed before the mark it undoes, as
+// a clock stepped back makes it): the body keeps the store's recording order
+// exactly, after the Transitions as before.
+func TestHistoryAcknowledgements(t *testing.T) {
+	f := historyFixture(t)
+	f.acks = map[core.AgentKey][]core.Acknowledgement{liveKey: {
+		mustAck(t, liveKey, 1000, true, 5000),
+		mustAck(t, liveKey, 1000, false, 4000),
+		mustAck(t, liveKey, 3000, true, 6000),
+	}}
+	w := do(newHistoryHandler(f, nil), http.MethodGet, "/api/agents/mac/default/2/w1:p1/history", "localhost", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d, body %s", w.Code, w.Body)
+	}
+	checkCommon(t, w)
+	var got struct {
+		Transitions      []json.RawMessage `json:"transitions"`
+		Acknowledgements json.RawMessage   `json:"acknowledgements"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Transitions) != 3 {
+		t.Errorf("%d transitions, want 3", len(got.Transitions))
+	}
+	want := `[{"finished_since":1000,"seen":true,"observed_at":5000,"source":"board"},{"finished_since":1000,"seen":false,"observed_at":4000,"source":"board"},{"finished_since":3000,"seen":true,"observed_at":6000,"source":"board"}]`
+	if string(got.Acknowledgements) != want {
+		t.Errorf("acknowledgements %s, want %s", got.Acknowledgements, want)
+	}
+
+	// Another key's rows are not this Agent's: none is [], never null.
+	w = do(newHistoryHandler(f, nil), http.MethodGet, "/api/agents/mac/a%2Fb/2/w1:p1/history", "localhost", nil)
+	if w.Code != http.StatusOK || !strings.HasSuffix(w.Body.String(), `,"acknowledgements":[]}`) {
+		t.Errorf("no rows: status %d, body %s", w.Code, w.Body)
+	}
+}
+
+// TestHistoryAcknowledgementSource reads an Agent with a board row and a
+// herdr_focus row, written directly through a real store (ADR-0015): each
+// history item carries its source, always sent.
+func TestHistoryAcknowledgementSource(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "data", "herddash.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	for _, in := range []core.TransitionInput{
+		{Key: liveKey, AgentProgram: "claude", Profile: "work", New: core.StatusWorking, ObservedAt: 1000, Provenance: core.ProvenanceLive},
+		{Key: liveKey, AgentProgram: "claude", Profile: "work", Previous: statusPtr(core.StatusWorking), New: core.StatusDone,
+			ObservedAt: 2000, Provenance: core.ProvenanceLive},
+	} {
+		if err := st.Append(mustTransition(t, in)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	row := func(seen bool, at int64, src core.AckSource) core.Acknowledgement {
+		t.Helper()
+		a, err := core.NewAcknowledgement(core.AcknowledgementInput{Key: liveKey, FinishedSince: 2000, Seen: seen, ObservedAt: at, Source: src})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return a
+	}
+	if err := st.AppendAcknowledgements(context.Background(), []core.Acknowledgement{
+		row(true, 3000, core.AckSourceHerdrFocus), row(false, 4000, core.AckSourceBoard),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	v := testView()
+	h := New(Options{View: func() engine.View { return v }, Subscribe: noSubscribe, History: st.History, Acknowledge: noAcknowledge,
+		Acknowledgements: st.Acknowledgements})
+	w := do(h, http.MethodGet, "/api/agents/mac/default/2/w1:p1/history", "localhost", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d, body %s", w.Code, w.Body)
+	}
+	var got struct {
+		Acknowledgements json.RawMessage `json:"acknowledgements"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	want := `[{"finished_since":2000,"seen":true,"observed_at":3000,"source":"herdr_focus"},{"finished_since":2000,"seen":false,"observed_at":4000,"source":"board"}]`
+	if string(got.Acknowledgements) != want {
+		t.Errorf("acknowledgements %s, want %s", got.Acknowledgements, want)
+	}
+}
+
+// TestHistoryAcknowledgementsError fails the acknowledgements' read: the
+// response is the history's 500, the detail only in the log; an Agent with
+// no Transitions is a 404 without reading them.
+func TestHistoryAcknowledgementsError(t *testing.T) {
+	f := historyFixture(t)
+	f.ackErr = errors.New("store: acknowledgements: disk on fire")
+	var logs bytes.Buffer
+	w := do(newHistoryHandler(f, slog.New(slog.NewTextHandler(&logs, nil))), http.MethodGet, "/api/agents/mac/default/2/w1:p1/history", "localhost", nil)
+	checkError(t, w, http.StatusInternalServerError, codeInternal)
+	if strings.Contains(w.Body.String(), "disk on fire") || !strings.Contains(logs.String(), "disk on fire") {
+		t.Errorf("body %s, log %q: want the error in the log only", w.Body, logs.String())
+	}
+	f = historyFixture(t)
+	w = do(newHistoryHandler(f, nil), http.MethodGet, "/api/agents/mac/default/2/w9:p9/history", "localhost", nil)
+	checkError(t, w, http.StatusNotFound, codeNotFound)
+	if len(f.ackCalls) != 0 {
+		t.Errorf("Acknowledgements read for a key with no history: %v", f.ackCalls)
 	}
 }
 
@@ -316,7 +461,7 @@ func TestHistoryCancelled(t *testing.T) {
 			return c.ret(ctx)
 		}
 		var logs bytes.Buffer
-		h := New(Options{View: testView, Subscribe: noSubscribe, History: hist, Logger: slog.New(slog.NewTextHandler(&logs, nil))})
+		h := New(Options{View: testView, Subscribe: noSubscribe, History: hist, Acknowledge: noAcknowledge, Acknowledgements: noAcknowledgements, Logger: slog.New(slog.NewTextHandler(&logs, nil))})
 		r := httptest.NewRequestWithContext(ctx, http.MethodGet, "/api/agents/mac/default/2/w1:p1/history", nil)
 		r.Host = "localhost"
 		w := httptest.NewRecorder()

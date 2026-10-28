@@ -11,6 +11,7 @@ inputDocuments:
   - docs/adr/0005-append-only-transition-record.md
   - docs/adr/0006-how-herddash-speaks-to-herdr.md
   - docs/adr/0007-read-only-loopback-http-surface.md
+  - docs/adr/0014-acknowledging-a-finished-agent.md
 ---
 
 # herddash - Epic Breakdown
@@ -133,6 +134,19 @@ or a hand-run browser checked before, and the documents agents read stop contrad
 Planned on 2026-10-23 with the operator's decisions taken up front (vfkb c56d5199f84c, 1e89662f83af).
 **FRs covered:** none new; hardens ADR-0009, FR-10, FR-1/2 (Board drawing) and PRD §8 Q1.
 Added 2026-10-26 after 0.6.0: Story 5.19, the Board's title bar (ADR-0013), at the operator's request.
+Amended 2026-10-27: PRD §8 Q1 was closed by the operator's decision instead, so Story 5.9 is
+superseded by Epic 6.
+
+#### Epic 6: Acknowledging a Finished Agent
+
+The operator marks a Finished Box Seen once its result is read: the Box turns grey, moves down
+among the Idle Boxes and leaves its group's finished count, until the Agent's next Transition out
+of that finish. herdr is never told. Acknowledgements are recorded append-only, survive a Daemon
+restart, appear in history, and are written through the first write routes, guarded against
+cross-site requests. Decided 2026-10-27 by the operator (vfkb 9aee0fc69560, ADR-0014) from a mock
+rendered with live data.
+**FRs covered:** FR-5a (new); amends FR-3's order (Seen ranks with Idle), FR-13 (the `agent` event
+carries it), FR-14 (history shows acknowledgements), FR-17 (the write guard).
 
 ## Epic 1: See every agent's status, live, from the terminal
 
@@ -833,6 +847,8 @@ decided these in advance, so no story asks them again:
   behaviour is documented.
 - ADR-0011 (Story 5.5) is accepted in advance, provided it only tightens the import rules.
 - PRD §8 Q1 is decided by the record, not by the operator, unless the record shows a problem.
+  *Superseded 2026-10-27:* the operator decided it directly (ADR-0014); Story 5.9 is superseded
+  by Epic 6.
 - Background-task experiments may run throwaway Claude Code sessions under `cldp`, outside herdr,
   in a scratch directory.
 
@@ -955,6 +971,11 @@ So that a fresh session is not misled.
 **And** the retrospectives' low-severity items are added to `deferred-work.md` with their reasons, and the process lessons (copy a deferral into its target story's criteria; give every spine Open item an owner; run new concurrency tests with `-race -count=50`; test record-derived state across a Daemon restart; force rollback tests to fail mid-transaction) are recorded where agents read them
 
 ### Story 5.9: Decide whether acknowledgement is needed (PRD §8 Q1)
+
+**Superseded by Epic 6 (operator decision 2026-10-27).** The operator decided PRD §8 Q1 directly,
+without waiting for the record: acknowledgement is needed, and its design was approved from a mock
+rendered with live data (vfkb 9aee0fc69560, ADR-0014). The story is closed without running; its
+criteria below are kept as they were written.
 
 As the operator,
 I want the acknowledgement question settled by what the record shows,
@@ -1166,3 +1187,534 @@ ADR-0003 and SM-C1. Design approved by the operator from the Board rendered with
 **And** the summary is not a live region and holds no control; the strips are unchanged
 **And** the browser check asserts the title bar's text in the connected, needs-you and disconnected states
 **And** the design doc, SM-C1 and the ADR index record the change
+
+## Epic 6: Acknowledging a Finished Agent
+
+The operator marks a Finished Box Seen once its result is read, so a workspace's finished count
+means "results I have not read" again. Decided 2026-10-27 by the operator (vfkb 9aee0fc69560) from
+a mock rendered with their live Board; the structure is
+[ADR-0014](../adr/0014-acknowledging-a-finished-agent.md), which every story obeys and which
+amends ADR-0003, ADR-0005, ADR-0007 and PRD SM-C1 and closes PRD §8 Q1. Decided in advance, so no
+story asks them again:
+
+- Stories are built and installed locally as `-dev` builds. When the epic is done the operator is
+  asked once, to dogfood; on their OK it ships as one pull request and one release.
+- An acknowledgement is herddash's own state; herdr is never told. It names one exact finish (the
+  AgentKey and the class start the view sends as `waiting_since`), is recorded append-only in its
+  own table (migration 0005), and is in force while the Agent's fold is Finished with that same
+  start, so `done` to `idle` within the finish keeps it and any other Transition ends it.
+- No keyboard shortcut (the operator uses Vimium); the controls are ordinary buttons.
+- No new import edge; `httpapi` reaches the engine through `engine.Engine.Acknowledge`.
+
+Build order: the record and its rule, then the engine, then the write routes, then the Board, then
+the documents and the dogfooding build.
+
+*Amended 2026-10-27 (operator decision while dogfooding, vfkb f14fa1cdfa89,
+[ADR-0015](../adr/0015-seen-when-you-leave-the-pane.md)):* visiting a pane in herdr and leaving it
+did not mark its Box Seen. A Finished Agent now also becomes Seen when, after its finish began, its
+pane was focused in herdr for at least 3 s and focus then moved to another pane; a Board click
+still marks at once. herdr's `done`/`idle` is not used. herddash only reads focus (the global
+`pane.focused` event and the snapshot's `focused_pane_id`, observed in
+`docs/research/herdr-focus-events-2026-10-27.md`) and never calls a focus method. Automatic marks
+are rows with source `herdr_focus` (migration 0007, since the operator's database is already at
+schema 6); a Finished Box whose pane is focused shows `● in view`; a Seen Box offers `Mark unseen`,
+after which the Daemon never re-marks that finish. Stories 6.6 to 6.9 build it, in this order: what
+herdr says about focus and where a mark came from (adapter, core, store); the engine's focus
+tracking and automatic mark; the Board's tag and pill; the documents and a new dogfooding build.
+The epic's dogfooding checkpoint moves to the end of Story 6.9.
+
+### Story 6.1: Acknowledgements in the record
+
+As the operator,
+I want an acknowledgement stored as a fact the record keeps, with the rule that reads it in core,
+So that whether a finish is Seen is derived from the record and survives anything the Daemon does.
+
+Builds ADR-0014's record: migration `0005_acknowledgements.sql` (the table and two indexes exactly
+as the ADR gives them); `core.Acknowledgement`, built only by `core.NewAcknowledgement`
+(`AcknowledgementInput{Key, FinishedSince, Seen, ObservedAt}`; it refuses an empty host, server
+or pane id, epoch 0, and a non-positive `FinishedSince` or `ObservedAt`, with an error wrapping
+`core.ErrInvalidAcknowledgement`); the pure rule `core.Seen(f FoldResult, acks []Acknowledgement)
+bool`, true exactly when `f` is known, its class is `finished`, `f.Since > 0`, and the last of
+`acks` (given in recording order) whose `FinishedSince` equals `f.Since` has `Seen` set;
+`AgentViewInput.Seen` and `AgentView.Seen` (`json:"seen"`, always sent), set only when the input
+says so and the class is `finished`; and the sort key's `class_rank` 2 (Idle's) for a seen,
+non-Background Agent. In `store`: `AppendAcknowledgements(ctx, []core.Acknowledgement) error`, one
+prepared `INSERT` in one transaction, all or nothing, a no-op for none; `Acknowledgements(ctx, key)
+([]core.Acknowledgement, error)`, one Agent's rows ordered by `id` (recording order, not `observed_at`), each rebuilt
+through the constructor; and `Sweep` deleting acknowledgements in its existing transaction (a row
+older than the cutoff goes unless its key is present and its `finished_since` is at or after the
+present `Since`, or that `Since` is 0), counted in `SweepResult.Acknowledgements`. The `DELETE`
+stays in `sweep.go` (`TestOnlyDelete`). `callsite_test.go` guards `AppendAcknowledgements` to
+`internal/engine` and `internal/store`. No engine, HTTP or Board change.
+
+**Acceptance Criteria:**
+
+**Given** a database at schema 4 holding Transitions, resync markers and `server_state`
+**When** this binary opens it
+**Then** it is migrated to schema 5 in one transaction, every existing row is unchanged, and a binary knowing only schema 4 is refused by the existing `store.ErrSchemaNewer` check (tested by opening a schema-5 database with the migration list truncated)
+
+**Given** a batch of three acknowledgements and a test-only SQLite trigger that raises `ABORT` on the second row's insert
+**When** `AppendAcknowledgements` runs
+**Then** it returns an error and the table holds no row from the batch, the first row's insert having been rolled back (a rollback forced mid-transaction, after a row was written, not at `BeginTx`)
+
+**Given** rows written by `AppendAcknowledgements`, the store closed and opened again
+**When** `Acknowledgements` reads the Agent and `core.Seen` folds them with that Agent's `core.Fold` of its `History`
+**Then** the result is the same as before the reopen, for: no rows; seen; seen then undone; undone then seen again; a row for an older finish only; a later Agent on the same key (its first row has no previous Status, so its `Since` differs); and another key's rows
+
+**Given** `core.Seen` and `core.NewAgentView`
+**When** they are table-tested with no I/O
+**Then** `seen` is false for Needs you, Idle, Working, Unknown and an unknown or zero `Since`; `done` to `idle` within one finish keeps it (same `Since`); a seen view has `class_rank` 2 and the Idle `start`, and a seen Background view keeps `class_rank` 3; `attention_class` stays `finished`; and the shared golden ordering fixture gains a workspace with a seen Agent between its Finished and older Idle Agents, which the Board's `order.mjs` test orders identically
+
+**Given** a Retention sweep with a present Agent seen on its current finish, the same Agent's acknowledgement of an older finish, and an absent Agent's acknowledgements, all older than the cutoff
+**When** `Sweep` runs
+**Then** only the present Agent's current-finish rows remain; with the present `Since` 0 all of that key's rows remain; and a test that makes the acknowledgement `DELETE` fail (a test-only trigger raising on delete), after the Transition and marker deletes ran, leaves every Transition, marker and acknowledgement in place
+
+**And** `go vet ./...`, `go test -race ./...`, `gofmt -l .` and `arch_test.go` pass, with no new import edge
+
+### Story 6.2: The engine acknowledges a finish
+
+As the operator,
+I want the Daemon to accept an acknowledgement only for the finish I am looking at, and keep it across a restart,
+So that a Seen Box is never one whose Agent has moved on since I looked.
+
+Builds ADR-0014's engine part. `engine.Engine.Acknowledge(ctx, engine.AckRequest) ([]core.AgentView,
+error)`, with `AckRequest{Seen bool; Items []AckItem}` and `AckItem{Key core.AgentKey; WaitingSince
+int64}`, sends one inbox message with a reply channel (as `Agents` does) and waits for the reply or
+`ctx`. The actor validates every item before writing any: duplicate keys refused
+(`engine.ErrBadRequest`); the key's Host and Server are the engine's, its epoch the one in force,
+and its pane a present Agent with a published view (else `engine.ErrUnknownAgent`, also while the
+gate is refused); for a mark, the class is `finished` and the view is not Background (else
+`engine.ErrNotFinished`), and the fold is known with `Since > 0` equal to `WaitingSince`, the pane
+holds no Profile-held rows and its fold is in the record (else a `*engine.StaleError` naming the
+keys, matching `engine.ErrStaleView` with `errors.Is`); an item already in the asked state is a
+no-op. An undo writes a `seen = 0` row only for a finish acknowledged now; otherwise it is a no-op.
+All items validate or nothing is written; the rows go through one `AppendAcknowledgements`.
+Without a store, or with recording off for the run, it returns `engine.ErrRecordingOff`; a store
+failure returns an error wrapping it and changes nothing. On success the actor sets each pane's
+seen state, publishes once with one `ChangeAgent` per Agent whose view changed, and replies with
+the views in request order. The `Recorder` interface gains `AppendAcknowledgements` and
+`Acknowledgements`. Seen state is derived: wherever a pane's fold is seeded from the record (its
+first sight, and every reseed), the engine reads `Acknowledgements` for the key and applies
+`core.Seen`; any fold change that moves the class or `Since` clears it without a read; a read
+failure is logged and leaves the Agent unseen. Each write is logged at info (pane, since, seen),
+nothing else. Retention needs no change beyond Story 6.1's sweep (its `Present.Since` already is
+the fold's), except that its `retention sweep` log line also reports the acknowledgements swept,
+`SweepResult.Acknowledgements` (deferred from Story 6.1, which added the count and changed no engine
+code).
+
+**Acceptance Criteria:**
+
+**Given** a Finished Agent on the fake herdr
+**When** `Acknowledge` marks it with its view's `waiting_since`
+**Then** one row is recorded, the published view has `seen` true and `class_rank` 2, one publication carries one `agent` change for it, and the reply is that view
+
+**Given** the same Agent, and in turn: a `waiting_since` one millisecond off; a Profile hold in progress on its pane; an unknown pane; the right pane under an older epoch; a Needs you, an Idle, a Working and a Background Agent
+**When** each is marked
+**Then** the first two are `ErrStaleView`, the next two `ErrUnknownAgent`, the rest `ErrNotFinished`, and none writes a row or publishes
+
+**Given** a bulk mark of three Finished Agents where one `waiting_since` is stale
+**When** it is sent
+**Then** it fails naming that key, and no row is written for any of the three
+
+**Given** a seen Agent
+**When** it goes `done` to `idle`
+**Then** it stays seen; **and when** it goes `working`, or `blocked`, or its pane gets a new Agent (a row with no previous Status), or the epoch increments, it is no longer seen, with no acknowledgement row written; **and when** it finishes again, it is Finished and unseen
+
+**Given** an undo of a seen Agent, and an undo of an Agent that has since gone `working`
+**When** each is sent
+**Then** the first writes a `seen = 0` row and the view returns to Finished with `class_rank` 1; the second succeeds, writes nothing and publishes nothing
+
+**Given** a seen Agent and a Daemon that stops and starts again over the same database (a new engine, the same store)
+**When** the first snapshot shows the Agent's Status unchanged
+**Then** its view is seen with the same `waiting_since`; **and when** the snapshot shows it changed, it is not; **and** the same holds across an in-run reconnect that keeps the epoch, and a Retention sweep run before the restart does not change the outcome (state derived from the record across a restart, not only within one run)
+
+**Given** an engine with no store, and one whose `AppendAcknowledgements` fails
+**When** an Agent is marked
+**Then** the first returns `ErrRecordingOff`; the second returns the store's error, and the view and the next publication are as if no request was made
+
+**Given** 8 goroutines sending marks, undos and bulk requests while the fake herdr sends status events for the same panes
+**When** the test runs under `go test -race -count=50` (and `-cpu=1,4,8`)
+**Then** it never races, hangs or deadlocks, every reply is either the resulting views or one of the typed errors, and after it settles each Agent's `seen` equals `core.Seen` of its record
+
+**Given** a Retention sweep that deletes acknowledgements
+**When** the engine logs it
+**Then** the `retention sweep` line carries `acknowledgements` with `SweepResult.Acknowledgements` beside `transitions` and `resync_markers` (deferred from Story 6.1)
+
+**And** `go vet ./...`, `go test -race ./...`, `gofmt -l .`, `arch_test.go` and `callsite_test.go` pass
+
+### Story 6.3: Write routes, guarded against cross-site requests
+
+As the operator,
+I want the Board, and only the Board, to be able to make an acknowledgement over HTTP,
+So that no other web page I visit can change what my Board shows.
+
+Builds ADR-0014's write routes in `internal/httpapi`, wired in `cmd/herddash`. `httpapi.Options`
+gains `Acknowledge func(ctx, engine.AckRequest) ([]core.AgentView, error)` and
+`Acknowledgements func(ctx, core.AgentKey) ([]core.Acknowledgement, error)`, both required (`New`
+panics on nil, as for the others). Routes, all `POST`: `/api/agents/{host}/{server}/{epoch}/{pane}/seen`
+and `.../unseen` with body `{"waiting_since": <ms>}`, the path parsed exactly as the history path is
+(a final segment of `seen` or `unseen` instead of `history`); `/api/seen` and `/api/unseen` with
+body `{"agents": [{"key": {"host", "server", "epoch", "pane_id"}, "waiting_since": <ms>}]}`, 1 to
+256 items, no key twice. The guard runs in this order and before any body byte is read: loopback
+`Host` (`403 host_not_allowed`, as today); `Origin` present and equal, case-insensitively, to
+`http://` + `Host` (`403 origin_not_allowed`, also for `null`); `Sec-Fetch-Site`, when present,
+`same-origin` (`403 origin_not_allowed`); `X-Herddash-Write: 1` (`403 write_header_missing`);
+`Content-Type` `application/json`, with at most a `charset=utf-8` parameter (`415
+unsupported_media_type`); body at most 4 KiB per-Agent or 64 KiB bulk (`413 body_too_large`, via
+`http.MaxBytesReader`); exactly one JSON object with no unknown fields and no trailing data, a
+positive `waiting_since` and a well-formed key (`400 bad_request`). Engine errors map to `404
+unknown_agent`, `409 not_finished`, `409 stale_view` (its message names the stale keys), `503
+recording_off`, `400 bad_request` and `500 store_failed`; a cancelled request writes no response
+body. Success is `200 {"agents": [AgentView, ...]}`. `GET`/`HEAD` on a write route is `405` with
+`Allow: POST`; every other method on any route keeps today's 405 and `Allow`; `OPTIONS` is a 405
+everywhere; no response, success or error, carries an `Access-Control-*` header. The history body
+gains `acknowledgements`, the Agent's rows in recording order as `{"finished_since", "seen",
+"observed_at"}`, always sent (`[]` when none). The `/events` stream needs no new event; its `agent`
+event carries `seen`.
+
+**Acceptance Criteria:**
+
+**Given** a valid same-origin request (`Origin: http://127.0.0.1:<port>`, `Host` the same, `X-Herddash-Write: 1`, `Content-Type: application/json`)
+**When** it marks a Finished Agent per-Agent and in bulk, and undoes each
+**Then** each returns 200 with the views, and the fake `Acknowledge` received exactly the request's items
+
+**Given** a cross-site or malformed request, one case per row of a table: no `Origin`; `Origin: null`; `http://evil.example`; the right host on another port; `https://` with the right host; `Sec-Fetch-Site: cross-site` and `same-site`; no `X-Herddash-Write`; `X-Herddash-Write: 0`; `Content-Type` `text/plain`, `application/x-www-form-urlencoded` and `multipart/form-data`; a body one byte over each limit; an unknown field; trailing data; 0 and 257 bulk items; a duplicate key; a non-loopback `Host` with a valid `Origin` for it
+**When** each is sent
+**Then** each gets its status and code from the guard, `Acknowledge` is never called, and nothing is recorded (a cross-site request is refused: the retrospectives' habit)
+
+**Given** each engine error
+**When** it is returned for a request
+**Then** the response has the mapped status and code in the JSON error shape
+
+**Given** `GET` on `/api/seen`, `POST` on `/api/state`, `/events` and the history route, and `OPTIONS` on every route
+**When** each is sent
+**Then** each is a 405 with the right `Allow`, and no response in this whole test file carries an `Access-Control-*` header
+
+**Given** an Agent with acknowledgement rows
+**When** its history is read
+**Then** the body has its Transitions as before and `acknowledgements` in recording order; with none it is `[]`
+
+**Given** `internal/httpapi/engine_contract_test.go` driving the SSE handler from the real engine
+**When** an Agent is marked, then undone, then goes `working`
+**Then** the stream carries an `agent` event for each change, and replaying the publications through `order.mjs` (`testdata/replay-board.mjs`) gives a Board model equal to the published view, `seen` included
+
+**And** `cmd/herddash`'s `serve` wires `Options.Acknowledge` to the engine and `Options.Acknowledgements` to the store, shown by a test (adding the smallest test seam if `serve`'s wiring has none); Story 6.4's browser check then exercises the same wiring through the real binary
+**And** `go vet ./...`, `go test -race ./...`, `gofmt -l .`, `arch_test.go` and `callsite_test.go` pass, with no new import edge
+
+### Story 6.4: The Board's Seen control, bulk mark and Undo
+
+As the operator,
+I want a Seen pill on each Finished Box, a mark-all for a workspace, and a short Undo,
+So that I can clear what I have read in one click and take it back if I misclicked.
+
+Builds ADR-0014's Board part, from the approved mock (its `board.mjs` changes and the `MOCK` section
+of its `board.css`, kept in the session scratchpad `ackmock/`; everything needed is restated here).
+In `order.mjs` (pure, `node --test`): `boxKind` returns `"seen"` for `view.seen === true` unless
+Background (Background first); `classLabel` gives `Seen` (drawn uppercase, SEEN, as every class
+label); `groupCounts` counts `seen` and lists it after idle, `1 finished · 3 idle · 2 seen · 1
+background · 2 working`, so a seen Agent is not counted finished; `unseenFinished(views)` is the
+group's Boxes of kind `finished`; `ackBody(views)` builds the bulk body from each view's key and
+`waiting_since`; `ackToast(views, seen)` gives `Marked <tab> seen` or `Marked N Agents seen`
+(undo: `Marked <tab> not seen`); `ackError(status, code)` gives the bar text for a refusal: 409
+`It changed before it was marked; nothing was marked`, 503 `herddash is not recording;
+nothing was marked`, else `Could not mark it seen`. In `board.mjs`: a `button.ack` (`✓` and `Seen`,
+`title` "Mark seen: you have read this Agent's result", `aria-label` "Mark <tab> seen") at the end
+of the location line of every Box of kind `finished` and no other; a `button.ack-all` in every
+workspace heading after its counts, text `✓ Mark N finished seen`, `aria-label` "Mark N finished
+Agents in <workspace> seen", hidden when the group has fewer than 2 unseen Finished Boxes; a click
+sends `fetch` `POST` with `Content-Type: application/json` and `X-Herddash-Write: 1` (the browser
+adds `Origin`), the per-Agent route for one Box and `/api/seen` for a heading; the button is
+disabled while its request is in flight and every control is disabled while the Boxes are dimmed
+or hidden. The Board changes nothing optimistically: the Box changes when the stream's `agent`
+event arrives. On success an Undo bar (`div.toast`, `role="status"`, fixed at the bottom centre)
+shows the toast text and an `Undo` button for 6 s; Undo sends `/api/unseen` (or the per-Agent
+`unseen`) for the same items and closes the bar; a new mark replaces the bar and its timer; a
+refusal shows `ackError`'s text for 6 s with no Undo. No key binding is added. CSS moves out of the
+mock's `MOCK` section into named rules using the existing tokens, so dark mode follows: `.ack`
+(pill, finished accent, 1px finished edge, inverted on hover); `.box--seen` (6px left border in
+`--border-quiet`, class label `--ink-faint`, location and Context Line `--ink-muted`, Waiting Time
+`--ink-faint` at weight 600); `.ack-all` (pill, `margin-left: auto`, `[hidden]` not displayed);
+`.toast`, `.toast--on`, `.toast-undo` (ink background, surface text, 150 ms fade). The Box's
+accessible label says Seen for a seen Box. `docs/design/board-design.md` gains a dated
+"Acknowledgement controls" section (the pill, the seen Box, the heading button, the Undo bar), and
+its Box, zones-and-counts and "Deliberately absent" sections are amended to match (ADR-0014).
+
+**Acceptance Criteria:**
+
+**Given** `order.mjs`
+**When** `node --test` runs
+**Then** `boxKind`, `classLabel`, `groupCounts`, `unseenFinished`, `ackBody`, `ackToast` and `ackError` are table-tested, including a seen Background view (Background) and a group whose finished count drops by one and gains `1 seen` when one of its Finished views becomes seen
+
+**Given** the browser check (`internal/httpapi/web/check/board-browser.mjs`) against the real binary, the fake herdr and a temporary data directory, with several Finished Agents in one workspace and Needs you, Idle, Background and Working Agents beside them
+**When** it runs
+**Then** it asserts: a `button.ack` on every Finished Box and on no other kind; clicking one makes that Box `box--seen`, labelled SEEN, placed after the group's Finished Boxes and among its Idle Boxes by the Daemon's order, and the heading's counts drop one finished and show `1 seen`; the Undo bar appears with `Marked <tab> seen` and its Undo returns the Box to Finished; the bar is gone after 6 s; the heading's `✓ Mark N finished seen` is hidden with fewer than 2 unseen Finished Boxes and marks exactly those N when clicked; the fake herdr turning a seen Agent `working` and then `done` brings back a Finished Box with its pill; and after `serve` is stopped and started again on the same data directory, a seen Box is still seen
+
+**Given** the browser check also serves a page from a second origin (another loopback port) that `fetch`es a `POST` to the per-Agent route with the custom header and JSON
+**When** the page runs
+**Then** the request fails (no CORS preflight answer, or 403), and the Board still shows that Box Finished
+
+**And** CI's `board-browser` job runs these checks and fails when, for example, the `.box--seen` rule is removed
+**And** `docs/design/board-design.md` records the controls, and the design matches the mock the operator approved; the live-data design gate is the operator's dogfooding at the end of the epic
+**And** `go test ./...`, `node --test internal/httpapi/web/` and `gofmt -l .` pass
+
+### Story 6.5: Documents, and the build the operator dogfoods
+
+As the operator,
+I want the documents agents and I read to describe acknowledgement, and a `-dev` build of the epic running on my machine,
+So that I can dogfood it and decide whether it ships.
+
+Updates `docs/how-herddash-works.md` (what Seen does and does not do; "Never accept a change over
+the web" becomes "Never accept a change over the web but an acknowledgement, and only from its own
+page"), `CLAUDE.md` (the repository state: Epic 6, migration 0005 and its one-way door, the write
+routes and their guard, `seen` on the Board; the open operator checkpoint), `docs/install.md` (back
+up the database before installing a build with schema 5, since 0.7.x refuses it, per its existing
+backup section), and `docs/implementation/deferred-work.md` for anything the epic's reviews deferred
+without a story. Then builds a `-dev` binary of the branch, backs up the database while the
+launchd agent is stopped, installs the binary at `~/.local/bin/herddash` as Epic 5's `-dev`
+builds were, starts the agent, and checks it. It never touches the live herdr server, and makes no
+acknowledgement itself.
+
+**Acceptance Criteria:**
+
+**Given** the epic's code is merged into this branch
+**When** the documents are read
+**Then** how-herddash-works, CLAUDE.md and install.md agree with ADR-0014 and the code (routes, guard, `seen`, migration 0005), and every deferral from Epic 6's reviews is either in a story's criteria or in `deferred-work.md`
+
+**Given** the installed `-dev` binary under launchd
+**When** it is checked
+**Then** `herddash version` prints the branch's commit, `/api/state` answers on loopback with `seen` on every Agent, the database is at schema 5 with the backup beside it, and a `POST` to `/api/seen` without `Origin` is refused with 403
+
+**And** the operator is then asked, once, to dogfood the Seen control; on their OK the epic ships as one pull request and one release
+
+### Story 6.6: Read herdr's focus, and record where a mark came from
+
+As the operator,
+I want herddash to read which pane herdr has focused, and every acknowledgement to say whether I clicked it or the Daemon inferred it,
+So that the automatic mark can be built on facts herdr reports and audited afterwards.
+
+Builds ADR-0015's adapter, core and record parts; no engine behaviour, view or Board change. In
+`internal/herdr/gen/genwire`, `roots` gain the `pane.focused` variant of `Subscription` and the
+`pane_focused` variant of `EventData`; `go generate ./internal/herdr/gen` regenerates `wire_gen.go`
+from the committed 0.9.5 schema (the drift test passes), and `forbidden` is unchanged
+(`pane.focus`, `agent.focus` and the output reads still refused). In `internal/herdr`,
+`lifecycleSubscriptions` gains `pane.focused` (and only that focus kind: not `tab.focused` or
+`workspace.focused`); a `pane_focused` line maps to `core.LifecycleEvent{Kind:
+core.LifecycleFocused, PaneID, WorkspaceID}` (a new `core.LifecycleKind`, `Valid`), one with no
+`pane_id` is delivered flagged unexpected as for the other kinds, and a `workspace_focused` or
+`tab_focused` line is dropped without a delivery; `mapSnapshot` maps
+`focused_pane_id` to `core.Snapshot.FocusedPaneID` (`""` when absent or null). Until Story 6.7 the
+engine's `onLifecycle` ignores `LifecycleFocused` entirely: it does not call `noteEvent` or
+`requestSnapshot`, so a focus event never causes a snapshot read. In `internal/core`:
+`AckSource` with `AckSourceBoard = "board"` and `AckSourceHerdrFocus = "herdr_focus"`;
+`AcknowledgementInput.Source` and `Acknowledgement.Source()`; `NewAcknowledgement` refuses any
+other value, the empty one included, wrapping `ErrInvalidAcknowledgement`, and refuses an undo
+(`Seen` false) with source `herdr_focus`; the pure rule `core.SeenOnLeave(in LeaveInput) bool`,
+`LeaveInput{View AgentView; FinishHasRow bool; Dwell, MinDwell time.Duration}`, true exactly when
+the view's class is `finished`, it is not Background and not seen, `WaitingSince > 0`,
+`FinishHasRow` is false and `Dwell >= MinDwell` (it reads no clock: `arch_test.go`). Migration
+`0007_acknowledgement_source.sql`: `ALTER TABLE acknowledgements ADD COLUMN source TEXT NOT NULL
+DEFAULT 'board' CHECK (source IN ('board', 'herdr_focus'))`. In `internal/store`, the one `INSERT`
+binds `source` and `Acknowledgements` reads it back through the constructor. The engine's Board
+path (`acknowledge`) passes `AckSourceBoard`. The history route's `acknowledgements` items gain
+`"source"`, always sent. `docs/research/herdr-socket-api.md` gets no change; the focus record is
+the evidence.
+
+**Acceptance Criteria:**
+
+**Given** a database at schema 6 with acknowledgement rows, and one at schema 5 with rows (the operator's `-dev` databases)
+**When** this binary opens each
+**Then** each is migrated to schema 7 in one transaction, every earlier row reads back with source `board` and its other columns unchanged, and a binary knowing only schema 6 refuses the migrated database with `store.ErrSchemaNewer` (the migration list truncated in a test)
+
+**Given** `AppendAcknowledgements` with a batch mixing `board` and `herdr_focus` rows and a test-only trigger raising `ABORT` on the second insert
+**When** it runs
+**Then** no row of the batch remains (a rollback forced after a row was written); without the trigger every row reads back with its source, across a store close and reopen
+
+**Given** a raw `INSERT` with `source = 'other'`
+**When** it runs against schema 7
+**Then** SQLite's CHECK refuses it; and `core.NewAcknowledgement` refuses `""`, `"other"` and an undo with source `herdr_focus`
+
+**Given** `core.SeenOnLeave` table-tested with no I/O
+**When** each input is tried
+**Then** it is true only for a Finished, non-Background, unseen view with a known `waiting_since`, no row for the finish and a dwell at or above the minimum; false at the minimum minus 1 ms, for Needs you, Idle, Working, Unknown, Background, an already seen view, and a finish with a row (`Mark unseen` sticks)
+
+**Given** the herdr fake socket in `internal/herdr`'s tests sending `workspace_focused`, `tab_focused`, `pane_focused` (copied from the focus record's transcript), a repeated `pane_focused` for the same pane, and a `pane_focused` without `pane_id`
+**When** `SubscribeLifecycle` reads them
+**Then** the subscribe request names `pane.focused` and no other focus kind, the first two lines are dropped without a delivery (neither an event nor an unexpected line, so herdr sending them, subscribed or not, never causes a snapshot read), each `pane_focused` is delivered as `LifecycleFocused` with its pane and workspace, the last is flagged unexpected, and the stream goes on; `forbidden_test.go` still proves `internal/herdr` has no focus method
+
+**Given** a snapshot fixture with `focused_pane_id` set, null and absent
+**When** it is mapped
+**Then** `core.Snapshot.FocusedPaneID` is the pane id, `""` and `""`
+
+**Given** the engine receiving `LifecycleFocused` events from the fake herdr in `internal/engine/fake_test.go` (which gains a way to emit them) during and between snapshot reads
+**When** the test counts snapshot reads
+**Then** the focus events cause none, and change no view (Story 6.7 gives them meaning)
+
+**Given** an Agent with a `board` and a `herdr_focus` row (the latter written directly through the store in the test)
+**When** its history is read
+**Then** each item carries its `source`
+
+**And** `go generate ./internal/herdr/gen` leaves no diff, and `go vet ./...`, `go test -race ./...`, `gofmt -l .`, `arch_test.go` and `callsite_test.go` pass, with no new import edge
+
+### Story 6.7: The engine marks a finish Seen when the operator leaves its pane
+
+As the operator,
+I want a result I read in herdr to be marked Seen when I move to another pane, and the Board to know which pane is focused,
+So that I do not have to click Seen for something I already read where I work.
+
+Builds ADR-0015's engine and view parts. The engine holds, per connection and in memory only, the
+focused pane id and its dwell start (`e.clock()`, a `time.Time`). `onLifecycle` handles
+`LifecycleFocused` without `noteEvent` or `requestSnapshot`: a `pane_focused` for the pane already
+focused changes nothing; one for another pane is a **leave** of the previous pane, then focuses the
+new one with its dwell starting now. A leave evaluates `core.SeenOnLeave` for the left pane's
+Agent, with `Dwell` = now minus its dwell start and `MinDwell` = `seenDwell` (new tunable
+`defaultSeenDwell = 3 * time.Second` in `tunables.go`, a package variable tests lower, listed in
+`docs/config.example.toml`, which the planning commit already did), after the Board mark's own
+conditions (present, published Agent under the epoch in force; fold known with `Since > 0`; no
+Profile-held rows; fold in the record). `FinishHasRow` comes from a per-pane flag, set whenever a
+row for the current finish is written (Board or automatic) or read at a seed (`seedSeen` reads the
+rows already; the flag is set when any row names the fold's `Since` and the rows are not refused
+by `core.SeenAt`'s order check) and cleared wherever `clearStaleSeen` or `missedTurn` ends the
+finish. A mark writes one row through `AppendAcknowledgements` with source `herdr_focus` and
+herdr's order when known, sets the pane seen and the flag, logs `acknowledgement` at info with
+`source=herdr_focus`, and publishes; a write failure is logged and changes nothing. The **dwell
+restarts at now** whenever the focused pane's fold changes class or `Since`, its pane gets a new
+Agent, or `missedTurn` ends its acknowledgement; `done` to `idle` within a finish does not restart
+it. At a connection's first snapshot and at every resync, the focused pane is
+`Snapshot.FocusedPaneID`, its dwell starting when the snapshot is applied, and any earlier focus is
+dropped without a leave. A later snapshot whose `FocusedPaneID` differs moves focus to it, dwell
+from now, **without** a leave, unless a `pane_focused` arrived after that read started (the event
+is newer and stands). Focus is never recorded. `core.AgentViewInput.InView` and `AgentView.InView`
+(`json:"in_view"`, always sent): true for the Agent whose pane is focused. A focus move publishes
+once, with `ChangeAgent` for each Agent whose view changed (the pane left, the pane landed on, and
+a mark). It does not change the sort key. The engine contract test
+(`internal/httpapi/engine_contract_test.go`) and its replay through `order.mjs` include `in_view`.
+
+**Acceptance Criteria:**
+
+**Given** a Finished Agent in pane A on the fake herdr, with the test's clock
+**When** `pane_focused` A arrives, the clock moves 3 s, and `pane_focused` B arrives
+**Then** A's view is `in_view` between the two events and not after, A is seen with `class_rank` 2, one `herdr_focus` row names A's `waiting_since`, and the publication for the leave carries `agent` changes for A and B only
+
+**Given** the same, with the clock moving 2.999 s before the leave; and a flick A, B, C, D with 1 s on each
+**When** the events arrive
+**Then** nothing is marked and no row is written (flicking through panes does not mark)
+
+**Given** pane A focused for 10 s with its Agent Working, then the Agent finishes (`done`) while A stays focused
+**When** focus moves to B 1 s after the finish, and in a second run 3 s after it
+**Then** the first does not mark (the dwell restarted at the finish) and the second does
+
+**Given** pane A focused, its Agent finishing into it while the operator is away, and no further focus event for an hour (reconcile snapshots naming A arriving meanwhile)
+**When** the hour passes
+**Then** A stays Finished and `in_view` with no row; **and when** `pane_focused` B then arrives, A is marked Seen (the dwell counted from the finish)
+
+**Given** a herdr with no focus events at all (detached), its snapshots naming a focused pane whose Agent is Finished
+**When** many reconciles pass
+**Then** nothing is ever marked; the pane is `in_view`
+
+**Given** a pane left after 3 s whose Agent is Needs you, Idle, Working, Unknown or Background, or is already seen
+**When** the leave is evaluated
+**Then** nothing is written; and a `done` to `idle` of an unfocused Finished Agent marks nothing (herdr's done/idle is not used)
+
+**Given** an automatic mark, then a Board `unseen` for that finish (`Mark unseen`)
+**When** the operator returns to the pane for 10 s and leaves again, and then the Daemon stops and starts over the same database and the snapshot shows the Status unchanged and the focus on that pane, and the operator leaves after 10 s more
+**Then** the Agent stays Finished each time and no further row is written (the explicit choice sticks, derived from the record across a restart)
+
+**Given** an automatic mark and a Daemon that stops and starts again over the same database
+**When** the first snapshot shows the Agent's Status unchanged
+**Then** its view is seen with the same `waiting_since`; **and** an Agent marked by the Board before a missed turn (herdr's order risen at the restart) is not seen and, focused 3 s and left, is marked again with a new `herdr_focus` row (the earlier rows do not count for the new turn)
+
+**Given** a focused pane A dwelt on for 10 s, and a reconnect that keeps the epoch during which the operator moved to B (the event missed), the snapshot after it naming B
+**When** the reconnect completes
+**Then** A is not marked (a missed focus move never marks), B is `in_view` with its dwell counted from the snapshot's application, and leaving B after 3 s marks B if it is Finished
+
+**Given** a reconcile snapshot naming pane C while the engine holds B, with no event (another client's view, finding 4), and in a second case a `pane_focused` C arriving while a snapshot read that started before it names B is in flight
+**When** each snapshot is applied
+**Then** in the first, focus moves to C and B is not marked; in the second, focus stays C
+
+**Given** a status `working` for pane A arriving just after `pane_focused` B (the prompt raced the leave) with A dwelt on 5 s
+**When** both are handled
+**Then** A ends Working, not seen, whatever the order the two events arrive in
+
+**Given** a leave during a Profile hold on the left pane, and a leave whose `AppendAcknowledgements` fails
+**When** each is evaluated
+**Then** nothing is marked, the failure is logged, the view and next publication are as if no leave happened, and a later leave of the same finish after 3 s more marks it
+
+**Given** 8 goroutines sending Board marks, undos and bulk requests while the fake herdr sends status events and `pane_focused` events for the same panes and the clock advances
+**When** the test runs under `go test -race -count=50` and `-cpu=1,4,8`
+**Then** it never races, hangs or deadlocks; every reply is the views or a typed error; after it settles each Agent's `seen` equals `core.SeenAt` of its record, no finish has more than one `herdr_focus` row, and no `herdr_focus` row follows a `board` row for the same finish
+
+**Given** the engine contract test driving the SSE handler
+**When** focus moves A to B and A is marked by the leave
+**Then** the stream carries `agent` events for A and B with `in_view` and `seen`, and the replay through `order.mjs` equals the published view
+
+**And** `internal/engine/fake_test.go` gains `pane_focused` events and a snapshot `focused_pane_id`; `go vet ./...`, `go test -race ./...`, `gofmt -l .`, `arch_test.go` and `callsite_test.go` pass, with no new import edge
+
+### Story 6.8: The Board shows "in view" and offers Mark unseen
+
+As the operator,
+I want to see which Finished Box is the pane I have open in herdr, and take back a Seen I disagree with,
+So that the automatic mark is visible before it happens and reversible after.
+
+Builds ADR-0015's Board part, exactly as `docs/design/board-design.md`'s "Seen on leaving the pane,
+the in-view tag and Mark unseen" section (written in the planning commit) gives it. In `order.mjs`
+(pure, `node --test`): `inViewTag(view)` true exactly when `boxKind(view) === "finished"` and
+`view.in_view === true`; the Box's accessible name gains ", in view" after the class label for such
+a Box; `unackLabel(view)` gives "Mark <tab> not seen"; `ackToast(views, false)` gives "Marked <tab>
+not seen" (or "Marked N Agents not seen"); `ackError(status, code, seen)` gives "Could not mark it
+not seen" for an unseen refusal outside 409 and 503. In `board.mjs`: a `span.in-view` (`● in view`,
+the design's title, not focusable) on the first line of a Finished Box with `in_view`, after the
+pane badge and before `button.ack`; a `button.unack` (`Mark unseen`, the design's title,
+`aria-label` "Mark <tab> not seen") on every Box of kind `seen` and no other kind; a click posts
+`{"waiting_since"}` to the per-Agent `unseen` route with the same headers as Seen, the button
+disabled in flight and every control while the Boxes are dimmed or hidden; on success the Undo bar
+shows "Marked <tab> not seen" for 6 s with an `Undo` that posts the per-Agent `seen` route; a
+refusal shows the refusal bar. Nothing is optimistic: the Box changes on the stream's `agent`
+event. CSS: `.in-view` and `.unack` as the design gives them, from existing tokens, so dark mode
+follows. The browser check's fake herdr (`internal/httpapi/web/check/board-browser.mjs`) gains the
+`pane.focused` subscription, `pane_focused` lines it can push, a moving `focused_pane_id` in its
+snapshot, and a lowered dwell through a test-only flag or environment variable, the smallest seam
+`cmd/herddash` can take (`HERDDASH_TEST_SEEN_DWELL_MS` honoured only when the check sets it, or an
+equivalent), so the check does not wait 3 s per step.
+
+**Acceptance Criteria:**
+
+**Given** `order.mjs`
+**When** `node --test` runs
+**Then** `inViewTag`, the accessible name, `unackLabel`, `ackToast` for unseen and `ackError` for unseen are table-tested, including: a Seen, a Background, a Needs you and an Idle view with `in_view` true show no tag; a Finished view with `in_view` false shows none
+
+**Given** the browser check against the real binary, its fake herdr and a temporary data directory, with Finished Agents in panes A and B and Needs you, Idle, Working and Background Agents beside them, focus on A in the snapshot
+**When** it runs
+**Then** it asserts: A's Box has `span.in-view` reading `● in view` and no other Box has one (Needs you included even when its pane is focused); after the fake pushes `pane_focused` B past the dwell, A's Box becomes `box--seen` with a `button.unack` and no `button.ack`, and B's Box carries the tag; clicking A's `Mark unseen` makes A Finished with its `button.ack`, and the bar reads `Marked <tab> not seen`, whose Undo makes A seen again; after a second `Mark unseen`, pushing `pane_focused` A, waiting past the dwell and pushing `pane_focused` B leaves A Finished; a flick A to B to C faster than the dwell marks nothing; and after `serve` stops and starts on the same data directory, A's state is as it was
+
+**And** CI's `board-browser` job runs these and fails when the `.in-view` or `.unack` rule is removed; `go test ./...`, `node --test internal/httpapi/web/` and `gofmt -l .` pass
+**And** the design gate is the operator's dogfooding with live data (Story 6.9), as for Story 6.4
+**And** a Box redrawn for a view change while one of its controls (`button.ack` or `button.unack`) has keyboard focus gives focus back to the same control of the redrawn Box, not to the Box: since Story 6.7 every herdr focus move into or out of a Finished pane toggles `in_view` and redraws that Box, and the browser check asserts the Seen pill keeps focus across such a move (Story 6.7's review)
+
+### Story 6.9: Documents, and the build the operator dogfoods again
+
+As the operator,
+I want the documents to describe Seen on leaving the pane, and a `-dev` build with it on my machine,
+So that I can dogfood the whole of Epic 6 and decide whether it ships.
+
+Updates `docs/how-herddash-works.md` (Seen on leave, in view, Mark unseen, that herddash reads
+herdr's focus and never sets it, and the caveats: several attached clients, another API client's
+focus call, `● in view` on a detached herdr), `CLAUDE.md` (the repository state: migration 0007 and
+its one-way door, the `pane.focused` subscription, `in_view`, the source column, the open
+checkpoint), `docs/install.md` (back up before installing a build with schema 7, which a build
+knowing schema 6 refuses), and `docs/implementation/deferred-work.md` for anything Stories 6.6 to
+6.8's reviews deferred without a story. Then builds a `-dev` binary of the branch, backs up the
+database while the launchd agent is stopped, installs it at `~/.local/bin/herddash` as Story 6.5
+did, starts the agent and checks it. It never touches the live herdr server and makes no
+acknowledgement itself.
+
+**Acceptance Criteria:**
+
+**Given** Stories 6.6 to 6.8 on this branch
+**When** the documents are read
+**Then** how-herddash-works, CLAUDE.md and install.md agree with ADR-0015 and the code (the focus subscription, the rule, `in_view`, migration 0007, `source`), and every deferral from those stories' reviews is in a story's criteria or in `deferred-work.md`
+
+**Given** the installed `-dev` binary under launchd
+**When** it is checked
+**Then** `herddash version` prints the branch's commit, `/api/state` answers with `seen` and `in_view` on every Agent and exactly one Agent `in_view` when herdr names a focused Agent pane, the database is at schema 7 with the backup beside it, the log shows the lifecycle subscription started with no snapshot storm from focus events, and a `POST` to `/api/seen` without `Origin` is still refused with 403
+
+**And** the operator is then asked, once, to dogfood Epic 6 with Seen on leave; on their OK the epic ships as one pull request and one release

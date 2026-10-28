@@ -132,16 +132,31 @@ export function isBackground(view) {
   return view.background === true;
 }
 
-// boxKind is the kind a Box is drawn as: "background", "idle", or its
-// Attention Class.
+// SEEN_LABEL is what a Box says for a Finished Agent the operator marked
+// seen (ADR-0014).
+export const SEEN_LABEL = "Seen";
+
+// isSeen reports whether the view is a Finished Agent the operator
+// acknowledged: the Daemon's seen field, read as sent and never derived here
+// (ADR-0014). The Daemon sends it true only for class finished.
+export function isSeen(view) {
+  return view.seen === true;
+}
+
+// boxKind is the kind a Box is drawn as: "background", "seen", "idle", or
+// its Attention Class. Background comes first: a seen Agent whose background
+// work opens again is Background (ADR-0014), as the Daemon ranks it.
 export function boxKind(view) {
   if (isBackground(view)) return "background";
+  if (isSeen(view)) return "seen";
   return isIdle(view) ? "idle" : view.attention_class;
 }
 
-// classLabel is the Attention Class as text, Background or Idle for those.
+// classLabel is the Attention Class as text, Background, Seen or Idle for
+// those.
 export function classLabel(view) {
   if (isBackground(view)) return BACKGROUND_LABEL;
+  if (isSeen(view)) return SEEN_LABEL;
   if (isIdle(view)) return IDLE_LABEL;
   return CLASS_LABEL[view.attention_class] || view.attention_class;
 }
@@ -217,19 +232,123 @@ export function headerLabel(view) {
 }
 
 // groupCounts is a workspace group's counts in the group's reading order,
-// "1 finished · 3 idle · 1 background · 2 working", leaving out zeros and
-// Unknown.
+// "1 finished · 3 idle · 2 seen · 1 background · 2 working", leaving out
+// zeros and Unknown. A seen Agent is counted seen, not finished (ADR-0014),
+// so the finished count is the results the operator has not read.
 export function groupCounts(views) {
-  const n = { finished: 0, idle: 0, background: 0, working: 0 };
+  const n = { finished: 0, idle: 0, seen: 0, background: 0, working: 0 };
   for (const v of views) {
     const k = boxKind(v);
     if (k in n) n[k]++;
   }
-  return ["finished", "idle", "background", "working"]
+  return ["finished", "idle", "seen", "background", "working"]
     .filter((k) => n[k] > 0)
     .map((k) => n[k] + " " + k)
     .join(" · ");
 }
+
+// unseenFinished is the views of kind finished: the Boxes that carry a Seen
+// pill, and that a workspace heading's bulk mark names (ADR-0014).
+export function unseenFinished(views) {
+  return views.filter((v) => boxKind(v) === "finished");
+}
+
+// ackBody is the body of a bulk mark or undo (ADR-0014): each view's exact
+// finish, its AgentKey and the waiting_since the Board showed, never "every
+// Agent in a workspace", so nothing the operator did not see is named.
+export function ackBody(views) {
+  return {
+    agents: views.map((v) => ({
+      key: { host: v.key.host, server: v.key.server, epoch: v.key.epoch, pane_id: v.key.pane_id },
+      waiting_since: v.waiting_since,
+    })),
+  };
+}
+
+// ackPath is the per-Agent write route for view, "seen" or "unseen", each
+// key segment escaped as the history route's path is parsed.
+export function ackPath(key, seen) {
+  return (
+    "/api/agents/" +
+    [key.host, key.server, String(key.epoch), key.pane_id].map(encodeURIComponent).join("/") +
+    "/" +
+    (seen ? "seen" : "unseen")
+  );
+}
+
+// IN_VIEW_TEXT and IN_VIEW_TITLE are the in-view tag's text and title
+// (ADR-0015). The tag draws IN_VIEW_DOT hidden from assistive technology,
+// as the Seen pill's icon is, and IN_VIEW_WORDS after it.
+export const IN_VIEW_DOT = "●";
+export const IN_VIEW_WORDS = "in view";
+export const IN_VIEW_TEXT = IN_VIEW_DOT + " " + IN_VIEW_WORDS;
+export const IN_VIEW_TITLE = "Focused in herdr now. Leaving the pane after 3 s marks it seen.";
+
+// inViewTag reports whether a Box shows the in-view tag (ADR-0015): a Box
+// of kind finished (so not Background and not Seen) whose pane is herdr's
+// focused pane, the Daemon's in_view read as sent. No other kind shows it,
+// Needs you included.
+export function inViewTag(view) {
+  return boxKind(view) === "finished" && view.in_view === true;
+}
+
+// ackLabel is a Seen pill's accessible name, "Mark <tab> seen".
+export function ackLabel(view) {
+  return "Mark " + tabLabel(view) + " seen";
+}
+
+// unackLabel is a Mark unseen pill's accessible name, "Mark <tab> not
+// seen" (ADR-0015).
+export function unackLabel(view) {
+  return "Mark " + tabLabel(view) + " not seen";
+}
+
+// ackToast is the Undo bar's text after a mark (seen true) or an undo:
+// "Marked <tab> seen", "Marked N Agents seen", "Marked <tab> not seen".
+export function ackToast(views, seen) {
+  const what = views.length === 1 ? tabLabel(views[0]) : views.length + " Agents";
+  return "Marked " + what + (seen ? " seen" : " not seen");
+}
+
+// ACK_STALE, ACK_OFF and ACK_FAILED are the bar's text for a refused mark;
+// UNSEEN_FAILED is ACK_FAILED's for a refused Mark unseen (ADR-0015), whose
+// 409 and 503 read as a mark's.
+export const ACK_STALE = "It changed before it was marked; nothing was marked";
+export const ACK_OFF = "herddash is not recording; nothing was marked";
+export const ACK_FAILED = "Could not mark it seen";
+export const UNSEEN_FAILED = "Could not mark it not seen";
+
+// UNDO_STALE, UNDO_OFF and UNDO_FAILED are the bar's text for a refused
+// Undo of a Seen mark: the mark stands, so they never say nothing was marked.
+export const UNDO_STALE = "It changed before the undo; it is still marked seen";
+export const UNDO_OFF = "herddash is not recording; it is still marked seen";
+export const UNDO_FAILED = "Could not undo it; it is still marked seen";
+
+// REDO_STALE, REDO_OFF and REDO_FAILED are the bar's text for a refused
+// Undo of a Mark unseen: it stands, so the Agent is still not seen.
+export const REDO_STALE = "It changed before the undo; it is still not seen";
+export const REDO_OFF = "herddash is not recording; it is still not seen";
+export const REDO_FAILED = "Could not undo it; it is still not seen";
+
+// ackError is the bar's text for a refused request, by the response's
+// status (0 when the request never got one) and error code: a 409 (the
+// Agent moved on, is no longer Finished, or is held), a 503 (recording off),
+// else a plain failure. seen is what the request asked for, and undo says it
+// was the Undo bar's: a mark (seen, not undo), a Mark unseen (neither), the
+// Undo of a mark (undo, not seen) or the Undo of a Mark unseen (both).
+export function ackError(status, code, seen = true, undo = false) {
+  const [stale, off, failed] = undo
+    ? seen
+      ? [REDO_STALE, REDO_OFF, REDO_FAILED]
+      : [UNDO_STALE, UNDO_OFF, UNDO_FAILED]
+    : [ACK_STALE, ACK_OFF, seen ? ACK_FAILED : UNSEEN_FAILED];
+  if (status === 409) return stale;
+  if (status === 503) return off;
+  return failed;
+}
+
+// ACK_TOAST_MS is how long the Undo bar, or a refusal's bar, shows.
+export const ACK_TOAST_MS = 6000;
 
 // BOARD_TITLE is the browser tab's title when nothing needs you.
 export const BOARD_TITLE = "herddash";
@@ -271,8 +390,8 @@ export function titleBar(views, connection, lost, status) {
 }
 
 // layout splits views into what the Board draws: the top zone (Needs you
-// alone) and the lower zone's workspace groups (Finished, Idle, Background,
-// Working, Unknown), each in Board order with its header label and counts.
+// alone) and the lower zone's workspace groups (Finished, then Idle and Seen
+// as the Daemon ranks them, Background, Working, Unknown), each in Board order with its header label and counts.
 export function layout(views) {
   const sorted = sortViews(views);
   const headers = workspaceHeaders(sorted);
@@ -308,12 +427,14 @@ export function anyRecap(views) {
 // boxLabel is a Box's accessible name at nowMs: everything it shows,
 // untruncated, so keyboard and screen-reader users can read it in full:
 // workspace and tab, pane, the recap in full or else the Context Line,
-// directory, heading, class, its background tasks, and time.
+// directory, heading, class, "in view" when the Box shows that tag
+// (ADR-0015), its background tasks, and time.
 export function boxLabel(view, nowMs) {
   const w = hasWaitingSince(view)
     ? "waiting " + waitingLabel(view, nowMs).replace("≥ ", "at least ")
     : "Waiting Time unknown";
-  return [whereLabel(view), paneLabel(view), contextText(view), view.directory, view.heading, classLabel(view), tasksLabel(view), w]
+  const inView = inViewTag(view) ? "in view" : "";
+  return [whereLabel(view), paneLabel(view), contextText(view), view.directory, view.heading, classLabel(view), inView, tasksLabel(view), w]
     .filter(Boolean)
     .join(", ");
 }

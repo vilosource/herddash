@@ -12,6 +12,7 @@ func record(st *store.Store, rec interface{ Append(any) error }) {
 	st.AppendResyncMarker(store.ResyncMarker{})
 	st.SaveServerState("h", "s", store.ServerState{Epoch: 1})
 	st.Sweep(nil, 0, nil)
+	st.AppendAcknowledgements(nil, nil)
 	keep(rec)
 }
 

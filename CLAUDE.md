@@ -5,11 +5,13 @@ The question it answers: what is every agent doing, and which ones are waiting o
 
 **Planning is complete; the build runs story by story. See "How the build runs" below.**
 
-herddash is a **notification board backed by a recorder**: one read-only page with one box per
-agent, longest-waiting first, plus a daemon that persists every agent status transition with the
-profile that owns it and serves a read-only API. It runs beside the existing browser interfaces,
-not instead of them. That is ADR-0001 (accepted 2026-10-08) as amended by ADR-0003: the board is
-the product, and the recorder is what makes it trustworthy.
+herddash is a **notification board backed by a recorder**: one page with one box per agent,
+longest-waiting first, plus a daemon that persists every agent status transition with the profile
+that owns it and serves a loopback API. Both are read-only but for one thing, herddash's own
+acknowledgement that a Finished Agent's result was read ("Seen", ADR-0014); herdr is never told
+and never changed. It runs beside the existing browser interfaces, not instead of them. That is
+ADR-0001 (accepted 2026-10-08) as amended by ADR-0003: the board is the product, and the recorder
+is what makes it trustworthy.
 
 ## Read these first, in this order
 
@@ -31,8 +33,10 @@ them to disagree.
 
 ## How the build runs
 
-**Planning is complete.** The PRD, the architecture and the 45 stories in
-`docs/planning/epics.md` (27 for Epics 1 to 4, 18 for Epic 5, 5.1 to 5.18) are final, and
+**Planning is complete.** The PRD, the architecture and the 55 stories in
+`docs/planning/epics.md` (27 for Epics 1 to 4, 19 for Epic 5, 5.1 to 5.19, and 9 for Epic 6,
+6.1 to 6.5 planned 2026-10-27 with ADR-0014 and 6.6 to 6.9 added the same day with ADR-0015) are
+final, and
 `docs/implementation/sprint-status.yaml` tracks them. Build one story at a time with
 `/bmad-build`, in the order the tracking file lists; it names the next one. Do not write code that
 no story asks for.
@@ -44,23 +48,27 @@ The tracking file's `action_items` name the operator checkpoints. Those of Epics
 - **Story 3.6's design** was approved before Story 3.7.
 - **Story 4.3** had its day of dogfooding before release-please PR #2 was merged, at 0.1.0.
 
-Two are open:
-- **When Epic 5 is done**, the operator is asked once; on their OK it ships as one pull request
-  and one release. Until then its stories are built and installed locally as `-dev` builds.
-- **Story 5.9** runs on or after 2026-11-03, and asks the operator only if the record shows
-  Finished Agents that never cleared.
+Epic 5 shipped as v0.6.0 (PR #55). Story 5.9 is superseded: the operator decided PRD §8 Q1
+directly on 2026-10-27 (ADR-0014), and its checkpoint is closed. So is Epic 6's:
+- **Epic 6 (acknowledging a Finished Agent, "Seen", ADR-0014 and ADR-0015)** was built as
+  Stories 6.1 to 6.9. Dogfooding Story 6.5's build led the operator to add Seen when they leave
+  the pane in herdr (Stories 6.6 to 6.9). The operator dogfooded Story 6.9's `-dev` build
+  (schema 7) and approved it on 2026-10-28; it ships as one pull request and one release.
 
 The architecture spine at
 `docs/planning/architecture/architecture-herddash-2026-10-14/ARCHITECTURE-SPINE.md` is binding on
 every story: its `AD` rules, its import graph and its conventions. ADR-0004 to ADR-0007 carry the
 structural decisions behind it; ADR-0008 to ADR-0012 added Claude Code's session record, background
-work, recaps, the tighter import rules and the event stream's keepalive. Its four open questions
+work, recaps, the tighter import rules and the event stream's keepalive, ADR-0013 the Board's title
+bar, ADR-0014 acknowledgement, which amends ADR-0003, ADR-0005 and ADR-0007, and ADR-0015 Seen
+when the operator leaves the pane in herdr, which amends ADR-0006 and ADR-0014. Its four open questions
 were answered by Story 1.3 against an isolated herdr 0.9.5 binary; the evidence is in the socket
 API record's "Findings against herdr 0.9.5".
 
-The PRD's remaining open questions (§8) are answered during the build, not before it: whether
-acknowledgement is needed at all (Story 5.9, from the record), and Profile rules and Pane Titles
-for Codex and Antigravity once one pane of each has been observed.
+The PRD's remaining open questions (§8) are answered during the build, not before it: Profile
+rules and Pane Titles for Codex and Antigravity once one pane of each has been observed. Whether
+acknowledgement is needed (§8 Q1) was closed by the operator on 2026-10-27: it is FR-5a,
+ADR-0014, built as Epic 6.
 
 ## Working method
 
@@ -226,7 +234,9 @@ Beside them, CI's `board-browser` job builds `./cmd/herddash` and runs
 `internal/httpapi/web/check/board-browser.mjs` against the runner's preinstalled Google Chrome with
 the runner's Node (22 or newer, no npm), so breaking the Board's drawing, such as removing the
 `.board--recaps` rule, turns CI red. To run it locally (on Linux, prefix the second command with
-`CHROME=$(command -v google-chrome)`):
+`CHROME=$(command -v google-chrome)`). Its focus section runs `serve` with
+`HERDDASH_TEST_SEEN_DWELL_MS=1000`, a test seam that lowers the 3 s Seen dwell (ADR-0015, Story
+6.8); `serve` logs a warning when it is set, and nothing else should set it:
 
 ```bash
 go build -o /tmp/herddash ./cmd/herddash
@@ -277,8 +287,10 @@ No npm, no build step for assets. Web assets are embedded in the binary.
 
 ## Repository state
 
-**Epics 1 to 4 are done, released as v0.1.0 to v0.5.0, and Epic 5 (closing what dogfooding and
-reviews left open after 0.5.0) is in progress** on `feat/epic-5-after-0.5.0`.
+**Epics 1 to 5 are done, released as v0.1.0 to v0.7.1** (Epic 5 as v0.6.0, its title bar as
+v0.7.0). **Epic 6, acknowledging a Finished Agent ("Seen", ADR-0014 and ADR-0015), is built** on
+`feat/epic-6-acknowledgement`, dogfooded by the operator and approved on 2026-10-28 to ship as
+one pull request and one release (see "How the build runs").
 `docs/implementation/sprint-status.yaml` is the authority on which story is next; each story's
 spec, with its review triage log, is `docs/implementation/spec-<key>.md`. `go.mod` declares
 `go 1.26.0` and three direct dependencies: `modernc.org/sqlite` v1.60.1,
@@ -291,7 +303,12 @@ spec, with its review triage log, is `docs/implementation/spec-<key>.md`. `go.mo
   generated from the committed schema dump by `go generate ./internal/herdr/gen`; a test fails if
   they drift. A lifecycle line that decodes as JSON but is not an event it can deliver arrives
   flagged unexpected, and the engine answers it with a fresh snapshot rather than a reconnect
-  (Story 5.12).
+  (Story 5.12). The lifecycle subscription also takes one global focus kind, `pane.focused`
+  (ADR-0015, Story 6.6): a `pane_focused` line becomes `core.LifecycleFocused` with its pane, a
+  `workspace_focused` or `tab_focused` line is dropped without a delivery (so it never counts as
+  unexpected), and the snapshot's `focused_pane_id` is read into `core.Snapshot.FocusedPaneID`.
+  It still has no focus method: reading focus is a subscription, and `pane.focus`, `agent.focus`,
+  `tab.focus` and `workspace.focus` stay uncalled.
 - `internal/procenv`: reads one process's environment and its direct children (linux `/proc`,
   darwin `kern.procargs2` through `golang.org/x/sys`), Claude Code's session record
   `sessions/<pid>.json`, and that session's transcript, tailed in memory (ADR-0008, ADR-0009).
@@ -301,23 +318,63 @@ spec, with its review triage log, is `docs/implementation/spec-<key>.md`. `go.mo
   failing after start, `defaultSnapshotFailuresBeforeLost` (3) in a row, count as herdr lost, so
   the connection strip says so (Story 5.12). Its fixed timings are in
   `internal/engine/tunables.go`, listed for operators at the end of `docs/config.example.toml`.
+  It holds herdr's focused pane and its dwell start in memory only, never in the record, and a
+  focus event never requests a snapshot (ADR-0015, Story 6.7, `internal/engine/focus.go`): a
+  `pane_focused` naming another pane is a leave of the one before, and a leave after at least
+  `defaultSeenDwell` (3 s) focused during a Finished, non-Background finish that has no
+  acknowledgement row yet writes one row with source `herdr_focus` (`core.SeenOnLeave`). A
+  snapshot that names another focused pane moves focus without a leave, held until the next
+  event judges it; a first snapshot or resync starts the dwell when it is applied.
 - `internal/core`: the pure rules: Attention Class, Waiting Time fold, sort key, Context Line,
-  Profile rules, and the transcript decoder. `core.NewTransition` refuses a `HerdrOrder` on a
-  `live` or `backfill` Transition (`core.ErrInvalidHerdrOrder`).
+  Profile rules, the transcript decoder, and the acknowledgement rules (`core.Acknowledgement`,
+  built only by `core.NewAcknowledgement`, which refuses a `Source` other than
+  `core.AckSourceBoard` or `core.AckSourceHerdrFocus`; `core.Seen`; and `core.SeenOnLeave`, the
+  pure Seen-on-leave decision). `core.NewTransition` refuses a
+  `HerdrOrder` on a `live` or `backfill` Transition (`core.ErrInvalidHerdrOrder`).
 - `internal/store`: the SQLite record (`modernc.org/sqlite`, WAL, flock-owned), plus the engine's
-  `server_state`, which is engine state, not the append-only record. Four migrations, 0001 to
-  0004; 0004 (Story 5.17) adds `server_state.released`, engine state only. A database is refused
-  by a binary that knows an older schema (`store.ErrSchemaNewer`), so 0.5.0 cannot open a
-  database migrated to schema 4: going back to it means restoring or removing the database.
-- `internal/httpapi`: the read-only loopback API: `/api/state`, `/events` (SSE) and
-  `/api/agents/{host}/{server}/{epoch}/{pane}/history`. Every 15 s a stream sends a `keepalive`
-  event with no `id:` (ADR-0012).
+  `server_state`, which is engine state, not the append-only record. Seven migrations, 0001 to
+  0007; 0004 (Story 5.17) adds `server_state.released`, engine state only, 0005 (Story 6.1)
+  adds the append-only `acknowledgements` table, swept by Retention with its Agent's rows, 0006
+  (ADR-0014's amendment) its nullable `herdr_order`, and 0007 (Story 6.6, ADR-0015) its `source`,
+  `'board'` or `'herdr_focus'`, defaulting every earlier row to `'board'`. A database is refused
+  by a binary that knows an older schema (`store.ErrSchemaNewer`), so each migration is a one-way
+  door: 0.5.0 cannot open schema 4, **0.7.x and earlier cannot open schema 5, 6 or 7**, and the
+  Epic 6 `-dev` builds before Story 6.6, which know schema 5 or 6, cannot open schema 7. Going back means restoring the backup taken before the upgrade (`docs/install.md`,
+  "Before a build with a new schema") or removing the database. `store.AppendAcknowledgements` is
+  called only by the engine (`callsite_test.go`).
+- `internal/httpapi`: the loopback API: `/api/state`, `/events` (SSE) and
+  `/api/agents/{host}/{server}/{epoch}/{pane}/history`, whose body also carries the Agent's
+  `acknowledgements` in recording order, each with its `source` (`board` or `herdr_focus`). Every 15 s a stream sends a `keepalive` event with no
+  `id:` (ADR-0012). Its only write routes are four `POST`s (Story 6.3, ADR-0014):
+  `/api/agents/{host}/{server}/{epoch}/{pane}/seen` and `.../unseen` (`{"waiting_since": <ms>}`),
+  and `/api/seen` and `/api/unseen` (1 to 256 items, no key twice, all or nothing). Before any
+  body byte is read they require, in order: a loopback `Host`; an `Origin` equal to `http://` +
+  `Host` (missing or `null` refused, 403 `origin_not_allowed`); `Sec-Fetch-Site`, when sent,
+  `same-origin`; `X-Herddash-Write: 1` (403 `write_header_missing`); `Content-Type:
+  application/json` (415); a body of at most 4 KiB per Agent or 64 KiB bulk (413), exactly one
+  JSON object with no unknown fields (400). No response carries a CORS header and `OPTIONS` is a
+  405, so another page's request never gets through a preflight. They reach the engine only
+  through `engine.Engine.Acknowledge`, which validates against its own state (404
+  `unknown_agent`, 409 `not_finished` or `stale_view`, 503 `recording_off`, which only a run
+  whose saved state failed to load gives, since no setting turns recording off); it never calls
+  herdr.
 - `internal/importer`: the plugin-log backfill.
 
 - The Board at `/`, with its files under `internal/httpapi/web/` embedded in the binary: the
   ordering and event logic is `order.mjs`, tested with `node --test` in CI, and
   `internal/httpapi/web/check/board-browser.mjs` is a headless-Chrome check of its drawing,
-  run by CI's `board-browser` job. Its approved design is `docs/design/board-design.md`.
+  run by CI's `board-browser` job. Its approved design is `docs/design/board-design.md`. Above
+  the strips, sticky with them, is its title bar (Story 5.19, ADR-0013, released as v0.7.0): a
+  text logo (`herddash`, `herd` bold, after three bars in red, amber and green) and a summary
+  that only restates what the Board already shows, the Needs you count ("2 need you" or
+  "Nothing needs you") and herdr's connection (`herdr <version>` with a dot, or disconnected or
+  reconnecting), from `titleBar` in `order.mjs`; it holds no link or control and is not a live
+  region, and any new fact in it is a new decision. Its only controls are acknowledgement's (ADR-0014, Story 6.4): a `✓ Seen` pill on each Finished Box, a
+  workspace heading's `✓ Mark N finished seen` with two or more unseen Finished Boxes, a
+  `Mark unseen` pill on each Seen Box (ADR-0015, Story 6.8), and a 6 s Undo bar; no keyboard
+  shortcut. A Finished Box whose view has `in_view` shows a `● in view` tag, a label, not a
+  control. It changes nothing optimistically: a Box changes when the
+  stream's `agent` event arrives.
 - `deploy/`: a launchd agent and a systemd user unit, installed by hand as `docs/install.md`
   describes.
 
@@ -340,7 +397,30 @@ What the Board shows beyond herdr's Status, all for Claude Code Agents:
   turn does, and so does a `!command` in bash mode, because Claude Code answers it with a model
   turn (Story 5.15, `docs/research/claude-code-bash-mode-2026-10-23.md`).
 
-Epic 5 has also made these exact so far:
+And for every Agent, whatever its program:
+
+- **Seen** (ADR-0014, Epic 6): an acknowledgement names one exact finish, the AgentKey and the
+  `waiting_since` the view sent. `AgentView.seen` (always sent) is true while the Agent's fold is
+  Finished from that same instant, so herdr's `done` to `idle` keeps it and any other Transition
+  ends it, with no row written. `attention_class` stays `finished`; a seen Agent ranks with Idle
+  (`class_rank` 2, Idle's newest-first start), so its Box turns grey, labelled SEEN, moves down
+  among its group's Idle Boxes and is counted `N seen`, not finished. Background still ranks 3.
+  The state is derived from the record at every seed, so it survives a Daemon restart. Each
+  mark carries herdr's `state_change_seq` for the Status when a snapshot had read it, and a
+  snapshot showing the same Status at a higher one, in the run or at a restart, ends the mark:
+  the Agent ran a turn herddash did not observe (`core.SeenAt`, ADR-0014's amendment). With no
+  order known for the finish, a missed turn still goes unnoticed.
+- **Seen on leave** (ADR-0015, Stories 6.6 to 6.8): the Daemon also marks a finish Seen when the
+  operator leaves its pane in herdr after at least 3 s focused during it, source `herdr_focus`,
+  only as a finish's first row, so a `Mark unseen` sticks for that finish. `AgentView.in_view`
+  (always sent) is true exactly for the Agent in the engine's focused pane; it changes no sort
+  key, class or count. It means herdr's focused pane, not that someone is looking: a detached
+  herdr still names one. Several attached herdr clients, or another API client's focus call,
+  can produce a wrong mark; that is documented, not detected.
+
+Epic 5 (v0.6.0, its title bar v0.7.0) also made these exact; v0.7.1 added only
+`docs/install.md`'s note that under launchd on macOS a new, ad-hoc signed binary starts about
+30 s late, after launchd refuses its first start (`OS_REASON_CODESIGNING`):
 
 - The Board treats a stream that sends nothing, keepalive included, for 35 s
   (`STREAM_SILENCE_MS`) as a lost Daemon: it dims, says so and reconnects. A skipped sequence
@@ -369,6 +449,7 @@ Epic 5 has also made these exact so far:
   5.17). Quit and restart in one terminal while the Daemon is down still join (spine AD-3).
 - A resumed subagent counts as background work until its notification closes it (Story 5.16,
   ADR-0009 amended).
+- The Board's title bar (Story 5.19, ADR-0013; see the Board above).
 
 `main` and `develop` are kept level; if they are not, a `develop` into `main` pull request is open
 or overdue.

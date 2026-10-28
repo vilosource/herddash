@@ -243,7 +243,7 @@ func waitCount(t *testing.T, what string, n *atomic.Int32, want int32) {
 
 func newEvents(t *testing.T, f *fakeEngine) (*Handler, *httptest.Server, *atomic.Int32) {
 	t.Helper()
-	h := New(Options{View: f.View, Subscribe: f.Subscribe, History: noHistory})
+	h := New(Options{View: f.View, Subscribe: f.Subscribe, History: noHistory, Acknowledge: noAcknowledge, Acknowledgements: noAcknowledgements})
 	srv, returned := eventsServer(t, h)
 	return h, srv, returned
 }
@@ -466,7 +466,7 @@ func TestEventsOverflow(t *testing.T) {
 
 func TestEventsKeepalive(t *testing.T) {
 	f := &fakeEngine{view: eventsView()}
-	h := New(Options{View: f.View, Subscribe: f.Subscribe, History: noHistory})
+	h := New(Options{View: f.View, Subscribe: f.Subscribe, History: noHistory, Acknowledge: noAcknowledge, Acknowledgements: noAcknowledgements})
 	h.keepalive = 20 * time.Millisecond
 	srv, _ := eventsServer(t, h)
 	s := openStream(t, srv, nil)
@@ -516,7 +516,7 @@ func TestEventsClientGone(t *testing.T) {
 // connection is gone, and the next publication's write fails.
 func TestEventsWriteFails(t *testing.T) {
 	f := &fakeEngine{view: eventsView()}
-	h := New(Options{View: f.View, Subscribe: f.Subscribe, History: noHistory})
+	h := New(Options{View: f.View, Subscribe: f.Subscribe, History: noHistory, Acknowledge: noAcknowledge, Acknowledgements: noAcknowledgements})
 	w := &failWriter{header: http.Header{}}
 	r := httptest.NewRequest(http.MethodGet, "/events", nil)
 	r.Host = "localhost"
@@ -576,7 +576,7 @@ func TestEventsCloseStreams(t *testing.T) {
 // 503, and the subscription is ended.
 func TestEventsEngineGone(t *testing.T) {
 	f := &fakeEngine{view: eventsView(), gone: true}
-	h := New(Options{View: f.View, Subscribe: f.Subscribe, History: noHistory})
+	h := New(Options{View: f.View, Subscribe: f.Subscribe, History: noHistory, Acknowledge: noAcknowledge, Acknowledgements: noAcknowledgements})
 	checkError(t, do(h, http.MethodGet, "/events", "localhost", nil), http.StatusServiceUnavailable, "unavailable")
 	if f.unsubs.Load() != 1 {
 		t.Errorf("unsubscribes %d, want 1", f.unsubs.Load())
@@ -604,7 +604,7 @@ func TestEventsTwoStreams(t *testing.T) {
 // socket fills, a write times out, and the handler returns and unsubscribes.
 func TestEventsStalledClient(t *testing.T) {
 	f := &fakeEngine{view: eventsView()}
-	h := New(Options{View: f.View, Subscribe: f.Subscribe, History: noHistory})
+	h := New(Options{View: f.View, Subscribe: f.Subscribe, History: noHistory, Acknowledge: noAcknowledge, Acknowledgements: noAcknowledgements})
 	h.writeTimeout = 50 * time.Millisecond
 	srv, returned := eventsServer(t, h)
 	conn, err := net.Dial("tcp", srv.Listener.Addr().String())
@@ -635,7 +635,7 @@ func TestEventsStalledClient(t *testing.T) {
 
 func TestEventsRules(t *testing.T) {
 	f := &fakeEngine{view: eventsView()}
-	h := New(Options{View: f.View, Subscribe: f.Subscribe, History: noHistory})
+	h := New(Options{View: f.View, Subscribe: f.Subscribe, History: noHistory, Acknowledge: noAcknowledge, Acknowledgements: noAcknowledgements})
 	for _, m := range []string{http.MethodPost, http.MethodHead, http.MethodPut, http.MethodDelete, http.MethodPatch, http.MethodOptions} {
 		w := do(h, m, "/events", "127.0.0.1:7318", map[string]string{"Origin": "http://evil.example"})
 		if m == http.MethodHead {

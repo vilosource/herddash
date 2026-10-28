@@ -82,8 +82,9 @@ func TestBoardRoutes(t *testing.T) {
 	}
 }
 
-// TestBoardPage checks the page loads only its own assets and opens only
-// /events: no network beyond the Daemon (no CDN, no font service).
+// TestBoardPage checks the page loads only its own assets, opens only
+// /events and makes no request but the acknowledgement writes (ADR-0014): no
+// network beyond the Daemon (no CDN, no font service).
 func TestBoardPage(t *testing.T) {
 	h, _ := newHandler(t)
 	page := do(h, http.MethodGet, "/", "localhost", nil).Body.String()
@@ -97,9 +98,28 @@ func TestBoardPage(t *testing.T) {
 		if strings.Contains(body, "http://") || strings.Contains(body, "https://") {
 			t.Errorf("%s names a network URL", rt.path)
 		}
-		if strings.Contains(body, "fetch(") || strings.Contains(body, "XMLHttpRequest") || strings.Contains(body, "WebSocket") {
-			t.Errorf("%s fetches something other than /events", rt.path)
+		if strings.Contains(body, "XMLHttpRequest") || strings.Contains(body, "WebSocket") || strings.Contains(body, "sendBeacon") {
+			t.Errorf("%s fetches something other than /events and the acknowledgement writes", rt.path)
 		}
+		// ADR-0014: board.mjs makes one fetch, the acknowledgement POST with
+		// the write header; nothing else fetches.
+		want := 0
+		if rt.path == "/assets/board.mjs" {
+			want = 1
+		}
+		if n := strings.Count(body, "fetch("); n != want {
+			t.Errorf("%s calls fetch %d times, want %d", rt.path, n, want)
+		}
+	}
+	js0 := do(h, http.MethodGet, "/assets/board.mjs", "localhost", nil).Body.String()
+	for _, s := range []string{`method: "POST"`, `"X-Herddash-Write": "1"`, `"Content-Type": "application/json"`, `"/api/seen"`, `"/api/unseen"`} {
+		if !strings.Contains(js0, s) {
+			t.Errorf("board.mjs's acknowledgement request lacks %s", s)
+		}
+	}
+	orderJS := do(h, http.MethodGet, "/assets/order.mjs", "localhost", nil).Body.String()
+	if !strings.Contains(orderJS, `"/api/agents/"`) {
+		t.Error("order.mjs lacks the per-Agent write route")
 	}
 	// The strips are one polite, non-atomic live region inside a header,
 	// before the Boxes in reading order.

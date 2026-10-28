@@ -10,6 +10,9 @@ package herddash_test
 // importer may not (FR-9). AppendBackfill, the import's one-transaction
 // write, is narrower the other way: only internal/importer (and
 // internal/store) may call it, so the engine may not (AD-13).
+// AppendAcknowledgements, the acknowledgement write (ADR-0014), is the
+// engine's alone: only internal/engine (and internal/store) may call it, so
+// neither httpapi nor the importer may.
 //
 // It reads syntax, not types, so it is deliberately broad: outside the
 // permitted packages, any selector of a guarded name whose left side is not an
@@ -41,6 +44,10 @@ var recordWriters = []string{"internal/engine", "internal/importer", "internal/s
 // recordSweepers are the module directories whose code may sweep the record.
 var recordSweepers = []string{"internal/engine", "internal/store"}
 
+// recordAcknowledgers are the module directories whose code may record an
+// acknowledgement.
+var recordAcknowledgers = []string{"internal/engine", "internal/store"}
+
 // recordImporters are the module directories whose code may import history.
 var recordImporters = []string{"internal/importer", "internal/store"}
 
@@ -55,6 +62,8 @@ var guarded = map[string]struct {
 	"SaveServerState":    {"writes the record", recordWriters},
 	"Sweep":              {"deletes from the record", recordSweepers},
 	"AppendBackfill":     {"imports into the record", recordImporters},
+
+	"AppendAcknowledgements": {"acknowledges in the record", recordAcknowledgers},
 }
 
 // mayCallAll reports whether code in dir may call every guarded method, so
@@ -160,6 +169,8 @@ func TestRecordCallSites(t *testing.T) {
 // reported, and so is the importer sweeping; the engine's own appends and
 // sweep, the importer's appends and backfill, a _test.go file and a
 // package-level function are not. The engine importing backfill is reported.
+// An acknowledgement recorded from cmd, httpapi or the importer is reported;
+// the engine's is not.
 func TestCheckCallSitesCatchesViolations(t *testing.T) {
 	got, err := checkCallSites(filepath.Join("testdata", "callsite"))
 	if err != nil {
@@ -171,11 +182,14 @@ func TestCheckCallSitesCatchesViolations(t *testing.T) {
 		"cmd/herddash/bad.go:12: AppendResyncMarker writes the record; only internal/engine, internal/importer, internal/store may call it",
 		"cmd/herddash/bad.go:13: SaveServerState writes the record; only internal/engine, internal/importer, internal/store may call it",
 		"cmd/herddash/bad.go:14: Sweep deletes from the record; only internal/engine, internal/store may call it",
-		"cmd/herddash/bad.go:19: Append writes the record; only internal/engine, internal/importer, internal/store may call it",
-		"cmd/herddash/bad.go:20: Sweep deletes from the record; only internal/engine, internal/store may call it",
+		"cmd/herddash/bad.go:15: AppendAcknowledgements acknowledges in the record; only internal/engine, internal/store may call it",
+		"cmd/herddash/bad.go:20: Append writes the record; only internal/engine, internal/importer, internal/store may call it",
+		"cmd/herddash/bad.go:21: Sweep deletes from the record; only internal/engine, internal/store may call it",
 		"internal/engine/backfill.go:5: AppendBackfill imports into the record; only internal/importer, internal/store may call it",
-		"internal/httpapi/bad.go:9: Append writes the record; only internal/engine, internal/importer, internal/store may call it",
-		"internal/importer/bad.go:9: Sweep deletes from the record; only internal/engine, internal/store may call it",
+		"internal/httpapi/bad.go:12: Append writes the record; only internal/engine, internal/importer, internal/store may call it",
+		"internal/httpapi/bad.go:13: AppendAcknowledgements acknowledges in the record; only internal/engine, internal/store may call it",
+		"internal/importer/bad.go:10: Sweep deletes from the record; only internal/engine, internal/store may call it",
+		"internal/importer/bad.go:13: AppendAcknowledgements acknowledges in the record; only internal/engine, internal/store may call it",
 	}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Errorf("violations\n got %s\nwant %s", strings.Join(got, "\n     "), strings.Join(want, "\n     "))

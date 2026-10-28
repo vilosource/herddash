@@ -327,7 +327,9 @@ systemctl --user restart herddash.service
 ```
 
 A new binary alone needs only a restart (`launchctl kickstart -k …` or
-`systemctl --user restart herddash.service`).
+`systemctl --user restart herddash.service`), unless it migrates the database to a new schema;
+then back the database up first, as [Backup](#backup) says under "Before a build with a new
+schema".
 
 ## 4. Open the Board
 
@@ -411,3 +413,28 @@ fi
 
 Here `$BACKUP` is the backup you are restoring, for example
 `BACKUP=~/herddash-backup-20261021-093000.db`. Then start the Daemon again.
+
+### Before a build with a new schema
+
+A build that adds a migration moves the database to a new schema on its first start, and every
+migration is a one-way door: a herddash that knows only an older schema refuses the database
+(`database schema is newer than this herddash`) and does not start. Going back to the older binary
+then means restoring a backup taken before the upgrade, and losing what was recorded since.
+
+| Schema | First herddash that writes it |
+|---|---|
+| 4 | 0.6.0 (`server_state.released`) |
+| 5 | Epic 6's first `-dev` builds, acknowledgement ("Seen", ADR-0014); 0.7.x and earlier refuse it |
+| 6 | Epic 6, herdr's order on an acknowledgement (ADR-0014's amendment); schema-5 builds refuse it |
+| 7 | Epic 6, where an acknowledgement came from, `board` or `herdr_focus` (Seen on leaving a pane, ADR-0015); schema-6 builds, including the first Epic 6 `-dev` builds, refuse it |
+
+So before installing a build with a newer schema than the running one, take a backup with the
+Daemon stopped, exactly as above, and install the new binary while it is still stopped:
+
+1. Set `DB` and `BACKUP` and stop the Daemon, waiting until it has no process (above). The backup
+   may sit beside the database instead of in your home directory, for example
+   `BACKUP="$DB.schema4-$(date +%Y%m%d-%H%M%S)"`.
+2. Copy the database (above) and check `ls -l "$BACKUP"*` lists it.
+3. Install the new binary at `~/.local/bin/herddash`.
+4. Start the Daemon again (above), and check the database's schema once it is running:
+   `sqlite3 -readonly "$DB" 'PRAGMA user_version'` prints the new schema, for example `7`.

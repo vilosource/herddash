@@ -10,7 +10,7 @@
 # output repeats the log and is discarded; standard error goes to the journal.
 
 [Unit]
-Description=herddash, a read-only board for herdr's agents
+Description=herddash, a notification board for herdr's agents
 Documentation=https://github.com/vilosource/herddash/blob/main/docs/install.md
 StartLimitIntervalSec=600
 StartLimitBurst=5

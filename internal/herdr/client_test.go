@@ -327,6 +327,49 @@ func TestErrorResponseID(t *testing.T) {
 	})
 }
 
+// The snapshot's focused_pane_id (ADR-0015) is mapped through the whole
+// client path from the recorded 0.9.5 fixture, as herdr sends it (set), and
+// with it null and absent, which both map to "".
+func TestSnapshotFocusedPane(t *testing.T) {
+	variant := func(t *testing.T, edit func(snap map[string]any)) string {
+		t.Helper()
+		var doc map[string]any
+		if err := json.Unmarshal([]byte(fixture(t, "snapshot.json")), &doc); err != nil {
+			t.Fatal(err)
+		}
+		edit(doc["result"].(map[string]any)["snapshot"].(map[string]any))
+		b, err := json.Marshal(doc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	for _, tt := range []struct {
+		name string
+		edit func(map[string]any)
+		want string
+	}{
+		{"set", func(map[string]any) {}, "w1:p1"},
+		{"set to another pane", func(s map[string]any) { s["focused_pane_id"] = "w2:p1" }, "w2:p1"},
+		{"null", func(s map[string]any) { s["focused_pane_id"] = nil }, ""},
+		{"absent", func(s map[string]any) { delete(s, "focused_pane_id") }, ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			s := oneShot(t, "session.snapshot", variant(t, tt.edit))
+			snap, err := s.client().Snapshot(testContext(t))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if snap.FocusedPaneID != tt.want {
+				t.Errorf("FocusedPaneID %q, want %q", snap.FocusedPaneID, tt.want)
+			}
+			if len(snap.Panes) != 3 {
+				t.Errorf("%d panes, want the fixture's 3", len(snap.Panes))
+			}
+		})
+	}
+}
+
 func TestMapSnapshot(t *testing.T) {
 	str := func(v string) *string { return &v }
 	u64 := func(v uint64) *uint64 { return &v }

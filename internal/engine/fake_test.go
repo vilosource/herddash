@@ -39,6 +39,7 @@ type fakeSub[T any] struct {
 	leaky     bool
 	closeSeen atomic.Bool
 	delivered atomic.Int32 // deliveries the reader has taken
+	sent      atomic.Int32 // deliveries the test has pushed
 }
 
 func newFakeSub[T any](leaky bool) *fakeSub[T] {
@@ -92,7 +93,10 @@ func (s *fakeSub[T]) awaitDelivered(t *testing.T, n int32) {
 	}
 }
 
-func (s *fakeSub[T]) event(ev T) { s.in <- herdr.Delivery[T]{Event: ev} }
+func (s *fakeSub[T]) event(ev T) {
+	s.sent.Add(1)
+	s.in <- herdr.Delivery[T]{Event: ev}
+}
 
 func (s *fakeSub[T]) health(h *herdr.Health) { s.in <- herdr.Delivery[T]{Health: h} }
 
@@ -876,6 +880,44 @@ func (h *harness) lifecycle(ev core.LifecycleEvent) {
 	h.fake.lifecycleSub().event(ev)
 }
 
+// focus sends herdr's pane_focused for paneID, as internal/herdr delivers
+// it, once the lifecycle subscription exists (ADR-0015).
+func (h *harness) focus(paneID, workspaceID string) {
+	h.t.Helper()
+	h.lifecycle(core.LifecycleEvent{Kind: core.LifecycleFocused, PaneID: paneID, WorkspaceID: workspaceID})
+}
+
+// focusOn sends herdr's pane_focused for paneID and waits until the engine
+// has handled it. A repeat for the same pane follows it, which changes
+// nothing (ADR-0015); the lifecycle reader takes the repeat only once the
+// engine has taken the first, and the Agents round trip then waits for the
+// first to be handled and published.
+func (h *harness) focusOn(paneID string) {
+	h.t.Helper()
+	h.focus(paneID, "w1")
+	h.focus(paneID, "w1")
+	sub := h.fake.lifecycleSub()
+	sub.awaitDelivered(h.t, sub.sent.Load())
+	h.agents()
+}
+
+// focused is s with herdr's focused pane set to paneID, as session.snapshot
+// names it.
+func focused(s core.Snapshot, paneID string) core.Snapshot {
+	s.FocusedPaneID = paneID
+	return s
+}
+
+// newManualClock is a manualClock at base; advance moves it by d, so a dwell
+// is exactly what the test makes it (ADR-0015).
+func newManualClock() *manualClock {
+	c := &manualClock{}
+	c.ms.Store(base)
+	return c
+}
+
+func (c *manualClock) advance(d time.Duration) { c.ms.Add(d.Milliseconds()) }
+
 var errBoom = errors.New("boom")
 
 // TestMain removes the snapshot floor and shortens the retry, reconnect and
@@ -910,6 +952,11 @@ type fakeStore struct {
 
 	appendErr, markerErr, loadErr, saveErr, historyErr, sweepErr error
 	historyReads                                                 int
+	// acks are the acknowledgements appended, in recording order; ackErr
+	// fails AppendAcknowledgements and ackReadErr Acknowledgements.
+	acks               []core.Acknowledgement
+	ackErr, ackReadErr error
+	ackReads           int
 	// sweeps is every Sweep call, in order.
 	sweeps []sweepCall
 	// failSaves fails the next n saves with saveErr.
@@ -978,6 +1025,51 @@ func (f *fakeStore) AppendResyncMarker(m store.ResyncMarker) error {
 	return nil
 }
 
+// AppendAcknowledgements appends acks, all or none: ackErr fails it, writing
+// nothing.
+func (f *fakeStore) AppendAcknowledgements(ctx context.Context, acks []core.Acknowledgement) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	defer f.poke()
+	if f.ackErr != nil {
+		return f.ackErr
+	}
+	for _, a := range acks {
+		f.acks = append(f.acks, a)
+		seen := 0
+		if a.Seen() {
+			seen = 1
+		}
+		f.writes = append(f.writes, fmt.Sprintf("ack %s %d %d %d", a.Key().PaneID, a.Key().Epoch, a.FinishedSince(), seen))
+	}
+	return nil
+}
+
+// Acknowledgements is every acknowledgement appended for key, in recording
+// order. ackReadErr fails it.
+func (f *fakeStore) Acknowledgements(ctx context.Context, key core.AgentKey) ([]core.Acknowledgement, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ackReads++
+	if f.ackReadErr != nil {
+		return nil, f.ackReadErr
+	}
+	var out []core.Acknowledgement
+	for _, a := range f.acks {
+		if a.Key() == key {
+			out = append(out, a)
+		}
+	}
+	return out, nil
+}
+
+// ackList is every acknowledgement appended, in order.
+func (f *fakeStore) ackList() []core.Acknowledgement {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.acks)
+}
+
 // sweepCall is one Sweep the engine made: its cutoff and present set.
 type sweepCall struct {
 	cutoff  int64
@@ -989,8 +1081,9 @@ type sweepCall struct {
 // present key, those at or after its Since (all of them for Since 0) and the
 // current Agent's latest working row: the highest append index among working
 // rows at or after the key's last row with no previous Status in History order
-// (observed time, then append order; AD-3). Markers go by age. sweepErr fails
-// it, deleting nothing.
+// (observed time, then append order; AD-3). Markers go by age, and
+// acknowledgements as the store sweeps them: by finished_since against the
+// key's Since. sweepErr fails it, deleting nothing.
 func (f *fakeStore) Sweep(ctx context.Context, cutoff int64, present []store.Present) (store.SweepResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -1049,6 +1142,16 @@ func (f *fakeStore) Sweep(ctx context.Context, cutoff int64, present []store.Pre
 		}
 	}
 	f.markers = markers
+	var acks []core.Acknowledgement
+	for _, a := range f.acks {
+		s, ok := since[a.Key()]
+		if a.ObservedAt() >= cutoff || ok && (s == 0 || a.FinishedSince() >= s) {
+			acks = append(acks, a)
+		} else {
+			r.Acknowledgements++
+		}
+	}
+	f.acks = acks
 	return r, nil
 }
 

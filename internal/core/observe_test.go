@@ -14,10 +14,12 @@ func TestLifecycleKindValid(t *testing.T) {
 		{LifecycleAgentDetected, true},
 		{LifecycleAgentReleased, true},
 		{LifecycleContextChanged, true},
+		{LifecycleFocused, true},
 		{"workspace_renamed", false},
 		{"", false},
 		{"pane_created", false},
-		{"focused", false},
+		{"pane_focused", false},
+		{"tab_focused", false},
 	}
 	for _, tt := range tests {
 		if got := tt.kind.Valid(); got != tt.want {

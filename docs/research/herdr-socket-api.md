@@ -268,6 +268,14 @@ Each terminal client tracks viewed completions independently, so herddash's noti
 work can legitimately differ from a TUI badge. `pane.focused` events fire on any client's manual
 selection and the payload does not say which client.
 
+*Added 2026-10-27:* observed against an isolated herdr 0.9.5 with real terminal clients attached,
+in [herdr-focus-events-2026-10-27.md](herdr-focus-events-2026-10-27.md). Every focus change, from
+a client's keys or an API call, emits `workspace_focused`, `tab_focused` and `pane_focused`, the
+last naming the pane landed on, also after a tab or workspace switch. The payload is
+`{pane_id, workspace_id}` only. The snapshot names a focused pane with no client attached, and with
+several clients it reports one client's view and can switch to another's with no event. A finish
+is reported `done` only while no attached client displays the pane's tab.
+
 ## `agent.explain`
 
 Has a socket equivalent: method `agent.explain`, params `{"target": "..."}`, result type
@@ -475,6 +483,9 @@ string, so `events_lost` has no generated type. A client recognises it by matchi
   `done` is the unseen form of `idle`, and seen state is tracked per terminal client, so with no
   client attached there may be nothing to report `done` against. This bears on the Finished class
   and is untested with a client attached; Story 1.5 should observe it on a real setup.
+  *Answered 2026-10-27:* with a client attached, a finish is `done` while no attached client
+  displays the pane's tab, and turns `idle` when one does
+  ([herdr-focus-events-2026-10-27.md](herdr-focus-events-2026-10-27.md), finding 5).
 - `pane.report_agent` accepts `idle`, `working`, `blocked` and `unknown`; `done` is not reportable.
 - **A pane can change id.** `pane_moved` carries `previous_pane_id`, and pane ids are scoped to their
   workspace (`w1:p1`). Untested here; a move across workspaces would look like one pane closing and
@@ -507,5 +518,7 @@ string, so `events_lost` has no generated type. A client recognises it by matchi
 - ~~Whether `ping` advertises capabilities beyond `live_handoff` and `detached_server_daemon`.~~ It
   advertises six on 0.9.5 (Q4).
 - Whether any hard concurrent-connection cap exists. None found in docs or source; not probed.
-- Whether `done` appears with a terminal client attached, and whether `events_lost` matches its
-  documented shape. Neither was reproduced in isolation.
+- ~~Whether `done` appears with a terminal client attached~~ It does, while no attached client
+  displays the pane's tab ([herdr-focus-events-2026-10-27.md](herdr-focus-events-2026-10-27.md),
+  finding 5, 2026-10-27). Whether `events_lost` matches its documented shape was not reproduced in
+  isolation.

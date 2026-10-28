@@ -66,8 +66,8 @@ func TestOpenFresh(t *testing.T) {
 		}
 		tables = append(tables, n)
 	}
-	if got := strings.Join(tables, ","); got != "resync_markers,server_state,transitions" {
-		t.Errorf("tables %s, want resync_markers,server_state,transitions", got)
+	if got := strings.Join(tables, ","); got != "acknowledgements,resync_markers,server_state,transitions" {
+		t.Errorf("tables %s, want acknowledgements,resync_markers,server_state,transitions", got)
 	}
 }
 
@@ -397,6 +397,18 @@ func TestColumns(t *testing.T) {
 			{"reason", "TEXT", true, false},
 			{"detail", "TEXT", false, false},
 		},
+		"acknowledgements": {
+			{"id", "INTEGER", false, true},
+			{"host", "TEXT", true, false},
+			{"server", "TEXT", true, false},
+			{"epoch", "INTEGER", true, false},
+			{"pane_id", "TEXT", true, false},
+			{"finished_since", "INTEGER", true, false},
+			{"seen", "INTEGER", true, false},
+			{"observed_at", "INTEGER", true, false},
+			{"herdr_order", "INTEGER", false, false},
+			{"source", "TEXT", true, false},
+		},
 		"server_state": {
 			{"host", "TEXT", true, true},
 			{"server", "TEXT", true, true},
@@ -471,6 +483,10 @@ func TestColumns(t *testing.T) {
 		},
 		"resync_markers": {"observed_at": "index/c"},
 		"server_state":   {"host,server": "unique/pk"},
+		"acknowledgements": {
+			"host,server,epoch,pane_id,finished_since,id": "index/c",
+			"observed_at": "index/c",
+		},
 	}
 	for table, w := range wantIdx {
 		got := indexes(table)
@@ -558,7 +574,7 @@ func TestMigrationsNumbered(t *testing.T) {
 	for _, m := range ms {
 		names = append(names, m.name)
 	}
-	if got, want := strings.Join(names, ","), "0001_initial.sql,0002_server_state.sql,0003_observed_by.sql,0004_server_state_released.sql"; got != want {
+	if got, want := strings.Join(names, ","), "0001_initial.sql,0002_server_state.sql,0003_observed_by.sql,0004_server_state_released.sql,0005_acknowledgements.sql,0006_acknowledgement_order.sql,0007_acknowledgement_source.sql"; got != want {
 		t.Errorf("migrations %s, want %s", got, want)
 	}
 	if len(ms) != schemaVersion {
@@ -567,7 +583,7 @@ func TestMigrationsNumbered(t *testing.T) {
 }
 
 // schemaVersion is the user_version a fully migrated database has.
-const schemaVersion = 4
+const schemaVersion = 7
 
 // TestFailedMigrationRollsBack runs a migration list whose second step fails:
 // nothing from the first step survives and user_version is unchanged.

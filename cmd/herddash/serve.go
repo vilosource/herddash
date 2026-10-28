@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/vilosource/herddash/internal/config"
@@ -34,12 +35,36 @@ const (
 	shutdownTimeout   = 5 * time.Second
 )
 
+// testSeenDwellEnv names the test seam that lowers the dwell after which
+// leaving a pane marks its finish Seen (ADR-0015, Story 6.8). Only the
+// Board's browser check sets it, so that it does not wait 3 s per step; it
+// is not configuration, and docs/config.example.toml does not list it.
+const testSeenDwellEnv = "HERDDASH_TEST_SEEN_DWELL_MS"
+
+// testSeenDwell is HERDDASH_TEST_SEEN_DWELL_MS as a duration: 0, the
+// engine's default, when it is unset; a whole number of milliseconds from 1
+// to 60000 is used and logged at warn, so a Daemon running with it says so;
+// anything else is ignored with a warning.
+func testSeenDwell(logger *slog.Logger) time.Duration {
+	v, ok := os.LookupEnv(testSeenDwellEnv)
+	if !ok {
+		return 0
+	}
+	ms, err := strconv.Atoi(v)
+	if err != nil || ms < 1 || ms > 60000 {
+		logger.Warn("test seam ignored: not a whole number of milliseconds from 1 to 60000", "env", testSeenDwellEnv, "value", v)
+		return 0
+	}
+	logger.Warn("test seam: the Seen dwell is lowered", "env", testSeenDwellEnv, "ms", ms)
+	return time.Duration(ms) * time.Millisecond
+}
+
 // runServe is "herddash serve [flags]", also run by "herddash" alone. It loads
 // configuration as "herddash config" does, ensures the data directory, logs
 // JSON to herddash.log there, opens the database (so a second serve on the
 // same database fails at once) for the engine to record every Transition into,
-// listens on the configured loopback bind for the read-only HTTP surface
-// (ADR-0007), prints the address it serves on, and prints every version gate
+// listens on the configured loopback bind for the HTTP surface, read-only
+// apart from acknowledgement's write routes (ADR-0007, ADR-0014), prints the address it serves on, and prints every version gate
 // outcome, Agent, Transition, removal, Profile change, reconnect and resync to
 // stdout until ctx ends (exit 0). herdr being absent, gone or restarting never
 // ends it: the engine reconnects. Exit 1 is left for configuration, data
@@ -142,8 +167,10 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 		Store:                 st,
 		RetentionDays:         cfg.RetentionDays(),
 		Home:                  home,
+		SeenDwell:             testSeenDwell(logger),
 	})
-	h := httpapi.New(httpapi.Options{View: e.View, Subscribe: e.Subscribe, History: st.History, Logger: logger})
+	h := httpapi.New(httpapi.Options{View: e.View, Subscribe: e.Subscribe, History: st.History,
+		Acknowledge: e.Acknowledge, Acknowledgements: st.Acknowledgements, Logger: logger})
 	srv := &http.Server{
 		Handler:           h,
 		ReadHeaderTimeout: readHeaderTimeout,

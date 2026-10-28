@@ -124,7 +124,7 @@ func TestSubscribeLifecycle(t *testing.T) {
 		types = append(types, r.Type)
 	}
 	wantTypes := []string{"pane.created", "pane.closed", "pane.moved", "pane.exited", "pane.agent_detected",
-		"workspace.renamed", "workspace.moved", "workspace.reordered", "tab.renamed", "tab.moved", "pane.updated", "layout.updated"}
+		"workspace.renamed", "workspace.moved", "workspace.reordered", "tab.renamed", "tab.moved", "pane.updated", "layout.updated", "pane.focused"}
 	if !reflect.DeepEqual(types, wantTypes) {
 		t.Errorf("subscribed %v, want %v", types, wantTypes)
 	}
@@ -305,9 +305,10 @@ func TestLifecycleUndecodable(t *testing.T) {
 func TestLifecycleUnexpected(t *testing.T) {
 	closed := `{"event":"pane_closed","data":{"type":"pane_closed","pane_id":"w2:p2","workspace_id":"w2"}}`
 	tests := map[string]string{
-		"unknown kind": `{"event":"pane_focused","data":{"type":"pane_focused","pane_id":"w1:p1","workspace_id":"w1"}}`,
-		"no data":      `{"event":"pane_closed"}`,
-		"no pane id":   `{"event":"pane_closed","data":{"type":"pane_closed","workspace_id":"w1"}}`,
+		"unknown kind":            `{"event":"tab_created","data":{"type":"tab_created","tab_id":"w1:t2","workspace_id":"w1"}}`,
+		"pane_focused no pane id": `{"event":"pane_focused","data":{"type":"pane_focused","workspace_id":"w1"}}`,
+		"no data":                 `{"event":"pane_closed"}`,
+		"no pane id":              `{"event":"pane_closed","data":{"type":"pane_closed","workspace_id":"w1"}}`,
 	}
 	for name, line := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -333,6 +334,66 @@ func TestLifecycleUnexpected(t *testing.T) {
 				t.Errorf("last delivery %+v, want health closed", d)
 			}
 		})
+	}
+}
+
+// herdr's focus lines (ADR-0015), copied from the focus record's transcript
+// (docs/research/herdr-focus-events-2026-10-27.md): every focus change sends
+// workspace_focused, tab_focused and pane_focused. Only the subscription to
+// pane.focused is requested. The first two are dropped without a delivery, so
+// they never count as unexpected (which would make the engine read a
+// snapshot); each pane_focused, a repeat for the same pane included, is
+// delivered as LifecycleFocused with its pane and workspace; one with no
+// pane_id is flagged unexpected; and the stream goes on.
+func TestLifecycleFocus(t *testing.T) {
+	lines := []string{
+		`{"data":{"type":"workspace_focused","workspace_id":"w1"},"event":"workspace_focused"}`,
+		`{"data":{"tab_id":"w1:t1","type":"tab_focused","workspace_id":"w1"},"event":"tab_focused"}`,
+		`{"data":{"pane_id":"w1:p2","type":"pane_focused","workspace_id":"w1"},"event":"pane_focused"}`,
+		`{"data":{"pane_id":"w1:p2","type":"pane_focused","workspace_id":"w1"},"event":"pane_focused"}`,
+		`{"data":{"type":"workspace_focused","workspace_id":"w2"},"event":"workspace_focused"}`,
+		`{"data":{"tab_id":"w2:t1","type":"tab_focused","workspace_id":"w2"},"event":"tab_focused"}`,
+		`{"data":{"type":"pane_focused","workspace_id":"w2"},"event":"pane_focused"}`,
+		`{"event":"tab_focused"}`,
+		`{"data":{"pane_id":"w2:p1","type":"pane_focused","workspace_id":"w2"},"event":"pane_focused"}`,
+	}
+	s, requests := streamFake(t, false, lines...)
+	sub, err := s.client().SubscribeLifecycle(testContext(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sub.Close()
+
+	req := <-requests
+	var focus []string
+	for _, r := range req.Subscriptions {
+		switch r.Type {
+		case "pane.focused", "tab.focused", "workspace.focused":
+			focus = append(focus, r.Type)
+		}
+	}
+	if !reflect.DeepEqual(focus, []string{"pane.focused"}) {
+		t.Errorf("focus subscriptions %v, want only pane.focused", focus)
+	}
+
+	ds := collect(t, sub)
+	if len(ds) != 5 {
+		t.Fatalf("deliveries %+v, want two focus events, one unexpected, one focus event, one health", ds)
+	}
+	for i, want := range map[int]core.LifecycleEvent{
+		0: {Kind: core.LifecycleFocused, PaneID: "w1:p2", WorkspaceID: "w1"},
+		1: {Kind: core.LifecycleFocused, PaneID: "w1:p2", WorkspaceID: "w1"},
+		3: {Kind: core.LifecycleFocused, PaneID: "w2:p1", WorkspaceID: "w2"},
+	} {
+		if d := ds[i]; d.Unexpected != nil || d.Health != nil || d.Event != want {
+			t.Errorf("delivery %d %+v, want event %+v", i, d, want)
+		}
+	}
+	if d := ds[2]; d.Unexpected == nil || !errors.Is(d.Unexpected, errUnexpectedEvent) || d.Health != nil || d.Event != (core.LifecycleEvent{}) {
+		t.Errorf("delivery 2 %+v, want the pane_focused with no pane id flagged unexpected", d)
+	}
+	if d := ds[4]; d.Health == nil || d.Health.Kind != HealthClosed {
+		t.Errorf("last delivery %+v, want health closed", d)
 	}
 }
 

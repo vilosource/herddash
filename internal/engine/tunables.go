@@ -84,6 +84,12 @@ const (
 	// environment read that finds its configuration directory; a read that
 	// outlives it is abandoned and counts as no record.
 	defaultSessionTimeout = time.Second
+	// defaultSeenDwell is the least time a Finished Agent's pane must be
+	// herdr's focused pane during its current finish, by the engine's clock,
+	// for leaving it for another pane to mark the finish Seen (ADR-0015). A
+	// pane landed on and left sooner is not marked, so flicking through panes
+	// marks nothing.
+	defaultSeenDwell = 3 * time.Second
 	// defaultRetentionSweepInterval is how often the engine sweeps the record
 	// for rows older than Retention, from the first connection of a run
 	// becoming ready on (FR-9, AD-4).
@@ -122,6 +128,7 @@ var (
 	backgroundTimeout      = defaultBackgroundTimeout
 	sessionInterval        = defaultSessionInterval
 	sessionTimeout         = defaultSessionTimeout
+	seenDwell              = defaultSeenDwell
 )
 
 // snapshotFailuresBeforeLost is defaultSnapshotFailuresBeforeLost; tests may

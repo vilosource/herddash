@@ -46,15 +46,17 @@ type root struct {
 
 // roots is everything herddash needs from herdr. It deliberately has no focus
 // method and no pane-output method or subscription (AD-5); forbidden enforces it.
+// The pane.focused subscription and its pane_focused event (ADR-0015) are
+// reads: they report focus and never change it.
 var roots = []root{
 	{section: "request", variants: []string{"ping", "session.snapshot", "events.subscribe", "pane.process_info"}},
 	{section: "request", def: "Subscription", variants: []string{"pane.created", "pane.closed", "pane.moved", "pane.exited", "pane.agent_detected", "pane.agent_status_changed",
-		"workspace.renamed", "workspace.moved", "workspace.reordered", "tab.renamed", "tab.moved", "pane.updated", "layout.updated"}},
+		"workspace.renamed", "workspace.moved", "workspace.reordered", "tab.renamed", "tab.moved", "pane.updated", "layout.updated", "pane.focused"}},
 	{section: "success_response"},
 	{section: "success_response", def: "ResponseResult", variants: []string{"pong", "session_snapshot", "subscription_started", "pane_process_info"}},
 	{section: "error_response"},
 	{section: "event"},
-	{section: "event", def: "EventData", variants: []string{"pane_created", "pane_closed", "pane_moved", "pane_exited", "pane_agent_detected"}},
+	{section: "event", def: "EventData", variants: []string{"pane_created", "pane_closed", "pane_moved", "pane_exited", "pane_agent_detected", "pane_focused"}},
 	{section: "subscription_event"},
 	{section: "subscription_event", def: "PaneAgentStatusChangedEvent"},
 	{section: "event", def: "AgentStatus"},

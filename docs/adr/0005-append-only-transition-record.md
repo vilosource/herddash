@@ -1,6 +1,7 @@
 # ADR-0005: The stored record is append-only, keyed by Host, Server, server epoch and pane
 
-**Status: Accepted (amended 2026-10-16 and 2026-10-23).** Written 2026-10-15 during the architecture run, under the operator's
+**Status: Accepted (amended 2026-10-16 and 2026-10-23; amended by
+[ADR-0014](0014-acknowledging-a-finished-agent.md) on 2026-10-27, an append-only acknowledgements table).** Written 2026-10-15 during the architecture run, under the operator's
 delegation, from decisions the operator confirmed in the PRD (FR-6 to FR-9a, FR-11). This record
 fixes the invariants of the stored record. Its exact columns and indexes are architecture seed,
 owned by the migrations once milestone 2 writes them.

@@ -26,6 +26,14 @@ type Options struct {
 	// History returns one Agent's recorded Transitions in the record's order
 	// (store.Store.History). The history route reads only through it.
 	History func(ctx context.Context, key core.AgentKey) ([]core.Transition, error)
+	// Acknowledge marks seen, or undoes, the finishes a request names, and
+	// returns the Agents' views after it in request order
+	// (engine.Engine.Acknowledge, ADR-0014). The write routes reach the
+	// engine only through it.
+	Acknowledge func(ctx context.Context, req engine.AckRequest) ([]core.AgentView, error)
+	// Acknowledgements returns one Agent's acknowledgement rows in recording
+	// order (store.Store.Acknowledgements), for the history route.
+	Acknowledgements func(ctx context.Context, key core.AgentKey) ([]core.Acknowledgement, error)
 	// Logger receives the handler's own failures; nil discards them.
 	Logger *slog.Logger
 }
@@ -52,13 +60,17 @@ const (
 	allowGet     = "GET"
 )
 
-// New returns the read-only HTTP surface (AD-6, ADR-0007). Every request is
-// first checked for a loopback Host header (DNS rebinding); then only GET (or
-// HEAD, except on /events) on a known route is served: the Board at / and its
-// embedded files under /assets/, /api/state, the history route and /events.
-// It reads only through opts.View, opts.Subscribe and opts.History: it never
-// calls herdr and never writes to the store. It never sends a CORS header. It
-// panics if opts.View, opts.Subscribe or opts.History is nil.
+// New returns the HTTP surface (AD-6, ADR-0007), read-only but for
+// acknowledgement (ADR-0014). Every request is first checked for a loopback
+// Host header (DNS rebinding); then GET (or HEAD, except on /events) on a
+// read route is served: the Board at / and its embedded files under /assets/,
+// /api/state, the history route and /events; and POST on a write route
+// (/api/seen, /api/unseen and the per-Agent .../seen and .../unseen), only
+// once its same-origin guard passes. It reads only through opts.View,
+// opts.Subscribe, opts.History and opts.Acknowledgements, and changes
+// anything only through opts.Acknowledge: it never calls herdr and never
+// writes to the store. It never sends a CORS header. OPTIONS on a read or
+// write route is a 405; on any other path, like every method there, a 404. It panics if any of those five funcs is nil.
 func New(opts Options) *Handler {
 	if opts.View == nil {
 		panic("httpapi.New: Options.View is nil")
@@ -69,6 +81,12 @@ func New(opts Options) *Handler {
 	if opts.History == nil {
 		panic("httpapi.New: Options.History is nil")
 	}
+	if opts.Acknowledge == nil {
+		panic("httpapi.New: Options.Acknowledge is nil")
+	}
+	if opts.Acknowledgements == nil {
+		panic("httpapi.New: Options.Acknowledgements is nil")
+	}
 	log := opts.Logger
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
@@ -77,6 +95,8 @@ func New(opts Options) *Handler {
 		view:         opts.View,
 		subscribe:    opts.Subscribe,
 		history:      opts.History,
+		acknowledge:  opts.Acknowledge,
+		acks:         opts.Acknowledgements,
 		log:          log,
 		stop:         make(chan struct{}),
 		keepalive:    keepaliveInterval,
@@ -84,12 +104,14 @@ func New(opts Options) *Handler {
 	}
 }
 
-// Handler is the read-only HTTP surface New returns.
+// Handler is the HTTP surface New returns.
 type Handler struct {
-	view      func() engine.View
-	subscribe func(buffer int) (*engine.ViewSubscription, func())
-	history   func(ctx context.Context, key core.AgentKey) ([]core.Transition, error)
-	log       *slog.Logger
+	view        func() engine.View
+	subscribe   func(buffer int) (*engine.ViewSubscription, func())
+	history     func(ctx context.Context, key core.AgentKey) ([]core.Transition, error)
+	acknowledge ackFunc
+	acks        acksFunc
+	log         *slog.Logger
 
 	// stop is closed, once, by CloseStreams.
 	stop     chan struct{}
@@ -117,6 +139,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if !hostAllowed(r.Host) {
 		writeError(w, r, http.StatusForbidden, codeHostNotAllowed, "the Host header must be localhost, 127.0.0.1 or [::1]")
+		return
+	}
+	if route, ok := writeRouteOf(r); ok {
+		h.serveWrite(w, r, route)
 		return
 	}
 	var (

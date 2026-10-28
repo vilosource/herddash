@@ -111,9 +111,12 @@ func (s *Subscription[T]) Close() error {
 
 // lifecycleSubscriptions are the global kinds herddash follows, each as its own
 // generated variant: the pane lifecycle kinds, then the seven kinds that only
-// signal that tracked context may be stale. layout.updated is among them
-// because pane positions come from the tab's layout, which a split or a close
-// changes.
+// signal that tracked context may be stale, then pane.focused (ADR-0015).
+// layout.updated is among the seven because pane positions come from the
+// tab's layout, which a split or a close changes. pane.focused is the only
+// focus kind: tab.focused and workspace.focused add nothing it lacks, since
+// pane_focused always names the pane landed on. Subscribing to focus is a
+// read; herddash never calls a focus method.
 var lifecycleSubscriptions = []any{
 	gen.SubscriptionPaneCreated{Type: gen.SubscriptionTypePaneCreated},
 	gen.SubscriptionPaneClosed{Type: gen.SubscriptionTypePaneClosed},
@@ -127,12 +130,15 @@ var lifecycleSubscriptions = []any{
 	gen.SubscriptionTabMoved{Type: gen.SubscriptionTypeTabMoved},
 	gen.SubscriptionPaneUpdated{Type: gen.SubscriptionTypePaneUpdated},
 	gen.SubscriptionLayoutUpdated{Type: gen.SubscriptionTypeLayoutUpdated},
+	gen.SubscriptionPaneFocused{Type: gen.SubscriptionTypePaneFocused},
 }
 
 // SubscribeLifecycle subscribes to pane created, closed, moved, exited and
 // agent-detected events, and to workspace renamed, moved and reordered, tab
-// renamed and moved, pane updated and layout updated events, on one
-// connection. The last seven are delivered as core.LifecycleContextChanged with no detail. It returns once
+// renamed and moved, pane updated and layout updated events, and to pane focused
+// events, on one connection. The seven after agent-detected are delivered as
+// core.LifecycleContextChanged with no detail; a pane focused event is
+// core.LifecycleFocused with its pane and workspace. It returns once
 // herdr has confirmed the subscription started. The context, or defaultCallTimeout when it has no
 // deadline, bounds only that setup; the subscription lives until Close or until
 // the stream ends.
@@ -222,7 +228,8 @@ func startHealth(line []byte, id string) *Health {
 
 // stream reads lines until the stream ends, delivering events (and, with
 // passUnexpected, unexpected lines) in order and at most one health signal last,
-// then closes ch.
+// then closes ch. A line the decoder reports as errSkipEvent is dropped without
+// a delivery.
 func (s *Subscription[T]) stream(r *bufio.Reader, ch chan<- Delivery[T], decode func([]byte) (T, error), passUnexpected bool) {
 	defer close(ch)
 	defer s.Close()
@@ -237,6 +244,9 @@ func (s *Subscription[T]) stream(r *bufio.Reader, ch chan<- Delivery[T], decode 
 			return
 		}
 		ev, err := decode(line)
+		if errors.Is(err, errSkipEvent) {
+			continue
+		}
 		if err != nil && passUnexpected && errors.Is(err, errUnexpectedEvent) {
 			if !s.deliver(ch, Delivery[T]{Unexpected: err}) {
 				return

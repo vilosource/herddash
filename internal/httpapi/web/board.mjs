@@ -7,9 +7,25 @@
 // elements, ticks the Waiting Times each second and executes those decisions.
 // Which connection and version strips show, their text, and whether Boxes are
 // dimmed or hidden are order.mjs's boardStatus; this file draws them.
+//
+// The acknowledgement controls (ADR-0014, Story 6.4) are ordinary buttons,
+// with no key binding: a Seen pill on every Finished Box, a Mark unseen pill
+// on every Seen Box (ADR-0015, Story 6.8), a heading's bulk mark, and the
+// Undo bar. A click only sends the request; the Box changes when the stream's
+// agent event says so, never optimistically. The in-view tag on a Finished
+// Box whose pane herdr has focused (ADR-0015) is a label, not a control.
 
 import {
+  ACK_TOAST_MS,
   EVENT_NAMES,
+  IN_VIEW_DOT,
+  IN_VIEW_WORDS,
+  IN_VIEW_TITLE,
+  ackLabel,
+  ackBody,
+  ackError,
+  ackPath,
+  ackToast,
   anyRecap,
   boardStatus,
   boxKind,
@@ -20,6 +36,7 @@ import {
   documentTitle,
   hasWaitingSince,
   inNeedsYou,
+  inViewTag,
   keyId,
   layout,
   modelViews,
@@ -31,6 +48,8 @@ import {
   waitingLabel,
   tabLabel,
   titleBar,
+  unackLabel,
+  unseenFinished,
 } from "./order.mjs";
 
 const board = document.getElementById("board");
@@ -71,6 +90,24 @@ function fillBox(box, view, now) {
   const wh = el("p", "where");
   wh.appendChild(el("span", "tab", tabLabel(view)));
   if (view.pane_position) wh.appendChild(el("span", "pane", view.pane_position));
+  // A Finished Box whose pane herdr has focused shows the in-view tag, a
+  // label and not a control (ADR-0015).
+  if (inViewTag(view)) {
+    // The dot is decorative: hidden from assistive technology, like the
+    // Seen pill's icon, so a screen reader reads only "in view".
+    const tag = el("span", "in-view");
+    const dot = el("span", "in-view-dot", IN_VIEW_DOT);
+    dot.setAttribute("aria-hidden", "true");
+    tag.append(dot, " " + IN_VIEW_WORDS);
+    tag.title = IN_VIEW_TITLE;
+    wh.appendChild(tag);
+  }
+  // A Finished Box, and no other kind, ends its first line with the Seen
+  // pill (ADR-0014); a Seen Box, and no other kind, with Mark unseen
+  // (ADR-0015).
+  const kind = boxKind(view);
+  if (kind === "finished") wh.appendChild(ackButton(view));
+  else if (kind === "seen") wh.appendChild(unackButton(view));
 
   // Second: in the Needs you zone the workspace; in a workspace group the
   // directory, truncated from the start in CSS, so the project segment stays
@@ -109,6 +146,39 @@ function fillBox(box, view, now) {
 
   box.replaceChildren(wh, second, ctx, row);
   return known ? wait : null;
+}
+
+// ackButton is a Finished Box's Seen pill, marking view's finish seen.
+function ackButton(view) {
+  const b = el("button", "ack");
+  b.type = "button";
+  b.title = "Mark seen: you have read this Agent's result";
+  b.setAttribute("aria-label", ackLabel(view));
+  const icon = el("span", "ack-icon", "✓");
+  icon.setAttribute("aria-hidden", "true");
+  b.append(icon, el("span", "ack-text", "Seen"));
+  b.disabled = controlsOff || pending.has(keyId(view.key));
+  b.addEventListener("click", (e) => {
+    e.stopPropagation();
+    acknowledge([view], true, { bulk: false });
+  });
+  return b;
+}
+
+// unackButton is a Seen Box's Mark unseen pill, showing view's finish as
+// unread again (ADR-0015): the remedy for a mark the operator disagrees
+// with, automatic or not. The Daemon then leaves that finish Finished.
+function unackButton(view) {
+  const b = el("button", "unack", "Mark unseen");
+  b.type = "button";
+  b.title = "Mark not seen: show this result as unread again";
+  b.setAttribute("aria-label", unackLabel(view));
+  b.disabled = controlsOff || pending.has(keyId(view.key));
+  b.addEventListener("click", (e) => {
+    e.stopPropagation();
+    acknowledge([view], false, { bulk: false });
+  });
+  return b;
 }
 
 // boxFor returns the Box for view, drawing it only when it is new or its
@@ -177,10 +247,19 @@ function groupFor(id, label, counts) {
     const head = el("div", "group-head");
     const header = el("h3", "group-label");
     const count = el("span", "count");
-    head.append(header, count);
+    // The heading's bulk mark (ADR-0014): every Finished Box the group shows
+    // now, each by its exact finish.
+    const bulk = el("button", "ack-all");
+    bulk.type = "button";
+    bulk.hidden = true;
+    head.append(header, count, bulk);
     const grid = el("div", "grid");
     group.append(head, grid);
-    g = { group, header, count, grid };
+    g = { group, header, count, grid, bulk, views: [] };
+    bulk.addEventListener("click", () => {
+      const vs = unseenFinished(g.views);
+      if (vs.length) acknowledge(vs, true, { bulk: true, group: id });
+    });
     groups.set(id, g);
   }
   if (g.header.textContent !== label) {
@@ -189,6 +268,135 @@ function groupFor(id, label, counts) {
   }
   if (g.count.textContent !== counts) g.count.textContent = counts;
   return g;
+}
+
+// drawBulk shows a group's bulk mark when it has 2 or more Finished Boxes.
+function drawBulk(g, label, views) {
+  g.views = views;
+  const n = unseenFinished(views).length;
+  g.bulk.hidden = n < 2;
+  const text = "✓ Mark " + n + " finished seen";
+  if (g.bulk.textContent !== text) g.bulk.textContent = text;
+  const aria = "Mark " + n + " finished Agents in " + label + " seen";
+  if (g.bulk.getAttribute("aria-label") !== aria) g.bulk.setAttribute("aria-label", aria);
+}
+
+// ---- Acknowledgement requests and the Undo bar (ADR-0014) ----
+
+// controlsOff is set while the Boxes are dimmed or hidden: a Box the Board
+// cannot vouch for is not one to mark. pending holds the keyIds, and
+// pendingGroups the group ids, whose request is in flight.
+let controlsOff = false;
+const pending = new Set();
+const pendingGroups = new Set();
+
+// The Undo bar, one for the page; a new mark replaces its text and timer.
+const toast = el("div", "toast");
+toast.setAttribute("role", "status");
+const toastText = el("span", "toast-text");
+const toastUndo = el("button", "toast-undo", "Undo");
+toastUndo.type = "button";
+toast.append(toastText, toastUndo);
+document.body.appendChild(toast);
+let toastTimer = null;
+let toastAction = null;
+// toastFocus is the keyId of the Box the bar is about: when the bar closes
+// with its Undo button focused, focus goes to that Box, not to the page.
+let toastFocus = null;
+
+function showToast(text, undo, focusId) {
+  toastText.textContent = text;
+  toastAction = undo;
+  toastFocus = focusId ?? null;
+  toastUndo.hidden = !undo;
+  toast.classList.add("toast--on");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(hideToast, ACK_TOAST_MS);
+  syncControls();
+}
+
+function hideToast() {
+  clearTimeout(toastTimer);
+  toastTimer = null;
+  toastAction = null;
+  if (toast.contains(document.activeElement)) {
+    const b = toastFocus && boxes.get(toastFocus);
+    if (b && b.box.isConnected) b.box.focus({ preventScroll: true });
+    else document.activeElement.blur();
+  }
+  toastFocus = null;
+  toast.classList.remove("toast--on");
+}
+
+toastUndo.addEventListener("click", () => {
+  const undo = toastAction;
+  hideToast();
+  if (undo) undo();
+});
+
+// postAck sends one write and resolves to {ok, status, code}; a network
+// failure is status 0.
+async function postAck(path, body) {
+  try {
+    const r = await fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Herddash-Write": "1" },
+      body: JSON.stringify(body),
+      credentials: "same-origin",
+      cache: "no-store",
+    });
+    if (r.ok) return { ok: true, status: r.status, code: "" };
+    let code = "";
+    try {
+      code = (await r.json())?.error?.code || "";
+    } catch {}
+    return { ok: false, status: r.status, code };
+  } catch {
+    return { ok: false, status: 0, code: "" };
+  }
+}
+
+// acknowledge marks views seen, or with seen false not seen: one view
+// per-Agent unless it came from a heading, else the bulk route. how.undo is
+// set for the Undo bar's request. The Board changes nothing itself: the
+// Boxes change when the stream's agent events arrive. A mark or a Mark
+// unseen that succeeds shows the Undo bar, whose Undo asks for the
+// opposite; a refusal shows why, with no Undo.
+async function acknowledge(views, seen, how) {
+  if (controlsOff || !views.length) return;
+  const ids = views.map((v) => keyId(v.key));
+  if (ids.some((id) => pending.has(id)) || (how.group !== undefined && pendingGroups.has(how.group))) return;
+  for (const id of ids) pending.add(id);
+  if (how.group !== undefined) pendingGroups.add(how.group);
+  syncControls();
+  let res;
+  try {
+    if (how.bulk) res = await postAck(seen ? "/api/seen" : "/api/unseen", ackBody(views));
+    else res = await postAck(ackPath(views[0].key, seen), { waiting_since: views[0].waiting_since });
+  } finally {
+    for (const id of ids) pending.delete(id);
+    if (how.group !== undefined) pendingGroups.delete(how.group);
+    syncControls();
+  }
+  if (!res.ok) showToast(ackError(res.status, res.code, seen, !!how.undo), null, ids[0]);
+  else if (!how.undo) showToast(ackToast(views, seen), () => acknowledge(views, !seen, { bulk: how.bulk, undo: true }), ids[0]);
+}
+
+// setDisabled disables or enables btn. A browser drops a focused control's
+// focus to the page when it is disabled, so focus first moves to target (a
+// Box), keeping the operator's place on the Board.
+function setDisabled(btn, off, target) {
+  if (off && !btn.disabled && btn === document.activeElement && target?.isConnected) target.focus({ preventScroll: true });
+  btn.disabled = off;
+}
+
+// syncControls enables or disables every acknowledgement control.
+function syncControls() {
+  for (const [id, b] of boxes) {
+    for (const btn of b.box.querySelectorAll("button.ack, button.unack")) setDisabled(btn, controlsOff || pending.has(id), b.box);
+  }
+  for (const [id, g] of groups) setDisabled(g.bulk, controlsOff || pendingGroups.has(id), g.grid.querySelector(".box"));
+  setDisabled(toastUndo, controlsOff, toastFocus && boxes.get(toastFocus)?.box);
 }
 
 // drawnStrips is the stripsKey of the strips drawn, and stripTick the
@@ -202,6 +410,11 @@ let stripTick = null;
 // replaces an announced node.
 function drawStatus(status) {
   board.classList.toggle("board--stale", status.dimmed);
+  const off = !!(status.dimmed || status.hideBoxes);
+  if (off !== controlsOff) {
+    controlsOff = off;
+    syncControls();
+  }
   drawTitleBar(status);
   const k = stripsKey(status.strips);
   if (k !== drawnStrips) {
@@ -257,7 +470,15 @@ function render() {
   const now = Date.now();
   const status = currentStatus(now);
   drawStatus(status);
-  let focused = document.activeElement?.dataset?.key;
+  // A control inside a Box counts as its Box: a Box redrawn without its pill
+  // keeps the focus, and one redrawn with the same pill (an in-view tag come
+  // or gone, a Waiting Time restarted) gives it back to that pill.
+  let focused = document.activeElement?.closest?.("[data-key]")?.dataset?.key;
+  const focusedPill = ["ack", "unack"].find((c) => document.activeElement?.matches?.("button." + c));
+  // A heading's bulk mark that this render hides would drop focus to the
+  // page; its group keeps it instead (below).
+  let bulkFocus;
+  for (const [id, g] of groups) if (g.bulk === document.activeElement) bulkFocus = id;
   if (status.hideBoxes) {
     if (focused) hiddenFocus = focused;
   } else if (hiddenFocus) {
@@ -287,6 +508,8 @@ function render() {
     const id = g.views[0].sort_key[1];
     groupIds.add(id);
     const ge = groupFor(id, g.label, g.counts);
+    drawBulk(ge, g.label, g.views);
+    if (bulkFocus === id && ge.bulk.hidden && !focused) focused = keyId(g.views[0].key);
     place(ge.grid, g.views.map((v) => boxFor(v, now)));
     groupEls.push(ge.group);
   }
@@ -302,8 +525,13 @@ function render() {
   // A Box moved in the document loses focus; give it back.
   if (focused && !status.hideBoxes) {
     const b = boxes.get(focused);
-    if (b && document.activeElement !== b.box) b.box.focus({ preventScroll: true });
+    if (b && !b.box.contains(document.activeElement)) {
+      const pill = focusedPill && b.box.querySelector("button." + focusedPill);
+      if (pill && !pill.disabled && !controlsOff) pill.focus({ preventScroll: true });
+      else b.box.focus({ preventScroll: true });
+    }
   }
+  syncControls();
 }
 
 // tick advances the Waiting Times and the snapshot age, lets streamDecision

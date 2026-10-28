@@ -5,4 +5,5 @@ func (e *Engine) record(t any) {
 	e.store.AppendResyncMarker(t)
 	e.store.SaveServerState(t)
 	e.store.Sweep(nil, 0, nil)
+	e.store.AppendAcknowledgements(nil, t)
 }

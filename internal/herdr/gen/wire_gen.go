@@ -107,6 +107,13 @@ type EventDataPaneExited struct {
 	WorkspaceID string        `json:"workspace_id"`
 }
 
+// EventDataPaneFocused is the variant of EventData whose type is "pane_focused".
+type EventDataPaneFocused struct {
+	PaneID      string        `json:"pane_id"`
+	Type        EventDataType `json:"type"`
+	WorkspaceID string        `json:"workspace_id"`
+}
+
 // EventDataPaneMoved is the variant of EventData whose type is "pane_moved".
 type EventDataPaneMoved struct {
 	ClosedTabID         *string        `json:"closed_tab_id,omitempty"`
@@ -129,6 +136,7 @@ const (
 	EventDataTypePaneClosed        EventDataType = "pane_closed"
 	EventDataTypePaneCreated       EventDataType = "pane_created"
 	EventDataTypePaneExited        EventDataType = "pane_exited"
+	EventDataTypePaneFocused       EventDataType = "pane_focused"
 	EventDataTypePaneMoved         EventDataType = "pane_moved"
 )
 
@@ -440,6 +448,11 @@ type SubscriptionPaneExited struct {
 	Type SubscriptionType `json:"type"`
 }
 
+// SubscriptionPaneFocused is the variant of Subscription whose type is "pane.focused".
+type SubscriptionPaneFocused struct {
+	Type SubscriptionType `json:"type"`
+}
+
 // SubscriptionPaneMoved is the variant of Subscription whose type is "pane.moved".
 type SubscriptionPaneMoved struct {
 	Type SubscriptionType `json:"type"`
@@ -471,6 +484,7 @@ const (
 	SubscriptionTypePaneClosed             SubscriptionType = "pane.closed"
 	SubscriptionTypePaneCreated            SubscriptionType = "pane.created"
 	SubscriptionTypePaneExited             SubscriptionType = "pane.exited"
+	SubscriptionTypePaneFocused            SubscriptionType = "pane.focused"
 	SubscriptionTypePaneMoved              SubscriptionType = "pane.moved"
 	SubscriptionTypePaneUpdated            SubscriptionType = "pane.updated"
 	SubscriptionTypeTabMoved               SubscriptionType = "tab.moved"

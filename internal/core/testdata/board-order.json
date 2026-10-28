@@ -1,5 +1,5 @@
 {
-  "description": "Golden Board order (Story 3.1; regenerated 2026-10-21 for Needs you alone on top and every other class grouped by workspace, ranked Working 1, Finished 2, Idle 3, Unknown 4; regenerated again 2026-10-21 for Background, ranked 2 between Working and Finished, which moves Finished to 3, Idle to 4 and Unknown to 5; regenerated a third time 2026-10-21 for the operator's order inside a workspace group, ranked Finished 1, Idle 2, Background 3, Working 4, Unknown 5, each class most recent first, so a zone-1 start is the negated since; Needs you stays longest-waiting first). input holds shuffled Agent inputs, each with view: the expected AgentView exactly as NewAgentView serialises it (key, class, heading, shortened directory, context line, recap, waiting_since, waiting_exact, background, sort_key). order is the expected AgentKey strings after sorting; headers are the indexes, in sorted order, where a zone-1 workspace group starts. Shared fixture: the Go test in internal/core/view_test.go checks every view, the order and the headers; the Board's ordering tests (Story 3.7) sort the expected views by their sort_key arrays, compared element by element, and must not re-derive class, zone, group, rank or sentinels. An unknown group or start is 9007199254740991 (Number.MAX_SAFE_INTEGER). workspace_id is PaneContext.WorkspaceID (added 2026-10-23, Story 5.13): a lower-zone Agent whose workspace herdr did not position (workspace_position 0) gets its workspace's own group, 2^52 plus the id's 64-bit FNV-1a hash modulo 2^52-1, after every positioned group and before SortUnknown, so w7:p1 (labelled scratch) and w8:p1 (no label) each start their own header; w9:p1 has no workspace id, so its group is still SortUnknown, last. w8:p1's pane title holds U+202E, which the Context Line drops, and w7:p1's session name starts with \"- \", which it keeps. background is AgentViewInput.Background, the process read's verdict, which the view shows only for a done or idle Agent of a program with a rule. tasks are background subagent ids the Agent's transcript shows open and turn_ended whether its main turn ended (ADR-0009, added 2026-10-21): with tasks open a working Agent is Background, ranked 3, when its turn ended, and Working with background_tasks otherwise; background_tasks counts the open tasks plus one for the process read's verdict when no open task is a background command (every tasks id here is a subagent's, so an open command is not expressed). recap is the latest session recap the Agent's transcript shows (ADR-0010, added 2026-10-22): the view carries it unchanged as recap, \"\" when none, and it changes no other value; w1:p2 has one. since is FoldResult.Since (absent: fold not known); exact says the class began live.",
+  "description": "Golden Board order (Story 3.1; regenerated 2026-10-21 for Needs you alone on top and every other class grouped by workspace, ranked Working 1, Finished 2, Idle 3, Unknown 4; regenerated again 2026-10-21 for Background, ranked 2 between Working and Finished, which moves Finished to 3, Idle to 4 and Unknown to 5; regenerated a third time 2026-10-21 for the operator's order inside a workspace group, ranked Finished 1, Idle 2, Background 3, Working 4, Unknown 5, each class most recent first, so a zone-1 start is the negated since; Needs you stays longest-waiting first). input holds shuffled Agent inputs, each with view: the expected AgentView exactly as NewAgentView serialises it (key, class, heading, shortened directory, context line, recap, waiting_since, waiting_exact, background, sort_key). order is the expected AgentKey strings after sorting; headers are the indexes, in sorted order, where a zone-1 workspace group starts. Shared fixture: the Go test in internal/core/view_test.go checks every view, the order and the headers; the Board's ordering tests (Story 3.7) sort the expected views by their sort_key arrays, compared element by element, and must not re-derive class, zone, group, rank or sentinels. An unknown group or start is 9007199254740991 (Number.MAX_SAFE_INTEGER). workspace_id is PaneContext.WorkspaceID (added 2026-10-23, Story 5.13): a lower-zone Agent whose workspace herdr did not position (workspace_position 0) gets its workspace's own group, 2^52 plus the id's 64-bit FNV-1a hash modulo 2^52-1, after every positioned group and before SortUnknown, so w7:p1 (labelled scratch) and w8:p1 (no label) each start their own header; w9:p1 has no workspace id, so its group is still SortUnknown, last. w8:p1's pane title holds U+202E, which the Context Line drops, and w7:p1's session name starts with \"- \", which it keeps. background is AgentViewInput.Background, the process read's verdict, which the view shows only for a done or idle Agent of a program with a rule. tasks are background subagent ids the Agent's transcript shows open and turn_ended whether its main turn ended (ADR-0009, added 2026-10-21): with tasks open a working Agent is Background, ranked 3, when its turn ended, and Working with background_tasks otherwise; background_tasks counts the open tasks plus one for the process read's verdict when no open task is a background command (every tasks id here is a subagent's, so an open command is not expressed). recap is the latest session recap the Agent's transcript shows (ADR-0010, added 2026-10-22): the view carries it unchanged as recap, \"\" when none, and it changes no other value; w1:p2 has one. since is FoldResult.Since (absent: fold not known); exact says the class began live. seen is AgentViewInput.Seen, the operator's acknowledgement of the Agent's current finish (ADR-0014, added 2026-10-27, Story 6.1), absent when false: the view's seen is set only with class finished, which it leaves finished, and a seen Agent that is not Background ranks 2 with Idle, most recent first; workspace docs (w4) holds a Finished Agent w4:p1, a seen one w4:p2 (finished, Status idle, so done to idle within the finish keeps it) and an older Idle one w4:p3, so the seen Box sits between them. Every view carries seen. in_view is AgentViewInput.InView, the Agent's pane being herdr's focused pane (ADR-0015, added 2026-10-27, Story 6.7), absent when false: the view carries it unchanged and it changes no other value, the sort key included; w4:p1, Finished, is in view and keeps its place. Every view carries in_view.",
   "home": "/Users/op",
   "input": [
     {
@@ -43,6 +43,8 @@
         "recap": "",
         "background": false,
         "background_tasks": 0,
+        "seen": false,
+        "in_view": false,
         "sort_key": [
           1,
           9007199254740991,
@@ -94,6 +96,8 @@
         "recap": "",
         "background": false,
         "background_tasks": 0,
+        "seen": false,
+        "in_view": false,
         "sort_key": [
           1,
           3,
@@ -144,12 +148,68 @@
         "recap": "",
         "background": false,
         "background_tasks": 0,
+        "seen": false,
+        "in_view": false,
         "sort_key": [
           1,
           3,
           1,
           -30,
           "mac/default/10/w3:p2"
+        ]
+      }
+    },
+    {
+      "key": {
+        "host": "mac",
+        "server": "default",
+        "epoch": 1,
+        "pane_id": "w4:p2"
+      },
+      "agent_program": "claude",
+      "profile": "cldp",
+      "status": "idle",
+      "ever_working": true,
+      "since": 45,
+      "exact": true,
+      "directory": "/Users/op/src/docs",
+      "workspace": "docs",
+      "workspace_id": "w4",
+      "workspace_position": 4,
+      "tab": "1",
+      "pane_title": "read-me",
+      "seen": true,
+      "view": {
+        "key": {
+          "host": "mac",
+          "server": "default",
+          "epoch": 1,
+          "pane_id": "w4:p2"
+        },
+        "agent_program": "claude",
+        "profile": "cldp",
+        "heading": "cldp",
+        "directory": "~/src/docs",
+        "workspace": "docs",
+        "tab": "1",
+        "pane_position": "",
+        "status": "idle",
+        "attention_class": "finished",
+        "waiting_since": 45,
+        "waiting_exact": true,
+        "pane_title": "read-me",
+        "context_line": "read-me",
+        "recap": "",
+        "background": false,
+        "background_tasks": 0,
+        "seen": true,
+        "in_view": false,
+        "sort_key": [
+          1,
+          4,
+          2,
+          -45,
+          "mac/default/1/w4:p2"
         ]
       }
     },
@@ -194,6 +254,8 @@
         "recap": "",
         "background": false,
         "background_tasks": 0,
+        "seen": false,
+        "in_view": false,
         "sort_key": [
           0,
           0,
@@ -245,6 +307,8 @@
         "recap": "",
         "background": false,
         "background_tasks": 0,
+        "seen": false,
+        "in_view": false,
         "sort_key": [
           1,
           7755988130957174,
@@ -295,6 +359,8 @@
         "recap": "",
         "background": false,
         "background_tasks": 0,
+        "seen": false,
+        "in_view": false,
         "sort_key": [
           1,
           1,
@@ -346,6 +412,8 @@
         "recap": "",
         "background": true,
         "background_tasks": 1,
+        "seen": false,
+        "in_view": false,
         "sort_key": [
           1,
           1,
@@ -396,12 +464,68 @@
         "recap": "",
         "background": false,
         "background_tasks": 0,
+        "seen": false,
+        "in_view": false,
         "sort_key": [
           1,
           2,
           4,
           -40,
           "mac/default/1/w2:p3"
+        ]
+      }
+    },
+    {
+      "key": {
+        "host": "mac",
+        "server": "default",
+        "epoch": 1,
+        "pane_id": "w4:p1"
+      },
+      "agent_program": "claude",
+      "profile": "cldp",
+      "status": "done",
+      "ever_working": true,
+      "since": 50,
+      "exact": true,
+      "directory": "/Users/op/src/docs",
+      "workspace": "docs",
+      "workspace_id": "w4",
+      "workspace_position": 4,
+      "tab": "1",
+      "pane_title": "changelog",
+      "in_view": true,
+      "view": {
+        "key": {
+          "host": "mac",
+          "server": "default",
+          "epoch": 1,
+          "pane_id": "w4:p1"
+        },
+        "agent_program": "claude",
+        "profile": "cldp",
+        "heading": "cldp",
+        "directory": "~/src/docs",
+        "workspace": "docs",
+        "tab": "1",
+        "pane_position": "",
+        "status": "done",
+        "attention_class": "finished",
+        "waiting_since": 50,
+        "waiting_exact": true,
+        "pane_title": "changelog",
+        "context_line": "changelog",
+        "recap": "",
+        "background": false,
+        "background_tasks": 0,
+        "seen": false,
+        "in_view": true,
+        "sort_key": [
+          1,
+          4,
+          1,
+          -50,
+          "mac/default/1/w4:p1"
         ]
       }
     },
@@ -451,6 +575,8 @@
         "recap": "",
         "background": true,
         "background_tasks": 2,
+        "seen": false,
+        "in_view": false,
         "sort_key": [
           1,
           3,
@@ -498,6 +624,8 @@
         "recap": "",
         "background": false,
         "background_tasks": 0,
+        "seen": false,
+        "in_view": false,
         "sort_key": [
           0,
           0,
@@ -548,6 +676,8 @@
         "recap": "",
         "background": false,
         "background_tasks": 0,
+        "seen": false,
+        "in_view": false,
         "sort_key": [
           1,
           1,
@@ -599,6 +729,8 @@
         "recap": "",
         "background": false,
         "background_tasks": 0,
+        "seen": false,
+        "in_view": false,
         "sort_key": [
           1,
           7741694479790431,
@@ -651,12 +783,67 @@
         "recap": "I wrote the store tests and they pass. Next I'll open the pull request.",
         "background": false,
         "background_tasks": 0,
+        "seen": false,
+        "in_view": false,
         "sort_key": [
           1,
           1,
           1,
           -5,
           "mac/default/1/w1:p2"
+        ]
+      }
+    },
+    {
+      "key": {
+        "host": "mac",
+        "server": "default",
+        "epoch": 1,
+        "pane_id": "w4:p3"
+      },
+      "agent_program": "claude",
+      "profile": "cldp",
+      "status": "idle",
+      "ever_working": false,
+      "since": 40,
+      "exact": true,
+      "directory": "/Users/op/src/docs",
+      "workspace": "docs",
+      "workspace_id": "w4",
+      "workspace_position": 4,
+      "tab": "1",
+      "pane_title": "fresh",
+      "view": {
+        "key": {
+          "host": "mac",
+          "server": "default",
+          "epoch": 1,
+          "pane_id": "w4:p3"
+        },
+        "agent_program": "claude",
+        "profile": "cldp",
+        "heading": "cldp",
+        "directory": "~/src/docs",
+        "workspace": "docs",
+        "tab": "1",
+        "pane_position": "",
+        "status": "idle",
+        "attention_class": "working",
+        "waiting_since": 40,
+        "waiting_exact": true,
+        "pane_title": "fresh",
+        "context_line": "fresh",
+        "recap": "",
+        "background": false,
+        "background_tasks": 0,
+        "seen": false,
+        "in_view": false,
+        "sort_key": [
+          1,
+          4,
+          2,
+          -40,
+          "mac/default/1/w4:p3"
         ]
       }
     },
@@ -703,6 +890,8 @@
         "recap": "",
         "background": true,
         "background_tasks": 1,
+        "seen": false,
+        "in_view": false,
         "sort_key": [
           1,
           2,
@@ -750,6 +939,8 @@
         "recap": "",
         "background": false,
         "background_tasks": 0,
+        "seen": false,
+        "in_view": false,
         "sort_key": [
           1,
           2,
@@ -801,6 +992,8 @@
         "recap": "",
         "background": false,
         "background_tasks": 0,
+        "seen": false,
+        "in_view": false,
         "sort_key": [
           0,
           0,
@@ -854,6 +1047,8 @@
         "recap": "",
         "background": false,
         "background_tasks": 1,
+        "seen": false,
+        "in_view": false,
         "sort_key": [
           1,
           3,
@@ -904,6 +1099,8 @@
         "recap": "",
         "background": false,
         "background_tasks": 0,
+        "seen": false,
+        "in_view": false,
         "sort_key": [
           1,
           2,
@@ -955,6 +1152,8 @@
         "recap": "",
         "background": false,
         "background_tasks": 0,
+        "seen": false,
+        "in_view": false,
         "sort_key": [
           1,
           1,
@@ -982,6 +1181,9 @@
     "mac/default/10/w3:p2",
     "mac/default/1/w3:p5",
     "mac/default/1/w3:p3",
+    "mac/default/1/w4:p1",
+    "mac/default/1/w4:p2",
+    "mac/default/1/w4:p3",
     "mac/default/1/w7:p1",
     "mac/default/1/w8:p1",
     "mac/default/1/w9:p1"
@@ -991,7 +1193,8 @@
     8,
     12,
     16,
-    17,
-    18
+    19,
+    20,
+    21
   ]
 }
