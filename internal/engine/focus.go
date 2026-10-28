@@ -17,12 +17,17 @@ import (
 // While a snapshot's move is held (snapshotFocus), any pane_focused naming
 // another pane than the one it moved from is also that pane's leave, judged
 // with the dwell held, as it would have been had no snapshot come between:
-// the events arrive in herdr's order, so focus left it.
+// the events arrive in herdr's order, so focus left it. But the pane the
+// move went to, the one focused now, is known only from the snapshot: its own
+// pane_focused, saying the operator arrives there, may still be on its way
+// behind this one. So an event naming another pane is not its leave; focus
+// moves to the event's pane with no leave of it, and only a pane an event
+// focused can be left.
 func (e *Engine) onFocus(id string) {
 	e.focusEvent = e.snapSeq
 	moved := e.focusMoved
 	e.focusMoved = nil
-	if moved != nil && id != moved.from {
+	if moved != nil && moved.from != "" && id != moved.from {
 		e.log.Debug("focus", "pane", id, "left", moved.from, "dwell", moved.dwell.String(), "after", "snapshot")
 		e.leave(moved.from, moved.dwell)
 	}
@@ -36,6 +41,10 @@ func (e *Engine) onFocus(id string) {
 		e.log.Debug("focus", "pane", id)
 		return
 	}
+	if moved != nil {
+		e.log.Debug("focus", "pane", id, "was", left, "from", "snapshot")
+		return
+	}
 	dwell := now.Sub(since)
 	e.log.Debug("focus", "pane", id, "left", left, "dwell", dwell.String())
 	e.leave(left, dwell)
@@ -47,13 +56,14 @@ func (e *Engine) onFocus(id string) {
 // known with a positive start, no rows held for a Profile, its fold in the
 // record), then core.SeenOnLeave on its published view, the finish's row and
 // the dwell against e.minDwell(). Leaves are judged only once the connection is
-// ready: before its first snapshot the Agents and the epoch are not yet
-// confirmed. A mark is one herdr_focus row, with herdr's order for the Status
+// ready, and not during a resync: before its first snapshot the Agents and the
+// epoch are not yet confirmed, and a resync is under way because tracked state
+// may be stale; the snapshot that ends it starts every dwell afresh. A mark is one herdr_focus row, with herdr's order for the Status
 // when a snapshot read it; a failed write is logged and changes nothing, and
 // a later leave of the same finish tries again.
 func (e *Engine) leave(id string, dwell time.Duration) {
 	p, ok := e.panes[id]
-	if !ok || e.store == nil || !e.ready || !p.known || !p.noted {
+	if !ok || e.store == nil || !e.ready || e.resyncing || !p.known || !p.noted {
 		return
 	}
 	if !p.fold.Known || p.fold.Since <= 0 || p.holdRows || p.unrecorded || p.view.WaitingSince != p.fold.Since {
@@ -86,7 +96,7 @@ func (e *Engine) leave(id string, dwell time.Duration) {
 
 // focusMove is a focus move a snapshot showed before any pane_focused for it
 // arrived: from the pane focused before, with the dwell it had then, to the
-// snapshot's pane.
+// snapshot's pane. from is "" once its leave is dropped (restartDwell).
 type focusMove struct {
 	from, to string
 	dwell    time.Duration
@@ -100,12 +110,16 @@ type focusMove struct {
 // later snapshot naming another pane than the one held moves the focus to it
 // the same way. Neither is a leave: only an observed pane_focused is, since a
 // snapshot's focus can move with no navigation (another client's view).
+// A reset applies even to a read older than the latest pane_focused: that
+// event's pane stays focused, but its dwell starts again now, so time spent
+// on it before the resync ended does not count.
 //
 // But a read can also be newer than a pane_focused still on its way: the
 // snapshot and the lifecycle stream are separate connections. So a later
 // snapshot's move from a held pane is kept as focusMoved, and the next
 // pane_focused naming any pane but the one moved from is that pane's leave
-// (onFocus), judged with the dwell it had when the snapshot was applied.
+// (onFocus), judged with the dwell it had when the snapshot was applied; the
+// pane moved to is not left by it.
 // Later snapshots keep the move while they name a pane: the same one, or
 // another, which the move then goes to (focus went on through herdr while
 // its events were on their way). A reset, a snapshot naming no pane or the
@@ -113,6 +127,12 @@ type focusMove struct {
 // discards it.
 func (e *Engine) snapshotFocus(seq uint64, id string, reset bool) {
 	if e.focusEvent >= seq {
+		if reset {
+			e.focusMoved = nil
+			if e.focusPane != "" {
+				e.focusSince = e.clock()
+			}
+		}
 		return
 	}
 	held := e.focusMoved
@@ -144,10 +164,12 @@ func (e *Engine) restartDwell(p *pane) {
 	if e.focusPane != "" && p.id == e.focusPane {
 		e.focusSince = e.clock()
 	}
-	// A held move's leave is of the finish its pane had then. The pane
+	// A held move's leave is of the finish its pane had then, so a new
+	// finish there drops the leave; the move stays held, since the pane
+	// moved to is still known only from the snapshot (onFocus). The pane
 	// moved to has its own dwell, which does not change that leave.
 	if m := e.focusMoved; m != nil && p.id == m.from {
-		e.focusMoved = nil
+		m.from = ""
 	}
 }
 
