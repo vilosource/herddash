@@ -142,3 +142,15 @@ as one pull request and one release.
   leave too, so it agrees with how-herddash-works and ADR-0015.
 - `[low]` `[accept]` `epics.md`'s Story 6.9 criteria name the live checks; they are listed under
   "The installed build" for the orchestrator rather than claimed here.
+
+### 2026-10-28 — Review round 1
+- `[medium]` `[fixed]` No test covered the resync half of the focus reset (`first || ending` in
+  `snapshotFocus`'s call, `internal/engine/engine.go`): dropping `ending` left the suite green,
+  because only the first snapshot and reconcile reads carried a focused pane. Fixed in 4181f23:
+  `TestFocusResyncResets` (`internal/engine/focus_test.go`) checks that a resync naming another
+  pane drops held focus without a leave, and that one naming the focused pane restarts its dwell.
+  With the call mutated to `first` alone, both subtests fail (one `herdr_focus` Seen row for
+  `w1:p2` each); restored, it passes under `-race -count=50`. `docs/how-herddash-works.md` now
+  says the reset happens on a reconnect and a resync too, not only on a restart.
+- Deferred: none.
+- Rejected: none.
