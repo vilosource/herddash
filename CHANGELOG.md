@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/vilosource/herddash/compare/v0.7.1...v0.8.0) (2026-10-28)
+
+
+### Features
+
+* acknowledge a Finished Agent as Seen, on the Board or by leaving its pane (Epic 6, ADR-0014, ADR-0015) ([#62](https://github.com/vilosource/herddash/issues/62)) ([0c8bb7f](https://github.com/vilosource/herddash/commit/0c8bb7f4341a5a6ea36e1334ca5f52ce711be4d0))
+
 ## [0.7.1](https://github.com/vilosource/herddash/compare/v0.7.0...v0.7.1) (2026-10-26)
 
 
