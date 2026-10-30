@@ -113,9 +113,9 @@ absent = "claude"
 #
 # These are not keys: herddash has no setting for them. They are listed here so
 # you know what to expect. They are named constants in
-# internal/engine/tunables.go, cmd/herddash/serve.go, internal/httpapi/events.go
-# and the Board's internal/httpapi/web/order.mjs, each of which points back
-# here; a change there must change this list too.
+# internal/engine/tunables.go, cmd/herddash/serve.go, cmd/herddash/logfile.go,
+# internal/httpapi/events.go and the Board's internal/httpapi/web/order.mjs,
+# each of which points back here; a change there must change this list too.
 #
 # Talking to herdr
 #   ping timeout, at each start (reads herdr's version)       10 s
@@ -166,3 +166,8 @@ absent = "claude"
 #   the Board's reopen after the stream closed: first wait 1 s, doubling,
 #     at most 30 s; a fresh state resets it
 #   graceful HTTP shutdown when herddash stops, at most         5 s
+#
+# The log (cmd/herddash/logfile.go)
+#   herddash.log is rotated when the next line would pass     10 MiB
+#   earlier files kept, herddash.log.1 and herddash.log.2        2
+#     (so about 30 MiB at most; standard error is not rotated)

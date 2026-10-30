@@ -539,8 +539,9 @@ The evidence is in the socket API record's "Findings against herdr 0.9.5".
   engine, built as Epic 6.
 - **Authentication and non-loopback binding.** A future ADR; AD-6 refuses both until then.
 - **Multi-Host aggregation.** It reads several Daemons' APIs; AD-3 already keys on Host.
-- **Log rotation.** Writes are tiny; neither log is rotated yet, and
-  `docs/implementation/deferred-work.md` watches their size.
+- ~~**Log rotation.**~~ Done in Story 7.2: `serve` rotates `herddash.log` at 10 MiB, keeping two
+  earlier files (`cmd/herddash/logfile.go`); launchd's `herddash.stderr.log` and the journal are
+  not rotated by herddash.
 - ~~**Database backup.**~~ Documented in `docs/install.md` (Story 4.2): a copy taken while the
   Daemon is stopped.
 - ~~**Service units and release packaging.**~~ Built in Epic 4: `deploy/` (Story 4.2) and the

@@ -33,9 +33,10 @@ them to disagree.
 
 ## How the build runs
 
-**Planning is complete.** The PRD, the architecture and the 55 stories in
-`docs/planning/epics.md` (27 for Epics 1 to 4, 19 for Epic 5, 5.1 to 5.19, and 9 for Epic 6,
-6.1 to 6.5 planned 2026-10-27 with ADR-0014 and 6.6 to 6.9 added the same day with ADR-0015) are
+**Planning is complete.** The PRD, the architecture and the 57 stories in
+`docs/planning/epics.md` (27 for Epics 1 to 4, 19 for Epic 5, 5.1 to 5.19, 9 for Epic 6,
+6.1 to 6.5 planned 2026-10-27 with ADR-0014 and 6.6 to 6.9 added the same day with ADR-0015,
+and 2 for Epic 7, Daemon health, 7.1 and 7.2 planned 2026-10-30 with ADR-0016) are
 final, and
 `docs/implementation/sprint-status.yaml` tracks them. Build one story at a time with
 `/bmad-build`, in the order the tracking file lists; it names the next one. Do not write code that
@@ -296,7 +297,10 @@ spec, with its review triage log, is `docs/implementation/spec-<key>.md`. `go.mo
 `go 1.26.0` and three direct dependencies: `modernc.org/sqlite` v1.60.1,
 `github.com/BurntSushi/toml` v1.6.0 and `golang.org/x/sys` v0.49.0 (ADR-0004). What exists:
 
-- `cmd/herddash`: `serve` (the default), `config`, `import-plugin-log` and `version`.
+- `cmd/herddash`: `serve` (the default), `config`, `import-plugin-log` and `version`. `serve`
+  rotates `herddash.log` itself (Story 7.2, `cmd/herddash/logfile.go`): past 10 MiB it becomes
+  `herddash.log.1`, the old `.1` becomes `.2`, and two earlier files are kept, all 0600;
+  standard error (launchd's `herddash.stderr.log`, the journal) is not rotated.
 - `internal/config`: the TOML file, flags, validation, and socket, Host and Server resolution.
 - `internal/herdr`: the socket client (one request per connection, per-pane status
   subscriptions, stream-health signals). `internal/herdr/gen` holds the herdr 0.9.5 wire types,

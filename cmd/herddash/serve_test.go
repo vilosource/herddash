@@ -568,6 +568,38 @@ func TestServeTightensLogMode(t *testing.T) {
 	}
 }
 
+// TestServeTightensRotatedLogMode shows serve writes through the rotating log
+// (Story 7.2): a kept herddash.log.1 with a loose mode is made 0600 at start.
+func TestServeTightensRotatedLogMode(t *testing.T) {
+	hermeticEnv(t)
+	f := startFakeHerdr(t)
+	dataDir := filepath.Join(t.TempDir(), "data")
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	kept := filepath.Join(dataDir, logFileName+".1")
+	if err := os.WriteFile(kept, []byte("old\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(kept, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr syncBuffer
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan int, 1)
+	go func() { done <- run(ctx, serveArgs(f, dataDir), &stdout, &stderr) }()
+	waitFor(t, "the Agent line", func() bool { return strings.Contains(stdout.String(), "pane=w1:p1") })
+	cancel()
+	<-done
+	fi, err := os.Stat(kept)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o600 {
+		t.Errorf("herddash.log.1 mode %#o, want 0600", fi.Mode().Perm())
+	}
+}
+
 // TestServeReconnects restarts the fake herdr under a running serve: serve
 // keeps running, prints the reconnect with the incremented epoch, and goes on
 // watching the new instance.

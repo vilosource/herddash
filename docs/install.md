@@ -340,11 +340,21 @@ listens on loopback only.
 
 | What | macOS | Linux |
 |---|---|---|
-| The Daemon's log (JSON) | `herddash.log` in the data directory | `herddash.log` in the data directory |
+| The Daemon's log (JSON) | `herddash.log` in the data directory, rotated (below) | `herddash.log` in the data directory, rotated (below) |
 | Standard error (start-up failures, panics) | `~/.local/share/herddash/herddash.stderr.log` (fixed in the plist) | `journalctl --user -u herddash.service` |
 | Standard output | discarded; it repeats the log | discarded; it repeats the log |
 
 The data directory is `data_dir` from `herddash config`; by default `~/.local/share/herddash`.
+
+The Daemon rotates its own log by size: when the next line would take `herddash.log` past 10 MiB,
+`herddash.log.1` becomes `herddash.log.2` (replacing any older one), `herddash.log` becomes
+`herddash.log.1`, and a new `herddash.log` is started. Two earlier files are kept, so the log uses
+at most about 30 MiB. Every one of them is owner-only. A rotation that fails (for example, a
+directory where `herddash.log.2` should go) loses no line: the Daemon keeps writing to the file
+it has open, says so on standard error, and tries again after another 10 MiB, with one more
+report each time it fails; while it keeps failing, the log grows past the 30 MiB bound. herddash does
+not rotate standard error: launchd's `herddash.stderr.log` and systemd's journal are left as they
+are (the journal is bounded by journald's own settings).
 
 ## Backup
 

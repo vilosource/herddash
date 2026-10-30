@@ -114,20 +114,15 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 		fmt.Fprintf(stderr, "herddash: %v\n", err)
 		return 1
 	}
-	logPath := filepath.Join(cfg.DataDir(), logFileName)
-	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	// The log is rotated by size (Story 7.2); an existing log and its kept
+	// files are made owner-only (FR-17).
+	logFile, err := openRotatingLog(filepath.Join(cfg.DataDir(), logFileName), logMaxBytes, logKeep, stderr)
 	if err != nil {
 		st.Close()
 		fmt.Fprintf(stderr, "herddash: open log: %v\n", err)
 		return 1
 	}
 	defer logFile.Close()
-	// An existing log keeps its mode on open; make it owner-only (FR-17).
-	if err := logFile.Chmod(0o600); err != nil {
-		st.Close()
-		fmt.Fprintf(stderr, "herddash: log: %v\n", err)
-		return 1
-	}
 	logger := slog.New(slog.NewJSONHandler(logFile, nil))
 	logger.Info("herddash starting", "version", version, "commit", resolveCommit(),
 		"host", cfg.Host(), "server", cfg.Server(), "socket", cfg.SocketPath())
