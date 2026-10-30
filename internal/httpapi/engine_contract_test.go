@@ -192,6 +192,7 @@ type replayed struct {
 	Seqs map[string]struct {
 		Agents     []json.RawMessage `json:"agents"`
 		Connection json.RawMessage   `json:"connection"`
+		Recording  *bool             `json:"recording"`
 	} `json:"seqs"`
 	Warnings []string `json:"warnings"`
 	Reopens  []string `json:"reopens"`
@@ -590,6 +591,13 @@ func TestEngineContract(t *testing.T) {
 		}
 		if c := generic(t, got.Connection); !reflect.DeepEqual(c, generic(t, cb)) {
 			t.Errorf("view %d: Board connection %v, want %s", v.Seq, c, cb)
+		}
+		// The Board keeps the view's recording from its state event (ADR-0016).
+		if got.Recording == nil || *got.Recording != v.Recording {
+			t.Errorf("view %d: Board recording %v, want %v", v.Seq, got.Recording, v.Recording)
+		}
+		if !v.Recording {
+			t.Errorf("view %d: recording false on a run with a loadable store", v.Seq)
 		}
 	}
 	// Each acknowledgement change of w1:p4 reached the stream: the mark, the

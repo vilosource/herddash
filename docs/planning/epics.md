@@ -58,7 +58,7 @@ NFR6: Loopback only. The API rejects requests whose `Host` header is not a loopb
 NFR7: Owner-only files. umask `077`; the data directory is `0700`, and the database, WAL, SHM, lock and log are `0600` (AD-9).
 NFR8: One static binary per OS and architecture, with `CGO_ENABLED=0` and no runtime on the Host (FR-15, ADR-0004).
 NFR9: Resilience. Reconnect indefinitely; herdr's absence, restart or handoff is normal, not an error (FR-8).
-NFR10: Restraint. The Board carries only Boxes, workspace labels and the connection and version strips. Anything more needs an ADR superseding ADR-0003 (SM-C1). Since 2026-10-21 a workspace label carries its group's counts and the Needs you zone has a plain heading (SM-C1's amendment).
+NFR10: Restraint. The Board carries only Boxes, workspace labels and the connection and version strips. Anything more needs an ADR superseding ADR-0003 (SM-C1). Since 2026-10-21 a workspace label carries its group's counts and the Needs you zone has a plain heading (SM-C1's amendment). Since 2026-10-30 it also carries the recording strip, on a run that records nothing (ADR-0016).
 NFR11: Bounded herdr load. Snapshot frequency is bounded by the reconcile timer and a minimum resync interval (SM-C2, AD-11).
 NFR12: Not a herdr plugin, and herdr's Ansible-owned configuration is never touched (PRD §5).
 NFR13: Supported herdr is 0.9.5 or newer; older versions run only behind the dogfooding flag (FR-16).

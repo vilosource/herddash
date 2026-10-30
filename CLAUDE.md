@@ -357,7 +357,10 @@ spec, with its review triage log, is `docs/implementation/spec-<key>.md`. `go.mo
   through `engine.Engine.Acknowledge`, which validates against its own state (404
   `unknown_agent`, 409 `not_finished` or `stale_view`, 503 `recording_off`, which only a run
   whose saved state failed to load gives, since no setting turns recording off); it never calls
-  herdr.
+  herdr. `/api/state` and the `state` event carry `recording` (ADR-0016, Story 7.1), always
+  sent: false for the whole run when the engine has no Recorder or its saved state failed to
+  load. The engine loads that state in `New`, before the first View is stored, so no View a
+  client can read says true and is then withdrawn; no change event carries it.
 - `internal/importer`: the plugin-log backfill.
 
 - The Board at `/`, with its files under `internal/httpapi/web/` embedded in the binary: the
@@ -369,7 +372,10 @@ spec, with its review triage log, is `docs/implementation/spec-<key>.md`. `go.mo
   that only restates what the Board already shows, the Needs you count ("2 need you" or
   "Nothing needs you") and herdr's connection (`herdr <version>` with a dot, or disconnected or
   reconnecting), from `titleBar` in `order.mjs`; it holds no link or control and is not a live
-  region, and any new fact in it is a new decision. Its only controls are acknowledgement's (ADR-0014, Story 6.4): a `✓ Seen` pill on each Finished Box, a
+  region, and any new fact in it is a new decision. While the view's `recording` is false, a red
+  recording strip follows the connection and version strips (ADR-0016, Story 7.1); Boxes stay
+  shown and undimmed, an absent `recording` (an older Daemon) draws nothing, and the title bar
+  does not repeat it. Its only controls are acknowledgement's (ADR-0014, Story 6.4): a `✓ Seen` pill on each Finished Box, a
   workspace heading's `✓ Mark N finished seen` with two or more unseen Finished Boxes, a
   `Mark unseen` pill on each Seen Box (ADR-0015, Story 6.8), and a 6 s Undo bar; no keyboard
   shortcut. A Finished Box whose view has `in_view` shows a `● in view` tag, a label, not a

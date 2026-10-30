@@ -149,6 +149,8 @@ body {
 .strip--disconnected { background: var(--strip-disc-bg); color: var(--strip-disc-ink); }
 .strip--advisory     { background: var(--strip-adv-bg);  color: var(--strip-adv-ink); }
 .strip--refused      { background: var(--strip-ref-bg);  color: var(--strip-ref-ink); }
+/* Recording off (ADR-0016): red like the refused strip; the Boxes stay live. */
+.strip--recording    { background: var(--strip-ref-bg);  color: var(--strip-ref-ink); }
 .strip .time { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 
 /* ---- Board: the Needs you zone, then one group per workspace ---- */

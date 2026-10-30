@@ -27,14 +27,16 @@ type Recorder interface {
 
 var _ Recorder = (*store.Store)(nil)
 
-// restore runs once as Run starts, before the first connect: it adopts the
+// load runs once, in New, before the first View is stored: it adopts the
 // epoch and terminal map the previous run saved, so the first snapshot applies
-// the epoch rule (AD-3) against them, and records the Daemon start with the
-// epoch now in force. With no Recorder it does nothing. If the saved state
-// cannot be loaded, recording is off for the whole run: starting at the first
-// epoch and saving it would key new rows like old ones (AD-3). The engine still
-// observes and reports to the Sink.
-func (e *Engine) restore() {
+// the epoch rule (AD-3) against them. With no Recorder it does nothing. If the
+// saved state cannot be loaded, recording is off for the whole run: starting
+// at the first epoch and saving it would key new rows like old ones (AD-3).
+// The engine still observes, publishes and reports to the Sink. Running it in
+// New, before Run starts the engine goroutine, means every View a client can
+// read already carries whether this run records (ADR-0016): none says true and
+// is then withdrawn by a failed load.
+func (e *Engine) load() {
 	if e.store == nil {
 		return
 	}
@@ -43,7 +45,6 @@ func (e *Engine) restore() {
 	case err != nil:
 		e.log.Error("server state not loaded; recording is off for this run", "error", err.Error())
 		e.store = nil
-		return
 	case found:
 		e.epoch = st.Epoch
 		e.terminals = st.Terminals
@@ -59,6 +60,12 @@ func (e *Engine) restore() {
 		e.savedReleased = maps.Clone(e.released)
 		e.log.Info("server state loaded", "epoch", st.Epoch, "panes", len(st.Terminals), "released", len(st.Released))
 	}
+}
+
+// restore runs once as Run starts, before the first connect: it records the
+// Daemon start with the epoch load put in force. With no Recorder, including
+// one load gave up on, it does nothing.
+func (e *Engine) restore() {
 	e.mark(store.ReasonDaemonStart, "")
 }
 

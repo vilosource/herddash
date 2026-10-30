@@ -26,6 +26,13 @@ type View struct {
 	// Headers are the indexes in Agents where a workspace header goes
 	// (core.WorkspaceHeaders).
 	Headers []int `json:"headers"`
+	// Recording is whether this run has a usable Recorder (ADR-0016): true
+	// when the engine has one, false when it has none or the saved state
+	// failed to load in New. It says the run can record, not that rows are
+	// being written: a refused version gate records nothing too while
+	// Recording stays true, and its own strip says so. It is fixed for the
+	// run, so no Change carries it.
+	Recording bool `json:"recording"`
 }
 
 // ChangeKind names what one Change describes.
@@ -226,6 +233,7 @@ func (e *Engine) publish() {
 		Agents:     agents,
 		Connection: e.truth,
 		Headers:    core.WorkspaceHeaders(agents),
+		Recording:  e.recording(),
 	}
 	e.pub.view.Store(&v)
 
@@ -259,4 +267,11 @@ func (e *Engine) stopPublishing() {
 		delete(e.pub.subs, s)
 		close(s.c)
 	}
+}
+
+// recording reports whether this run records: it has a Recorder that load did
+// not give up on. e.store is set in New and only load clears it, so the answer
+// is fixed once New returns.
+func (e *Engine) recording() bool {
+	return e.store != nil
 }

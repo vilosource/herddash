@@ -118,6 +118,7 @@
 - source_spec: `docs/implementation/epic-2-retro-2026-10-23.md`
   summary: When saved state fails to load, recording is off for the run and nothing on `/api/state` or the Board says so (retro F-6).
   evidence: `restore` sets `e.store = nil` and logs one error (`internal/engine/recorder.go`), Story 2.2's deliberate choice (triage #1). Low: never observed; the Daemon only looks healthier than it is.
+  resolved: 2026-10-30, Story 7.1 (`docs/implementation/spec-7-1-say-when-recording-is-off.md`), per ADR-0016. The engine now loads its saved state in `New` (`load`, `internal/engine/recorder.go`), before the first View is stored, and every published `engine.View` carries an always-sent `recording` boolean, false for the whole run when the load failed; the Board draws a red recording strip after the connection and version strips while it is false (`boardStatus`, `internal/httpapi/web/order.mjs`). `TestRecordLoadFails` asserts no View a client could read says true.
 - source_spec: `docs/implementation/epic-2-retro-2026-10-23.md`
   summary: The import summary does not say which Host and Server the rows were filed under, so a run from a herdr pane that inherited another `HERDR_SOCKET_PATH` is not noticed (retro F-7).
   evidence: Story 2.6's triage #2 made a corrected re-run possible, but the summary line names neither. Low: the import is a one-off per Host.

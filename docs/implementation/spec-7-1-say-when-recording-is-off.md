@@ -2,7 +2,8 @@
 title: 'Story 7.1: Say when recording is off'
 type: 'feature'
 created: '2026-10-30'
-status: 'ready-for-dev'
+status: 'done'
+baseline_commit: '23fea44aa29040573a557b936a9180feca05a187'
 route: 'dispatch'
 review_loop_iteration: 0
 context:
@@ -53,13 +54,13 @@ context:
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `internal/engine/view.go`, `engine.go`, `recorder.go` -- add `Recording`, set from whether the run records, ensure no client-visible View says true before a failed load -- AD-3, ADR-0016
-- [ ] `internal/engine/recorder_test.go` -- assert `Recording` false after load failure (first View read after `Run` starts) and true on a healthy run -- matrix rows 1-3
-- [ ] `internal/httpapi/httpapi_test.go`, `engine_contract_test.go`, `testdata/replay-board.mjs` -- field present and replayed -- spine contract
-- [ ] `internal/httpapi/web/order.mjs`, `order.test.mjs` -- keep `recording` from `state`; `boardStatus` adds the strip after connection/version when it is exactly false; tests for matrix rows 2, 4, 5 -- ADR-0016
-- [ ] `internal/httpapi/web/board.mjs`, `board.css` -- pass it in, style `strip--recording` -- design doc
-- [ ] `internal/httpapi/web/check/board-browser.mjs` -- recording strip absent on the healthy fixture (existing no-strip checks suffice) -- regression
-- [ ] `ARCHITECTURE-SPINE.md`, `docs/how-herddash-works.md` (`:129-131`), `docs/implementation/deferred-work.md` (F-6 `resolved:` line), `CLAUDE.md` (repository state: the field and strip) -- documents match code
+- [x] `internal/engine/view.go`, `engine.go`, `recorder.go` -- add `Recording`, set from whether the run records, ensure no client-visible View says true before a failed load -- AD-3, ADR-0016
+- [x] `internal/engine/recorder_test.go` -- assert `Recording` false after load failure (first View read after `Run` starts) and true on a healthy run -- matrix rows 1-3
+- [x] `internal/httpapi/httpapi_test.go`, `engine_contract_test.go`, `testdata/replay-board.mjs` -- field present and replayed -- spine contract
+- [x] `internal/httpapi/web/order.mjs`, `order.test.mjs` -- keep `recording` from `state`; `boardStatus` adds the strip after connection/version when it is exactly false; tests for matrix rows 2, 4, 5 -- ADR-0016
+- [x] `internal/httpapi/web/board.mjs`, `board.css` -- pass it in, style `strip--recording` -- design doc
+- [x] `internal/httpapi/web/check/board-browser.mjs` -- recording strip absent on the healthy fixture (existing no-strip checks suffice) -- regression
+- [x] `ARCHITECTURE-SPINE.md`, `docs/how-herddash-works.md` (`:129-131`), `docs/implementation/deferred-work.md` (F-6 `resolved:` line), `CLAUDE.md` (repository state: the field and strip) -- documents match code
 
 **Acceptance Criteria:**
 - Given a running engine whose saved state failed to load, when `/api/state` is read at any time, then `recording` is false.
@@ -76,3 +77,24 @@ No compiled `epic-7-context.md`: Epic 7 was written this session (two stories, `
 - `node --test internal/httpapi/web/` -- pass
 - `go build -o /tmp/herddash ./cmd/herddash && node internal/httpapi/web/check/board-browser.mjs /tmp/herddash` -- pass
 - `go test -race -count=50 ./internal/engine -run 'TestRecordLoadFails'` -- pass (new concurrency-adjacent assertion)
+
+## Review Triage Log
+
+Pass 1 (Blind Hunter BH, Edge Case Hunter ECH, Verification Gap VG):
+
+| # | Finding | Verdict | Evidence | Route |
+|---|---|---|---|---|
+| 1 | VG, BH3: no browser check draws the recording strip; dropping `board.mjs`'s argument or the CSS rule keeps CI green | medium | `board-browser.mjs` has no `recording` case; Node 22's `node:sqlite` (checked, v22.23.2) can make `server_state.terminals` invalid JSON between two `serve` runs, which `LoadServerState` refuses (`internal/store/record.go:270`) | patch |
+| 2 | BH1: PRD SM-C1 still lists two strips | false | SM-C1 was amended in the baseline commit `23fea44` | reject |
+| 3 | BH1: `epics.md` NFR10 still lists two strips | low | `docs/planning/epics.md:61`; one-sentence correction | patch |
+| 4 | BH2: sprint-status not advanced | false | step 5 syncs sprint-status on completion | reject |
+| 5 | BH4: no `false` through the real engine to Board, nor a `serve`-level test | low | engine tests assert every View false; the browser check of #1 covers serve to Board | covered by #1 |
+| 6 | BH5, ECH5: `TestNoStoreRecordsNothing` checks only the final View | low | `recorder_test.go:397-400`; direct switch to `checkRecording` | patch |
+| 7 | BH6: `recording` is true while a refused gate also records nothing | low | the refused strip says so itself; the field's meaning is undocumented | patch (document: a usable Recorder, not that rows are written) |
+| 8 | BH7, ECH4: strip names a failed load when there is no Store | low | unreachable from a Board: `serve.go:169` always passes a Store | reject (unlikely, unreachable) |
+| 9 | BH8: a non-boolean `recording` reads as recording without a warning | low | the Daemon always sends a boolean (`json:"recording"`, no omitempty); a guard adds a branch | reject |
+| 10 | BH9: `New`'s comment omits the store read | low | `engine.go:687`; direct correction | patch |
+| 11 | BH10: strip does not say Seen is refused too | low | text is fixed by ADR-0016 and the design doc; the 503 toast already says so | reject |
+| 12 | ECH1: refused gate plus recording off says "Boxes are live" with none shown | low | needs a failed load and a refused gate together; fix adds a text variant | reject (unlikely, adds a branch) |
+| 13 | ECH2: disconnected plus recording off says "Boxes are live" beside a stale strip | low | text fixed by ADR-0016; a variant adds a branch | reject |
+| 14 | ECH3: the load in `New` blocks HTTP until it returns | low | one single-row SELECT on a database `serve` just opened and owns (flock); milliseconds | reject (negligible) |

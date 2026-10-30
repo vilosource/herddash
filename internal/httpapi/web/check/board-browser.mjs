@@ -30,7 +30,7 @@ import { createServer } from "node:net";
 import { createServer as createHTTPServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ACK_TOAST_MS, STREAM_SILENCE_MS, keyId, sortViews } from "../order.mjs";
+import { ACK_TOAST_MS, RECORDING_OFF_TEXT, STREAM_SILENCE_MS, keyId, sortViews } from "../order.mjs";
 
 const binary = process.argv[2];
 if (!binary) {
@@ -980,6 +980,86 @@ async function focusChecks(browser) {
   }
 }
 
+// ---- Recording off (ADR-0016, Story 7.1) ----
+
+// RECORDING_STRIP reads the recording strip's computed background beside a
+// refused strip's, drawn off the live region for the comparison only.
+const RECORDING_STRIP = `(() => {
+  const s = [...document.querySelectorAll("#strips .strip--recording")].at(-1);
+  const ref = document.createElement("p");
+  ref.className = "strip strip--refused";
+  document.body.appendChild(ref);
+  const refused = getComputedStyle(ref).backgroundColor;
+  ref.remove();
+  const adv = document.createElement("p");
+  adv.className = "strip strip--advisory";
+  document.body.appendChild(adv);
+  const advisory = getComputedStyle(adv).backgroundColor;
+  adv.remove();
+  return JSON.stringify({ bg: s ? getComputedStyle(s).backgroundColor : null, refused, advisory });
+})()`;
+
+async function recordingChecks(browser, snap, kinds) {
+  const sock = join(root, "rec.sock");
+  const herdr = fakeHerdr(sock, "0.9.5");
+  await herdr.start();
+  let d = serve("recording", sock, "127.0.0.1:0");
+  try {
+    const addr = await d.addr();
+    await browser.open("http://" + addr + "/");
+    await until("a Box on the recording run", async () => ((await snap()).boxes > 0 ? true : null));
+    const db = join(root, "recording-data", "herddash.db");
+    // The first snapshot's state is saved once applied; wait for its row.
+    const { DatabaseSync } = await import("node:sqlite");
+    await until("the saved server state", () => {
+      const r = new DatabaseSync(db, { readOnly: true });
+      try {
+        return r.prepare("SELECT count(*) AS n FROM server_state").get().n > 0 ? true : null;
+      } finally {
+        r.close();
+      }
+    });
+    await d.stop();
+    const conn = new DatabaseSync(db);
+    let changed;
+    try {
+      changed = conn.prepare("UPDATE server_state SET terminals = '{not json'").run().changes;
+    } finally {
+      conn.close();
+    }
+    check("recording off: the first run saved its server state", changed > 0, { changed });
+    d = serve("recording", sock, addr);
+    // The log still holds the first run's listening line: wait for the API.
+    await until("serve back on the same address", async () => {
+      try {
+        return (await fetch("http://" + addr + "/api/state")).ok ? true : null;
+      } catch {
+        return null;
+      }
+    });
+    await browser.open("http://" + addr + "/");
+    const s = await until("the recording strip", async () => {
+      const x = await snap();
+      return kinds(x).at(-1) === "recording" && x.boxes > 0 ? x : null;
+    });
+    const last = s.strips.at(-1);
+    check(
+      "recording off: red recording strip last, its text exact, Boxes shown and not dimmed",
+      kinds(s).join() === "recording" && last.text === RECORDING_OFF_TEXT && s.boxes > 0 && !s.stale,
+      s,
+    );
+    const c = JSON.parse(await browser.eval(RECORDING_STRIP));
+    check(
+      "recording off: the strip has the refused strip's background, not the advisory one",
+      c.bg !== null && c.bg === c.refused && c.bg !== c.advisory && c.bg !== "rgba(0, 0, 0, 0)",
+      c,
+    );
+  } finally {
+    await d.stop();
+    await herdr.stop();
+  }
+}
+
 async function main() {
   const browser = await chrome();
   const snap = async () => JSON.parse(await browser.eval(SNAP));
@@ -1297,10 +1377,15 @@ async function main() {
     await d.stop();
     await herdrOld.stop();
 
-    // 4. The acknowledgement controls (ADR-0014).
+    // 4. Recording off (ADR-0016, Story 7.1): a run saves its state, stops,
+    // the saved terminals are made unreadable, and serve on that data
+    // directory records nothing and says so in the red recording strip.
+    await recordingChecks(browser, snap, kinds);
+
+    // 5. The acknowledgement controls (ADR-0014).
     await ackChecks(browser);
 
-    // 5. Seen on leaving the pane, in view and Mark unseen (ADR-0015).
+    // 6. Seen on leaving the pane, in view and Mark unseen (ADR-0015).
     await focusChecks(browser);
 
     // The skipped-publication case's own warning is expected; nothing else is.
