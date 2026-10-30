@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 10-16-2026 09:40
-last_updated: 10-27-2026 15:00
+last_updated: 10-30-2026 10:00
 project: herddash
 project_key: NOKEY
 tracking_system: file-system
@@ -110,6 +110,12 @@ development_status:
   6-8-the-board-shows-in-view-and-offers-mark-unseen: done
   6-9-documents-and-the-build-the-operator-dogfoods-again: done
   epic-6-retrospective: optional
+
+  # Epic 7: Daemon health (operator chose deferred F-6 and R8 on 2026-10-30, after v0.8.0). One PR per story.
+  epic-7: in-progress
+  7-1-say-when-recording-is-off: in-progress
+  7-2-the-log-is-rotated: backlog
+  epic-7-retrospective: optional
 
 # Operator checkpoints and story-size notes carried from epics validation
 # (docs/planning/epics-validation.md, T-2..T-4 and S-4..S-7).

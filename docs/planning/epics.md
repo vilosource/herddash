@@ -1718,3 +1718,65 @@ acknowledgement itself.
 **Then** `herddash version` prints the branch's commit, `/api/state` answers with `seen` and `in_view` on every Agent and exactly one Agent `in_view` when herdr names a focused Agent pane, the database is at schema 7 with the backup beside it, the log shows the lifecycle subscription started with no snapshot storm from focus events, and a `POST` to `/api/seen` without `Origin` is still refused with 403
 
 **And** the operator is then asked, once, to dogfood Epic 6 with Seen on leave; on their OK the epic ships as one pull request and one release
+
+## Epic 7: Daemon health
+
+Two open `deferred-work.md` entries the operator chose on 2026-10-30, after v0.8.0, as the ones
+that could hurt day to day without anyone noticing: a run that records nothing while looking
+healthy (Epic 2 retrospective F-6), and a log that grows without bound (Epic 4 retrospective R8).
+Decided in advance, so no story asks them again:
+
+- Each story is its own pull request into `develop`; no dogfooding checkpoint, since neither
+  changes what a healthy Daemon shows or records.
+- No new dependency and no change to the record's schema.
+
+### Story 7.1: Say when recording is off
+
+As the operator,
+I want the Board and `/api/state` to say when this run records nothing,
+So that a Daemon whose saved state failed to load does not look healthy while it drops every
+Transition.
+
+When `LoadServerState` fails at start, `restore` turns recording off for the run (Story 2.2's
+choice, AD-3) and logs one error. The published view gains a top-level `recording` boolean, sent
+on `/api/state` and in the stream's `state` event, and the Board shows a strip saying the run is
+not recording and pointing at `herddash.log` while it is false. Nothing else changes: the engine
+still observes and publishes, and acknowledgement's write routes still answer 503 `recording_off`.
+
+**Acceptance Criteria:**
+
+**Given** an engine whose Recorder's `LoadServerState` fails
+**When** it publishes its first view
+**Then** the view's `recording` is false, and with a Recorder that loads, true; it never changes
+within a run
+
+**Given** a `state` event or `/api/state` body with `recording: false`
+**When** the Board renders it
+**Then** a recording strip says herddash is not recording this run and to see `herddash.log`, and
+with `recording: true` or the field absent (an older Daemon) no such strip is drawn
+
+**Given** `deferred-work.md`'s F-6 entry
+**When** the story is done
+**Then** it carries a `resolved:` line naming this story
+
+### Story 7.2: The log is rotated
+
+As the operator,
+I want `herddash.log` kept to a bounded size,
+So that a Daemon that runs for months does not fill the disk.
+
+The Daemon rotates its own `herddash.log` by size with the standard library (no new dependency),
+keeping a bounded number of earlier files; `herddash.stderr.log` (launchd's) and the journal
+(systemd) are left as they are and documented.
+
+**Acceptance Criteria:**
+
+**Given** a log file that reaches the size limit
+**When** the next line is written
+**Then** the file is renamed aside, a new one is started with the same owner-only mode, and no
+more than the documented number of earlier files is kept
+
+**Given** `docs/install.md` and `deferred-work.md`'s R8 entry
+**When** the story is done
+**Then** install.md states the limit and what is kept, and R8 carries a `resolved:` line naming
+this story
