@@ -5,8 +5,9 @@
 // stays on the same Agent's Box. Order, layout, formatting, event handling and
 // the reconnect decisions live in order.mjs; this file only builds and places
 // elements, ticks the Waiting Times each second and executes those decisions.
-// Which connection and version strips show, their text, and whether Boxes are
-// dimmed or hidden are order.mjs's boardStatus; this file draws them.
+// Which connection, version and recording strips show, their text, and
+// whether Boxes are dimmed or hidden are order.mjs's boardStatus; this file
+// draws them.
 //
 // The acknowledgement controls (ADR-0014, Story 6.4) are ordinary buttons,
 // with no key binding: a Seen pill on every Finished Box, a Mark unseen pill
@@ -458,7 +459,7 @@ function drawTitleBar(status) {
 
 function currentStatus(now) {
   const lost = streamLost(st, now);
-  return { ...boardStatus(st.model.connection, lost, now), lost };
+  return { ...boardStatus(st.model.connection, lost, now, st.model.recording), lost };
 }
 
 // hiddenFocus is the keyId of the Box that had focus when the Boxes were

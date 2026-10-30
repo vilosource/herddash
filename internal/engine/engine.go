@@ -684,7 +684,10 @@ type (
 	}
 )
 
-// New returns an Engine. Run starts it.
+// New returns an Engine. Run starts it. With a Store, New also loads the
+// state the previous run saved (one read), which fixes for the run whether it
+// records: a failed load turns recording off before the first View is stored
+// (ADR-0016).
 func New(o Options) *Engine {
 	e := &Engine{
 		host:   o.Host,
@@ -732,7 +735,8 @@ func New(o Options) *Engine {
 	}
 	e.truth = core.ConnectionTruth{HerdrMinimum: core.HerdrMinimum}
 	e.pub.subs = map[*ViewSubscription]struct{}{}
-	e.pub.view.Store(&View{RunID: e.runID, Agents: []core.AgentView{}, Connection: e.truth, Headers: []int{}})
+	e.load()
+	e.pub.view.Store(&View{RunID: e.runID, Agents: []core.AgentView{}, Connection: e.truth, Headers: []int{}, Recording: e.recording()})
 	return e
 }
 
@@ -742,8 +746,8 @@ func New(o Options) *Engine {
 // after snapshotRetryDelay. Run closes every subscription and waits for its
 // goroutines before it returns. Call it once.
 //
-// With a Store, Run first loads the epoch and terminal map the previous run
-// saved and records a daemon_start marker, then connects; every Transition,
+// With a Store, New has already loaded the epoch and terminal map the
+// previous run saved; Run records a daemon_start marker, then connects; every Transition,
 // and every Agent's first sight, is appended as it is observed, and the state
 // is saved after each applied snapshot that changed it.
 func (e *Engine) Run(ctx context.Context) {

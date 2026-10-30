@@ -236,6 +236,12 @@ connection comes first, then version.
   recording under the dogfooding flag.", plus the resync sentence when `resync_guaranteed` is not
   true.
 
+- **Recording off** (*added 2026-10-30, ADR-0016*): when the view's `recording` is false, the
+  Daemon could not load its saved state and records nothing this run. A red strip, after the
+  connection and version strips, reads "herddash is not recording this run: its saved state could
+  not be loaded. Boxes are live, but no history is being written. See herddash.log." Boxes are
+  shown and not dimmed. An absent `recording` means recording, so an older Daemon draws nothing.
+
 **A silent Daemon is a lost stream.** *Added 2026-10-23 (ADR-0012).* The Daemon sends a
 `keepalive` event every 15 s. When the stream delivers nothing at all for 35 s, the Daemon is hung
 or the socket is half-open, so the Board shows the slate "Lost contact with herddash.
@@ -359,5 +365,6 @@ focus, send, kill or open-in-terminal action, no filters, no search, no settings
 shortcut. It shows no pane output, excerpts or scrollback, and no second data type
 per Box: no history or charts. The only counts are each workspace group's heading counts
 (amended 2026-10-21). It has no footer. The Board is the title bar (ADR-0013, 2026-10-26), Boxes,
-the Needs you and workspace headings, the two strips and the Undo bar. Anything more needs an ADR
-superseding ADR-0003 and ADR-0014.
+the Needs you and workspace headings, the two strips and the Undo bar, plus the recording strip on
+a run that records nothing (ADR-0016, 2026-10-30). Anything more needs an ADR superseding ADR-0003
+and ADR-0014.

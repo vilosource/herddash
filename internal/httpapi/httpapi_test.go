@@ -129,7 +129,7 @@ func TestState(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	for _, f := range []string{"run_id", "seq", "agents", "headers", "connection"} {
+	for _, f := range []string{"run_id", "seq", "agents", "headers", "connection", "recording"} {
 		if _, ok := got[f]; !ok {
 			t.Errorf("field %q missing from %s", f, w.Body)
 		}

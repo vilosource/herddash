@@ -33,3 +33,4 @@ a new ADR that supersedes it and say so in both.
 | [0013](0013-a-title-bar-on-the-board.md) | A title bar on the Board | Accepted; amends 0003 |
 | [0014](0014-acknowledging-a-finished-agent.md) | Acknowledging a Finished Agent ("Seen") | Accepted; amends 0003, 0005, 0007 |
 | [0015](0015-seen-when-you-leave-the-pane.md) | Seen when you leave the pane | Accepted; amends 0006, 0014 |
+| [0016](0016-a-recording-strip-on-the-board.md) | A recording strip on the Board | Accepted; amends 0003, 0014 |

@@ -27,6 +27,47 @@ func startRecording(t *testing.T, fake *fakeClient, st *fakeStore, opts func(*Op
 	})
 }
 
+// startRecordingViewed is startRecording, also subscribed and reading the
+// View before the engine runs, so a test sees every View a client could: the
+// first, stored by New, and every publication after it.
+func startRecordingViewed(t *testing.T, fake *fakeClient, st *fakeStore, opts func(*Options, *recorder)) (*harness, *watcher, View) {
+	t.Helper()
+	var w *watcher
+	var first View
+	h := startEngineBefore(t, fake, func(o *Options, r *recorder) {
+		o.Store = st
+		if opts != nil {
+			opts(o, r)
+		}
+	}, func(e *Engine) {
+		s, _ := e.Subscribe(1024)
+		w = watch(t, s)
+		first = e.View()
+	})
+	return h, w, first
+}
+
+// checkRecording fails unless the first View, every publication and the View
+// now all say want for Recording (ADR-0016: it is fixed for a run).
+func checkRecording(t *testing.T, h *harness, w *watcher, first View, want bool) {
+	t.Helper()
+	if first.Recording != want {
+		t.Errorf("first View recording %v, want %v", first.Recording, want)
+	}
+	ps := w.all()
+	if len(ps) == 0 {
+		t.Fatal("no publications")
+	}
+	for _, p := range ps {
+		if p.View.Recording != want {
+			t.Errorf("publication %d recording %v, want %v", p.View.Seq, p.View.Recording, want)
+		}
+	}
+	if v := h.engine.View(); v.Recording != want {
+		t.Errorf("View recording %v, want %v", v.Recording, want)
+	}
+}
+
 // row describes a recorded Transition in one line.
 func row(tr core.Transition) string {
 	prev, ok := tr.Previous()
@@ -89,10 +130,12 @@ func TestRecordLiveChange(t *testing.T) {
 func TestRecordDaemonStart(t *testing.T) {
 	fake := newFakeClient(t, twoAgents())
 	st := newFakeStore(fake)
-	h := startRecording(t, fake, st, nil)
+	h, vw, first := startRecordingViewed(t, fake, st, nil)
 	h.rec.expect(t, "agent w1:p1 claude working", "agent w1:p2 claude idle")
 	st.awaitRows(t, 2)
 	h.settle()
+	// A healthy run records, and every View says so (ADR-0016).
+	checkRecording(t, h, vw, first, true)
 	w := st.writeList()
 	if len(w) < 1 || w[0] != "marker daemon_start 1" || slices.Index(w[1:], "marker daemon_start 1") >= 0 {
 		t.Errorf("writes %v, want one daemon_start marker under epoch 1, first", w)
@@ -344,13 +387,37 @@ func TestNoStoreRecordsNothing(t *testing.T) {
 	// Without a Store the engine behaves as in Epic 1: the clock readings are
 	// the reports' alone (TestLiveChange checks them), and the first snapshot
 	// decides no epoch.
-	h := started(t)
+	var w *watcher
+	var first View
+	h := startEngineBefore(t, newFakeClient(t, twoAgents()), nil, func(e *Engine) {
+		s, _ := e.Subscribe(1024)
+		w = watch(t, s)
+		first = e.View()
+	})
+	h.rec.expect(t, "agent w1:p1 claude working", "agent w1:p2 claude idle")
+	h.fake.awaitSubscribe("w1:p1")
+	h.fake.awaitSubscribe("w1:p2")
+	h.settle()
 	if h.engine.store != nil {
 		t.Fatal("a store was set")
 	}
 	if slices.Contains(h.rec.all(), "reconnected 0.9.5 epoch 1 kept") {
 		t.Error("a start without a store reported a reconnect")
 	}
+	// Without a Store nothing is recorded, and no View says otherwise
+	// (ADR-0016).
+	checkRecording(t, h, w, first, false)
+}
+
+func TestRecordStateFoundRecording(t *testing.T) {
+	// A run that finds saved state records, from the first View on.
+	fake := newFakeClient(t, twoAgents())
+	st := newFakeStore(fake)
+	st.state = map[string]store.ServerState{"mac/default": {Epoch: 4, Terminals: map[string]string{}}}
+	h, w, first := startRecordingViewed(t, fake, st, nil)
+	w.await("two agents", func(ps []Publication) bool { return len(ps) > 0 && len(ps[len(ps)-1].View.Agents) == 2 })
+	h.settle()
+	checkRecording(t, h, w, first, true)
 }
 
 func TestRecordLoadFails(t *testing.T) {
@@ -361,7 +428,7 @@ func TestRecordLoadFails(t *testing.T) {
 	st := newFakeStore(fake)
 	st.loadErr = errors.New("database is corrupt")
 	logs := &logSink{}
-	h := startRecording(t, fake, st, func(o *Options, _ *recorder) {
+	h, vw, first := startRecordingViewed(t, fake, st, func(o *Options, _ *recorder) {
 		o.Logger = slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	})
 	h.rec.expect(t, "agent w1:p1 claude working", "agent w1:p2 claude idle")
@@ -383,6 +450,9 @@ func TestRecordLoadFails(t *testing.T) {
 	if _, ok := st.savedState(); ok {
 		t.Error("a state was saved")
 	}
+	// No View a client could read says this run records (ADR-0016): not the
+	// first, stored before Run started, nor any publication after it.
+	checkRecording(t, h, vw, first, false)
 	e := logs.entries(t, "ERROR", "recording is off for this run")
 	if len(e) != 1 || e[0]["error"] != "database is corrupt" {
 		t.Errorf("error entries %v, want one naming the cause", e)

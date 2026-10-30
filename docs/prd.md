@@ -5,7 +5,7 @@ created: 2026-10-08
 updated: 2026-10-14
 supersedes: the 2026-10-05 draft of docs/prd.md
 governed_by: [docs/adr/0001-what-herddash-is.md, docs/adr/0003-the-board-is-the-product.md]
-amended: 2026-10-27 (ADR-0014, acknowledgement: glossary, FR-5a, §4.4, §6.2, SM-C1, §8 Q1); 2026-10-27 (ADR-0015, Seen on leaving the pane: glossary, FR-5a, §4.4, §5, SM-C1)
+amended: 2026-10-27 (ADR-0014, acknowledgement: glossary, FR-5a, §4.4, §6.2, SM-C1, §8 Q1); 2026-10-27 (ADR-0015, Seen on leaving the pane: glossary, FR-5a, §4.4, §5, SM-C1); 2026-10-30 (ADR-0016, recording strip: SM-C1)
 ---
 
 # PRD: herddash
@@ -731,6 +731,9 @@ browser never reaches the herdr socket.
   *Amended 2026-10-27 (operator decision, ADR-0015):* a Seen Box also carries a `Mark unseen`
   pill, and a Finished Box whose pane is focused in herdr a `● in view` tag, which is a label, not
   a control.
+  *Amended 2026-10-30 (operator decision, ADR-0016):* the Board also carries a recording strip,
+  shown only on a run whose saved state could not be loaded and that therefore records nothing.
+
 - **SM-C2: herdr load.** The Daemon issues no on-demand herdr reads to serve a page view; snapshot
   frequency is bounded by the reconcile timer. Counterbalances SM-2.
 

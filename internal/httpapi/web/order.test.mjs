@@ -14,6 +14,7 @@ import {
   RECONNECT_START_MS,
   LOST_GRACE_MS,
   LOST_TEXT,
+  RECORDING_OFF_TEXT,
   STREAM_SILENCE_MS,
   applyEvent,
   boardStatus,
@@ -1295,6 +1296,56 @@ test("strips: a state event showing herdr connected clears the disconnected stri
     dimmed: false,
     hideBoxes: false,
   });
+});
+
+test("strips: recording off shows the red recording strip; Boxes stay shown and undimmed", () => {
+  const st = boardStatus(okConn, false, NOW, false);
+  assert.deepEqual(st, { strips: [{ kind: "recording", parts: [{ text: RECORDING_OFF_TEXT }] }], dimmed: false, hideBoxes: false });
+  assert.equal(
+    stripText(st.strips[0]),
+    "herddash is not recording this run: its saved state could not be loaded. Boxes are live, but no history is being written. See herddash.log.",
+  );
+  // Only exactly false is a run recording nothing.
+  for (const r of [true, undefined, null, "false", 0]) {
+    assert.deepEqual(boardStatus(okConn, false, NOW, r).strips, [], String(r));
+  }
+});
+
+test("strips: recording off comes after the connection and version strips; only disconnection dims", () => {
+  const c = { ...okConn, connected: false, gate: "advisory", herdr_version: "0.9.4", last_snapshot_at: NOW - 160000 };
+  const st = boardStatus(c, false, NOW, false);
+  assert.deepEqual(st.strips.map((s) => s.kind), ["disconnected", "advisory", "recording"]);
+  assert.equal(st.dimmed, true);
+  assert.equal(st.hideBoxes, false);
+  // Disconnected alone with recording off: connection strip, then recording.
+  const down = boardStatus({ ...okConn, connected: false }, false, NOW, false);
+  assert.deepEqual(down.strips.map((s) => s.kind), ["disconnected", "recording"]);
+  assert.equal(down.dimmed, true);
+  // Recording off with herdr connected dims nothing; a lost stream still dims.
+  assert.equal(boardStatus(okConn, false, NOW, false).dimmed, false);
+  assert.deepEqual(boardStatus(okConn, true, NOW, false).strips.map((s) => s.kind), ["disconnected", "recording"]);
+  assert.notEqual(stripsKey(st.strips), stripsKey(boardStatus(c, false, NOW).strips));
+});
+
+test("state keeps the view's recording; an older Daemon's state without it means recording", () => {
+  const a = {};
+  let st = opened(a);
+  const off = JSON.stringify({ agents: fixture.input.map((i) => i.view), connection: okConn, recording: false });
+  ({ st } = streamDecision(st, { kind: "event", source: a, name: "state", data: off }));
+  assert.equal(st.model.recording, false);
+  assert.deepEqual(boardStatus(st.model.connection, streamLost(st, NOW), NOW, st.model.recording).strips.map((s) => s.kind), ["recording"]);
+  // A change event keeps it: no event but state carries it.
+  const conn = JSON.stringify({ ...okConn, herdr_version: "0.9.6" });
+  ({ st } = streamDecision(st, { kind: "event", source: a, name: "connection", data: conn }));
+  assert.equal(st.model.recording, false);
+  const on = JSON.stringify({ agents: [], connection: okConn, recording: true });
+  ({ st } = streamDecision(st, { kind: "event", source: a, name: "state", data: on }));
+  assert.equal(st.model.recording, true);
+  // An older Daemon sends no recording: the model holds none, and no strip shows.
+  const old = JSON.stringify({ agents: [], connection: okConn });
+  ({ st } = streamDecision(st, { kind: "event", source: a, name: "state", data: old }));
+  assert.equal("recording" in st.model, false);
+  assert.deepEqual(boardStatus(st.model.connection, false, NOW, st.model.recording).strips, []);
 });
 
 test("formatAge keeps seconds below an hour, then follows formatDuration", () => {

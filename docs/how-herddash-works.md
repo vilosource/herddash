@@ -128,7 +128,8 @@ What a Seen mark does:
 - It is recorded in the history database as a row of its own, and an undo is a further row, so it
   survives a restart of herddash and shows in the agent's history. There is no setting that turns
   recording off, but if herddash cannot load its saved state at start it records nothing for that
-  run (and logs why); marking is then refused, because a mark it could not keep is not one.
+  run (and logs why); the board then says so in a red strip at the top, and marking is refused,
+  because a mark it could not keep is not one.
 - It reaches every open board through the event stream, as that agent's updated box.
 
 What it does not do:

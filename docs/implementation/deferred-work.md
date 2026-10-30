@@ -118,6 +118,7 @@
 - source_spec: `docs/implementation/epic-2-retro-2026-10-23.md`
   summary: When saved state fails to load, recording is off for the run and nothing on `/api/state` or the Board says so (retro F-6).
   evidence: `restore` sets `e.store = nil` and logs one error (`internal/engine/recorder.go`), Story 2.2's deliberate choice (triage #1). Low: never observed; the Daemon only looks healthier than it is.
+  resolved: 2026-10-30, Story 7.1 (`docs/implementation/spec-7-1-say-when-recording-is-off.md`), per ADR-0016. The engine now loads its saved state in `New` (`load`, `internal/engine/recorder.go`), before the first View is stored, and every published `engine.View` carries an always-sent `recording` boolean, false for the whole run when the load failed; the Board draws a red recording strip after the connection and version strips while it is false (`boardStatus`, `internal/httpapi/web/order.mjs`). `TestRecordLoadFails` asserts no View a client could read says true.
 - source_spec: `docs/implementation/epic-2-retro-2026-10-23.md`
   summary: The import summary does not say which Host and Server the rows were filed under, so a run from a herdr pane that inherited another `HERDR_SOCKET_PATH` is not noticed (retro F-7).
   evidence: Story 2.6's triage #2 made a corrected re-run possible, but the summary line names neither. Low: the import is a one-off per Host.
@@ -167,3 +168,6 @@
 - source_spec: `docs/implementation/spec-6-8-the-board-shows-in-view-and-offers-mark-unseen.md`
   summary: The `● in view` tag's title promises "Leaving the pane after 3 s marks it seen" on every in-view Finished Box, including a finish that already has an acknowledgement row (a Mark unseen, or a Board Seen undone), which a leave never marks.
   evidence: Story 6.8 review, low. `order.mjs` `IN_VIEW_TITLE` is fixed text and `inViewTag` reads only `boxKind` and `in_view`; the leave check refuses once `finishHasRow` is true (`internal/engine/focus.go`, `core.SeenOnLeave`). The AgentView carries nothing that lets the Board tell such a finish apart, and the title is ADR-0015's and the design's wording, so a fix (a view field, or a reworded title) changes ADR-0015's view contract or its text. The Box's state is still right; only the tooltip overpromises.
+- source_spec: `docs/implementation/spec-7-1-say-when-recording-is-off.md`
+  summary: The Profile-hold tests are timing-dependent and flake on Linux CI: `TestProfileHoldDeadline/transient_failure_after_the_deadline` ("a row was not held", PR #64 run 41029847796) and `TestAckRefusedDuringProfileHold` ("view seq 5, want 4", develop run 40661634476, 2026-10-28).
+  evidence: Both race real `profileTimeout`/hold-deadline timers against event delivery; the first passed `-race -count=30 -cpu=1,4` on the operator's Mac (60 runs) and Story 7.1 does not touch Profile lookup. Settle by driving those timers from a fake clock or by widening the timeouts the subtests set, then `-race -count=50` on a Linux runner.

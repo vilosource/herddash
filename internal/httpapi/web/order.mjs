@@ -507,7 +507,8 @@ export const HANDLED_EVENTS = Object.freeze(["state", "agent", "transition", "re
 // nothing changed; warning is set, and model unchanged, when the payload is
 // malformed. state replaces everything; agent adds or replaces that
 // AgentView; transition replaces it with the event's agent; removed drops the
-// key; connection replaces the ConnectionTruth. resync, and any name outside
+// key; connection replaces the ConnectionTruth. state also keeps the view's
+// recording, when it is a boolean (ADR-0016). resync, and any name outside
 // HANDLED_EVENTS, changes nothing.
 export function applyEvent(model, name, data) {
   if (!HANDLED_EVENTS.includes(name)) return { model };
@@ -529,7 +530,11 @@ export function applyEvent(model, name, data) {
         if (agents.has(id)) return bad("has two AgentViews for one AgentKey");
         agents.set(id, v);
       }
-      return { model: { agents, connection: d.connection, runId: d.run_id } };
+      const m = { agents, connection: d.connection, runId: d.run_id };
+      // recording is fixed for a run (ADR-0016), so only a state event
+      // carries it; an older Daemon omits it, which means recording.
+      if (typeof d.recording === "boolean") m.recording = d.recording;
+      return { model: m };
     }
     case "agent": {
       if (!validView(d)) return bad("is not an AgentView");
@@ -745,20 +750,31 @@ export function clockUTC(ms) {
 // stream.
 export const LOST_TEXT = "Lost contact with herddash. Reconnecting…";
 
+// RECORDING_OFF_TEXT is the recording strip, shown while the view's
+// recording is false: the Daemon could not load its saved state and records
+// nothing this run (ADR-0016).
+export const RECORDING_OFF_TEXT =
+  "herddash is not recording this run: its saved state could not be loaded. " +
+  "Boxes are live, but no history is being written. See herddash.log.";
+
 function versionLabel(v) {
   return typeof v === "string" && v ? v : "(version unknown)";
 }
 
 // boardStatus decides what the Board shows around its Boxes, from the latest
 // ConnectionTruth (null before the first state), whether the Board has lost
-// the Daemon's stream, and the clock. It returns {strips, dimmed, hideBoxes}:
+// the Daemon's stream, the clock, and the view's recording (ADR-0016; only
+// exactly false is a run recording nothing, so an absent one from an older
+// Daemon draws nothing). It returns {strips, dimmed, hideBoxes}:
 //
-//   - strips, in order (connection, then version), each {kind, parts}: kind
-//     is "disconnected", "advisory" or "refused"; parts are the strip's text
+//   - strips, in order (connection, then version, then recording), each
+//     {kind, parts}: kind is "disconnected", "advisory", "refused" or
+//     "recording"; parts are the strip's text
 //     runs, each {text}, plus tick: true on the age that ticks (hidden from
 //     screen readers) or sr: true on the fixed time read in its place.
 //   - dimmed: every Box is dimmed and desaturated, never hidden, because the
 //     Board's data is stale (herdr disconnected, or the Daemon's stream lost).
+//     Recording off dims nothing: the Boxes are live.
 //   - hideBoxes: the gate is not ok or advisory (refused, unknown, or
 //     missing while connected), so no Box is shown at all. A missing gate
 //     while not connected is the Daemon before its first gate decision: no
@@ -770,7 +786,7 @@ function versionLabel(v) {
 // A lost stream replaces the herdr-disconnected text, because the
 // ConnectionTruth is then itself stale; the version strip still follows the
 // latest ConnectionTruth.
-export function boardStatus(connection, lost, nowMs) {
+export function boardStatus(connection, lost, nowMs, recording = true) {
   const c = isObject(connection) ? connection : null;
   const gate = c ? c.gate : "ok";
   // The Daemon omits gate before its first decision, while herdr is not yet
@@ -822,6 +838,7 @@ export function boardStatus(connection, lost, nowMs) {
     const g = typeof gate === "string" && gate ? gate : "none";
     strips.push({ kind: "refused", parts: [{ text: "herdr version gate unknown (" + g + "); nothing is being recorded." }] });
   }
+  if (recording === false) strips.push({ kind: "recording", parts: [{ text: RECORDING_OFF_TEXT }] });
   return { strips, dimmed: lost || (c !== null && c.connected !== true), hideBoxes };
 }
 
