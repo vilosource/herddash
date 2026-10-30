@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.9.0](https://github.com/vilosource/herddash/compare/v0.8.0...v0.9.0) (2026-10-30)
+
+
+### Features
+
+* rotate herddash.log by size, keeping two earlier files (Story 7.2) ([#65](https://github.com/vilosource/herddash/issues/65)) ([b5fd281](https://github.com/vilosource/herddash/commit/b5fd2813ea3dafc7d32ff8b2db71b049aa7e7cf4))
+* say on the Board and /api/state when a run records nothing (Story 7.1, ADR-0016) ([#64](https://github.com/vilosource/herddash/issues/64)) ([d7876f8](https://github.com/vilosource/herddash/commit/d7876f8c66e7fef0d15577d4b497e8fc5283f1d4))
+
 ## [0.8.0](https://github.com/vilosource/herddash/compare/v0.7.1...v0.8.0) (2026-10-28)
 
 
