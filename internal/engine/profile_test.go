@@ -555,6 +555,9 @@ func TestProfileHoldDeadline(t *testing.T) {
 			"transition w1:p1 claude idle->blocked live profile=unresolved")
 	})
 	t.Run("transient failure after the deadline", func(t *testing.T) {
+		// The last lookup's timeout releases the held row: give the test
+		// longer than the package's 200 ms to see it held first.
+		setProfileTimeout(t, time.Second)
 		h, env, logs := startedProfiled(t)
 		h.fake.setGated(true) // only live events change the Status
 		env.hold()

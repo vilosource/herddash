@@ -655,14 +655,24 @@ func TestNoArgumentsServes(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(cfgDir, "config.toml"), []byte("bind = \"127.0.0.1:0\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var stdout, stderr syncBuffer
-	code := run(ctx, nil, &stdout, &stderr)
+	done := make(chan int, 1)
+	go func() { done <- run(ctx, nil, &stdout, &stderr) }()
+	// Wait for the first failed attempt, not a deadline: under -race the
+	// store's migrations alone can outlast a short one.
+	logPath := filepath.Join(home, ".local", "share", "herddash", logFileName)
+	waitFor(t, "a failed attempt in the log", func() bool {
+		b, _ := os.ReadFile(logPath)
+		return strings.Contains(string(b), "herdr not reachable")
+	})
+	cancel()
+	code := <-done
 	if code != 0 {
 		t.Fatalf("exit code %d, stderr %q; want 0 after waiting for herdr", code, stderr.String())
 	}
-	b, err := os.ReadFile(filepath.Join(home, ".local", "share", "herddash", logFileName))
+	b, err := os.ReadFile(logPath)
 	if err != nil {
 		t.Fatalf("serve did not set up its data directory and log: %v", err)
 	}

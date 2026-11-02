@@ -1780,3 +1780,77 @@ more than the documented number of earlier files is kept
 **When** the story is done
 **Then** install.md states the limit and what is kept, and R8 carries a `resolved:` line naming
 this story
+
+*Amended 2026-11-02 (the operator said "proceed" after v0.9.0 shipped with Stories 7.1 and 7.2):*
+Epic 7 takes three more open `deferred-work.md` entries: the tests that flake on Linux CI, which
+cost a rerun on two of Epic 7's pull requests, and two Daemon-health items from the retrospectives
+(D7 and F-8). The same terms hold: one pull request per story, no dogfooding checkpoint, no new
+dependency, no schema change.
+
+### Story 7.3: CI's timing tests do not flake
+
+As the operator,
+I want CI to fail only when the code is wrong,
+So that a red run means something and no pull request needs a rerun.
+
+`TestProfileHoldDeadline/transient_failure_after_the_deadline`, `TestAckRefusedDuringProfileHold`
+(`internal/engine`) and `TestNoArgumentsServes` (`cmd/herddash`) each failed once on a Linux
+runner under `-race` and passed on rerun. Each races a real timer against work the test waits
+for. The fix makes them wait for the event they assert on, drives the timer from the test, or
+widens a timeout the test itself sets where the race is against that timeout, without weakening what each asserts, and changes no production behaviour unless a test exposes a
+real defect.
+
+**Acceptance Criteria:**
+
+**Given** the three tests
+**When** they run with `-race -count=50` and with `-cpu=1,4,8`
+**Then** they pass every time, and each still fails when the behaviour it covers is broken
+
+**Given** `deferred-work.md`'s entry for these flakes
+**When** the story is done
+**Then** it carries a `resolved:` line naming this story
+
+### Story 7.4: The HTTP server bounds idle and slow connections
+
+As the operator,
+I want the Daemon's HTTP server to drop connections that sit idle or stall a reply,
+So that a stuck browser tab or client cannot hold the Daemon's sockets open forever.
+
+The server sets `ReadHeaderTimeout` and the event stream and history set per-write deadlines,
+but there is no `IdleTimeout`, and `/api/state` and the static assets set no write deadline
+(Epic 3 retrospective D7). The event stream keeps no deadline it does not already have.
+
+**Acceptance Criteria:**
+
+**Given** a keep-alive connection that sends nothing after a reply
+**When** the idle timeout passes
+**Then** the server closes it
+
+**Given** a client that stops reading a `/api/state` or asset reply
+**When** the write deadline passes
+**Then** the write fails and the connection is closed, while a long-lived `/events` stream is
+unaffected
+
+**Given** `deferred-work.md`'s D7 entry and `docs/config.example.toml`'s timings
+**When** the story is done
+**Then** D7 carries a `resolved:` line and the new timings are listed
+
+### Story 7.5: A skipped Retention sweep is caught up
+
+As the operator,
+I want a Retention sweep that a resync skipped to run soon after the resync ends,
+So that a Host where resyncs keep landing on the hour still trims its record.
+
+`sweep` returns early while a resync is running or scheduled, and the next attempt is a full
+hour later (Epic 2 retrospective F-8).
+
+**Acceptance Criteria:**
+
+**Given** a sweep tick that arrives while a resync runs or is scheduled
+**When** the resync completes
+**Then** the sweep runs then, once, rather than an hour later, and the hourly schedule is
+unchanged
+
+**Given** `deferred-work.md`'s F-8 entry
+**When** the story is done
+**Then** it carries a `resolved:` line naming this story
