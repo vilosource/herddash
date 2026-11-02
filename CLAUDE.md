@@ -33,10 +33,11 @@ them to disagree.
 
 ## How the build runs
 
-**Planning is complete.** The PRD, the architecture and the 57 stories in
+**Planning is complete.** The PRD, the architecture and the 60 stories in
 `docs/planning/epics.md` (27 for Epics 1 to 4, 19 for Epic 5, 5.1 to 5.19, 9 for Epic 6,
 6.1 to 6.5 planned 2026-10-27 with ADR-0014 and 6.6 to 6.9 added the same day with ADR-0015,
-and 2 for Epic 7, Daemon health, 7.1 and 7.2 planned 2026-10-30 with ADR-0016) are
+and 5 for Epic 7, Daemon health, 7.1 and 7.2 planned 2026-10-30 with ADR-0016 and 7.3 to 7.5
+added 2026-11-02) are
 final, and
 `docs/implementation/sprint-status.yaml` tracks them. Build one story at a time with
 `/bmad-build`, in the order the tracking file lists; it names the next one. Do not write code that

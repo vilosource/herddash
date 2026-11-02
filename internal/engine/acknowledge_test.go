@@ -216,9 +216,11 @@ func TestAckRefusedDuringProfileHold(t *testing.T) {
 	h.fake.awaitSubscribe("w1:p1")
 	h.settle()
 	item := itemOf(viewOfP1(t, h))
+	last := h.engine.View().Connection.LastSnapshotAt
 	env.hold()
 	h.lifecycle(core.LifecycleEvent{Kind: core.LifecycleAgentDetected, PaneID: "w1:p1", AgentProgram: "claude"})
 	h.awaitProcessCalls(2)
+	awaitSnapshotAfter(t, h, last)
 	seq := h.engine.View().Seq
 	if _, err := h.ack(true, item); !errors.Is(err, ErrStaleView) {
 		t.Fatalf("mark during a hold: %v, want ErrStaleView", err)
@@ -247,9 +249,11 @@ func TestAckUndoRefusedDuringProfileHold(t *testing.T) {
 	if v, err := h.ack(true, item); err != nil || !v[0].Seen {
 		t.Fatalf("mark: %+v, %v", v, err)
 	}
+	last := h.engine.View().Connection.LastSnapshotAt
 	env.hold()
 	h.lifecycle(core.LifecycleEvent{Kind: core.LifecycleAgentDetected, PaneID: "w1:p1", AgentProgram: "claude"})
 	h.awaitProcessCalls(2)
+	awaitSnapshotAfter(t, h, last)
 	seq := h.engine.View().Seq
 	if _, err := h.ack(false, item); !errors.Is(err, ErrStaleView) {
 		t.Fatalf("undo during a hold: %v, want ErrStaleView", err)
@@ -985,4 +989,16 @@ func TestAckRestartMissedTurnRealStore(t *testing.T) {
 		t.Errorf("restarted after a turn not observed %+v, want Finished and not seen", v)
 	}
 	stop(h, db)
+}
+
+// awaitSnapshotAfter waits until a snapshot read after last is applied. A
+// redetection also requests a snapshot, and its publication bumps the view
+// seq, so a test that asserts the seq is unchanged waits for it first.
+func awaitSnapshotAfter(t *testing.T, h *harness, last int64) {
+	t.Helper()
+	for deadline := time.Now().Add(wait); h.engine.View().Connection.LastSnapshotAt == last; time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the redetection's snapshot was not applied")
+		}
+	}
 }
