@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -17,9 +18,26 @@ import (
 	"github.com/vilosource/herddash/internal/engine"
 )
 
+// smallBuffer is the socket buffer size, in bytes, the bounds tests ask for on
+// both ends of a connection, so a stalled reader stalls the server's write
+// after a few KB whatever the kernel's defaults (Linux autotunes loopback
+// buffers to megabytes).
+const smallBuffer = 4096
+
+// smallBufferListener shrinks each accepted connection's send buffer.
+type smallBufferListener struct{ net.Listener }
+
+func (l smallBufferListener) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if tc, ok := c.(*net.TCPConn); ok {
+		tc.SetWriteBuffer(smallBuffer)
+	}
+	return c, err
+}
+
 // boundsServer serves h with no server-wide timeouts, as the Daemon's server
 // has no WriteTimeout, and reports when a connection is closed and how many
-// handler calls returned.
+// handler calls returned. Its connections have small send buffers.
 func boundsServer(t *testing.T, h http.Handler) (srv *httptest.Server, closed chan struct{}, returned *atomic.Int32) {
 	t.Helper()
 	returned = new(atomic.Int32)
@@ -33,15 +51,27 @@ func boundsServer(t *testing.T, h http.Handler) (srv *httptest.Server, closed ch
 			closed <- struct{}{}
 		}
 	}
+	srv.Listener = smallBufferListener{srv.Listener}
 	srv.Start()
 	t.Cleanup(srv.Close)
 	return srv, closed, returned
 }
 
-// dialRaw opens a connection to srv that the test drives by hand.
+// dialRaw opens a connection to srv that the test drives by hand. Its receive
+// buffer is set small before the connection is made, so the window it
+// advertises stays small.
 func dialRaw(t *testing.T, srv *httptest.Server) net.Conn {
 	t.Helper()
-	conn, err := net.Dial("tcp", srv.Listener.Addr().String())
+	d := net.Dialer{Control: func(_, _ string, c syscall.RawConn) error {
+		var serr error
+		if err := c.Control(func(fd uintptr) {
+			serr = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_RCVBUF, smallBuffer)
+		}); err != nil {
+			return err
+		}
+		return serr
+	}}
+	conn, err := d.Dial("tcp", srv.Listener.Addr().String())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,13 +89,15 @@ func waitClosed(t *testing.T, closed chan struct{}, d time.Duration) {
 	}
 }
 
-// bigView is a View whose /api/state body is far larger than the socket
-// buffers between a client and the server.
+// bigView is a View whose /api/state body, about 2.6 MB, is far larger than
+// the small socket buffers between a client and the server. It is kept that
+// small because the handler encodes the whole body before its first write,
+// which under -race on a slow runner took seconds at ten times the size.
 func bigView() engine.View {
 	v := testView()
 	line := strings.Repeat("x", 200)
-	agents := make([]core.AgentView, 0, 40000)
-	for i := range 40000 {
+	agents := make([]core.AgentView, 0, 4000)
+	for i := range 4000 {
 		a := v.Agents[0]
 		a.Key.PaneID = fmt.Sprintf("w%d:p1", i)
 		a.SortKey.Key = a.Key
@@ -88,7 +120,7 @@ func TestStateStalledReader(t *testing.T) {
 	if _, err := conn.Write([]byte("GET /api/state HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")); err != nil {
 		t.Fatal(err)
 	}
-	waitClosed(t, closed, 5*time.Second)
+	waitClosed(t, closed, 10*time.Second)
 	if n := returned.Load(); n != 1 {
 		t.Errorf("handler returns: %d, want 1", n)
 	}
