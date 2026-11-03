@@ -2,12 +2,10 @@ package httpapi
 
 import (
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/vilosource/herddash/internal/core"
 )
@@ -121,7 +119,9 @@ func (h *Handler) serveHistory(w http.ResponseWriter, r *http.Request, key core.
 	if ctx.Err() != nil {
 		return
 	}
-	defer h.boundWrite(w, "history")()
+	// The reads may have used the deadline ServeHTTP set; the reply gets its
+	// own.
+	h.boundWrite(w, r)
 	if err != nil {
 		h.log.Error("history: read", "host", key.Host, "server", key.Server, "epoch", key.Epoch, "pane", key.PaneID, "error", err.Error())
 		writeError(w, r, http.StatusInternalServerError, codeInternal, "the history could not be read")
@@ -146,19 +146,4 @@ func (h *Handler) serveHistory(w http.ResponseWriter, r *http.Request, key core.
 		return
 	}
 	writeJSON(w, r, http.StatusOK, body)
-}
-
-// boundWrite bounds the write of one short response and returns the func that
-// clears the bound again. The server has no WriteTimeout (the event stream
-// outlives any), so such a response bounds its own write, and clears the
-// deadline after it so a later request on the same connection is not cut
-// short. what names the route in a log line.
-func (h *Handler) boundWrite(w http.ResponseWriter, what string) func() {
-	rc := http.NewResponseController(w)
-	if err := rc.SetWriteDeadline(time.Now().Add(h.writeTimeout)); err == nil {
-		return func() { rc.SetWriteDeadline(time.Time{}) }
-	} else if !errors.Is(err, http.ErrNotSupported) {
-		h.log.Warn(what+": set write deadline", "error", err.Error())
-	}
-	return func() {}
 }

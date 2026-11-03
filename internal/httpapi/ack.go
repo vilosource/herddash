@@ -137,6 +137,9 @@ func (h *Handler) serveWrite(w http.ResponseWriter, r *http.Request, route write
 		limit = maxBulkBody
 	}
 	body, err := h.readBody(w, r, limit)
+	// The read, and below the engine's answer, may have used the deadline
+	// ServeHTTP set; each reply after them gets its own.
+	h.boundWrite(w, r)
 	if err != nil {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
@@ -157,7 +160,7 @@ func (h *Handler) serveWrite(w http.ResponseWriter, r *http.Request, route write
 		// The client is gone: whatever the engine did, nobody reads the answer.
 		return
 	}
-	defer h.boundWrite(w, "acknowledge")()
+	h.boundWrite(w, r)
 	if err != nil {
 		h.writeAckError(w, r, err)
 		return

@@ -28,12 +28,30 @@ const logFileName = "herddash.log"
 var listen = net.Listen
 
 // readHeaderTimeout bounds how long a client may take to send its request
-// headers; shutdownTimeout bounds the graceful HTTP shutdown when serve ends.
-// Both are listed under "Fixed timings" in docs/config.example.toml.
+// headers; idleTimeout bounds how long a keep-alive connection may wait for
+// its next request (never a response in progress, such as an event stream);
+// shutdownTimeout bounds the graceful HTTP shutdown when serve ends. All are
+// listed under "Fixed timings" in docs/config.example.toml.
 const (
 	readHeaderTimeout = 10 * time.Second
+	idleTimeout       = 60 * time.Second
 	shutdownTimeout   = 5 * time.Second
 )
+
+// newHTTPServer is the Daemon's HTTP server for h, closing a keep-alive
+// connection idle for idle. It sets no WriteTimeout: an event stream outlives
+// any, so the handler sets each reply's write deadline itself (httpapi's
+// boundWrite) and leaves it set; net/http clears it after each finished reply
+// (Go 1.26, net/http/server.go after finishRequest), so a reply it writes
+// before any handler runs (a 400, a 431) is not refused by a deadline passed.
+func newHTTPServer(h http.Handler, logger *slog.Logger, idle time.Duration) *http.Server {
+	return &http.Server{
+		Handler:           h,
+		ReadHeaderTimeout: readHeaderTimeout,
+		IdleTimeout:       idle,
+		ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelWarn),
+	}
+}
 
 // testSeenDwellEnv names the test seam that lowers the dwell after which
 // leaving a pane marks its finish Seen (ADR-0015, Story 6.8). Only the
@@ -166,11 +184,7 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	})
 	h := httpapi.New(httpapi.Options{View: e.View, Subscribe: e.Subscribe, History: st.History,
 		Acknowledge: e.Acknowledge, Acknowledgements: st.Acknowledgements, Logger: logger})
-	srv := &http.Server{
-		Handler:           h,
-		ReadHeaderTimeout: readHeaderTimeout,
-		ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelWarn),
-	}
+	srv := newHTTPServer(h, logger, idleTimeout)
 	srv.RegisterOnShutdown(h.CloseStreams)
 	// The engine runs under its own context so that, when ctx ends, the HTTP
 	// server is shut down before the engine stops.

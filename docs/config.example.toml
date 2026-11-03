@@ -160,7 +160,11 @@ absent = "claude"
 #
 # HTTP and the Board
 #   a client's request headers, timeout                        10 s
-#   one write to the event stream or a history reply, timeout  10 s
+#   an idle keep-alive connection is closed after              60 s
+#   a reply written from its handler's start, within           10 s
+#     (history and marking Seen or unseen: from the end of their
+#     store reads or the engine's answer)
+#   one write to the event stream, timeout                     10 s
 #   event stream keepalive, every                              15 s
 #   the Board treats a stream silent for this long as lost     35 s
 #   the Board's reopen after the stream closed: first wait 1 s, doubling,
