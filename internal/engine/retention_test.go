@@ -160,6 +160,9 @@ func TestRetentionNoStore(t *testing.T) {
 	}
 }
 
+// A tick during a resync is skipped and caught up once, right after the
+// snapshot that ends the resync, however many ticks it skipped; the hourly
+// ticks go on as before (Story 7.5).
 func TestRetentionSkippedDuringResync(t *testing.T) {
 	h, st, logs := startedRetaining(t)
 	h.fake.setGated(true)
@@ -167,23 +170,34 @@ func TestRetentionSkippedDuringResync(t *testing.T) {
 	h.rec.awaitCount(t, "resync events_lost", 1)
 	h.fake.awaitSnapshotCall() // the resync's read, held
 	h.retentionTick()
+	h.retentionTick()
 	if n := len(st.sweepList()); n != 1 {
-		t.Fatalf("%d sweeps, want the tick during the resync skipped", n)
+		t.Fatalf("%d sweeps, want both ticks during the resync skipped", n)
 	}
-	if len(logs.entries(t, "DEBUG", "retention sweep skipped")) != 1 {
-		t.Error("skip not logged")
+	if n := len(logs.entries(t, "DEBUG", "retention sweep skipped")); n != 2 {
+		t.Errorf("%d skips logged, want 2", n)
 	}
 	h.fake.setGated(false)
 	h.fake.release <- struct{}{}
 	h.settle()
-	h.retentionTick()
 	if n := len(st.sweepList()); n != 2 {
-		t.Errorf("%d sweeps, want the next tick after the resync to sweep", n)
+		t.Fatalf("%d sweeps, want one catch-up when the resync ended", n)
+	}
+	// The debt is paid: a later snapshot does not sweep again.
+	h.reconcileRead()
+	if n := len(st.sweepList()); n != 2 {
+		t.Errorf("%d sweeps after a later snapshot, want no extra one", n)
+	}
+	h.retentionTick()
+	if n := len(st.sweepList()); n != 3 {
+		t.Errorf("%d sweeps, want the next tick to sweep as before", n)
 	}
 }
 
+// A tick while a resync is scheduled is skipped; snapshots read while it
+// waits do not sweep, and the scheduled resync's end catches it up.
 func TestRetentionSkippedWhileResyncScheduled(t *testing.T) {
-	h, st, _ := startedRetaining(t)
+	h, st, logs := startedRetaining(t)
 	prev := resyncMinInterval
 	resyncMinInterval = time.Hour
 	t.Cleanup(func() { resyncMinInterval = prev })
@@ -206,8 +220,25 @@ func TestRetentionSkippedWhileResyncScheduled(t *testing.T) {
 	if n := h.rec.count("resync events_lost"); n != 1 {
 		t.Errorf("%d resyncs reported, want the second still scheduled", n)
 	}
+	h.reconcileRead()
+	if n := len(st.sweepList()); n != 2 {
+		t.Errorf("%d sweeps after a snapshot while the resync is scheduled, want none", n)
+	}
+	if n := len(logs.entries(t, "DEBUG", "retention sweep skipped")); n != 1 {
+		t.Errorf("%d skips logged, want only the tick's", n)
+	}
+	h.agents()
+	h.engine.inbox <- resyncDueMsg{conn: h.engine.conn}
+	h.rec.awaitCount(t, "resync events_lost", 2)
+	h.fake.awaitStatusSubs("w1:p1", 3)
+	h.settle()
+	if n := len(st.sweepList()); n != 3 {
+		t.Errorf("%d sweeps, want one catch-up when the scheduled resync ended", n)
+	}
 }
 
+// A tick while reconnecting is skipped and caught up by the snapshot that
+// makes the new connection ready.
 func TestRetentionSkippedWhileDisconnected(t *testing.T) {
 	h, st, _ := startedRetaining(t)
 	h.fake.fail("ping", 1<<30)
@@ -217,17 +248,87 @@ func TestRetentionSkippedWhileDisconnected(t *testing.T) {
 	if n := len(st.sweepList()); n != 1 {
 		t.Fatalf("%d sweeps, want the tick while reconnecting skipped", n)
 	}
-	// Once reconnected, the timer goes on; the reconnect itself does not
-	// sweep.
 	h.fake.fail("ping", 0)
 	h.rec.awaitCount(t, "reconnected 0.9.5 epoch 1 kept", 1)
 	h.settle()
-	if n := len(st.sweepList()); n != 1 {
-		t.Errorf("%d sweeps after the reconnect, want no extra one", n)
+	if n := len(st.sweepList()); n != 2 {
+		t.Errorf("%d sweeps after the reconnect, want one catch-up", n)
 	}
 	h.retentionTick()
-	if n := len(st.sweepList()); n != 2 {
+	if n := len(st.sweepList()); n != 3 {
 		t.Errorf("%d sweeps, want the tick after the reconnect to sweep", n)
+	}
+}
+
+// A resync whose ending snapshot hands off to another (a trigger after its
+// read started) does not pay the debt; the last one's end does, once.
+func TestRetentionSkippedAcrossChainedResyncs(t *testing.T) {
+	h, st, _ := startedRetaining(t)
+	prev := resyncMinInterval
+	resyncMinInterval = time.Hour // the second resync waits, scheduled
+	t.Cleanup(func() { resyncMinInterval = prev })
+	h.fake.setGated(true)
+	h.fake.statusSub("w1:p1").health(&herdr.Health{Kind: herdr.HealthEventsLost, Code: "events_lost"})
+	h.rec.awaitCount(t, "resync events_lost", 1)
+	h.fake.awaitSnapshotCall() // the resync's read, held
+	h.retentionTick()
+	// After the read started, a trigger asks for one more resync.
+	p2 := h.fake.statusSub("w1:p2")
+	p2.health(&herdr.Health{Kind: herdr.HealthEventsLost, Code: "events_lost"})
+	// The engine closes the subscription and requests the resync in one
+	// handler; the round trip after the close orders the rest of it.
+	deadline := time.Now().Add(wait)
+	for !p2.isClosed() {
+		if time.Now().After(deadline) {
+			t.Fatal("the second health signal was not handled")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	h.agents()
+	h.fake.setGated(false)
+	h.fake.release <- struct{}{}
+	h.settle()
+	if n := len(st.sweepList()); n != 1 {
+		t.Fatalf("%d sweeps, want none while the next resync is scheduled", n)
+	}
+	h.agents()
+	h.engine.inbox <- resyncDueMsg{conn: h.engine.conn}
+	h.rec.awaitCount(t, "resync events_lost", 2)
+	h.settle()
+	if n := len(st.sweepList()); n != 2 {
+		t.Errorf("%d sweeps, want one catch-up when the last resync ended", n)
+	}
+}
+
+// A tick skipped during a resync that a disconnect abandons is caught up by
+// the reconnect's first snapshot.
+func TestRetentionSkippedDuringAbandonedResync(t *testing.T) {
+	h, st, _ := startedRetaining(t)
+	h.fake.setGated(true)
+	h.fake.statusSub("w1:p1").health(&herdr.Health{Kind: herdr.HealthEventsLost, Code: "events_lost"})
+	h.rec.awaitCount(t, "resync events_lost", 1)
+	h.fake.awaitSnapshotCall() // the resync's read, held until its connection ends
+	h.retentionTick()
+	if n := len(st.sweepList()); n != 1 {
+		t.Fatalf("%d sweeps, want the tick during the resync skipped", n)
+	}
+	h.fake.setGated(false)
+	h.loseLifecycle()
+	h.rec.awaitCount(t, "reconnected 0.9.5 epoch 1 kept", 1)
+	h.settle()
+	if n := len(st.sweepList()); n != 2 {
+		t.Errorf("%d sweeps after the reconnect, want one catch-up", n)
+	}
+}
+
+// A reconnect with no tick skipped meanwhile does not sweep.
+func TestRetentionReconnectOwesNothing(t *testing.T) {
+	h, st, _ := startedRetaining(t)
+	h.loseLifecycle()
+	h.rec.awaitCount(t, "reconnected 0.9.5 epoch 1 kept", 1)
+	h.settle()
+	if n := len(st.sweepList()); n != 1 {
+		t.Errorf("%d sweeps after the reconnect, want only the first", n)
 	}
 }
 
@@ -244,6 +345,12 @@ func TestRetentionSweepFails(t *testing.T) {
 	failed := logs.entries(t, "ERROR", "retention sweep failed")
 	if len(failed) != 2 || failed[0]["error"] != "disk full" {
 		t.Fatalf("logged %v, want both failed sweeps at error with the reason", failed)
+	}
+	// A sweep that ran and failed is not owed: the next snapshot does not
+	// retry it, the next tick does.
+	h.reconcileRead()
+	if n := len(st.sweepList()); n != 2 {
+		t.Errorf("%d sweeps after a snapshot, want a failed sweep not retried", n)
 	}
 	// The engine runs on.
 	h.fake.statusSub("w1:p1").event(core.StatusEvent{PaneID: "w1:p1", Status: core.StatusBlocked, AgentProgram: "claude"})

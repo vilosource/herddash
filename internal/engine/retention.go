@@ -10,8 +10,8 @@ import (
 // startRetention runs once, when the run's first connection becomes ready:
 // with a Store and a Retention, it sweeps the record now and then every
 // retentionSweepInterval until the run ends (FR-9, AD-4). The timer outlives
-// connections; a tick that cannot sweep is skipped and the next one tries
-// again.
+// connections; a tick that cannot sweep is skipped and caught up when it can
+// (see sweep).
 func (e *Engine) startRetention() {
 	if e.store == nil {
 		return
@@ -50,17 +50,21 @@ func (e *Engine) startRetention() {
 // sight may still read its history.
 //
 // It is skipped while the present set is not known (not connected and ready)
-// and while a resync is running or scheduled. A failed sweep is logged; it
-// never stops the engine.
+// and while a resync is running or scheduled; a skipped sweep is owed, and
+// onSnapshot runs it once after the snapshot that ends the resync or makes the
+// connection ready, so several skipped ticks owe one sweep. A failed sweep is
+// logged and not owed: the next tick tries again. It never stops the engine.
 func (e *Engine) sweep() {
 	if e.store == nil || e.retentionDays <= 0 {
 		return
 	}
-	if !e.connected || !e.ready || e.resyncing || e.resyncScheduled {
+	if e.sweepBlocked() {
 		e.log.Debug("retention sweep skipped", "connected", e.connected, "ready", e.ready,
 			"resyncing", e.resyncing || e.resyncScheduled)
+		e.sweepOwed = true
 		return
 	}
+	e.sweepOwed = false
 	cutoff := e.now() - int64(e.retentionDays)*int64(24*time.Hour/time.Millisecond)
 	present := make([]store.Present, 0, len(e.panes))
 	for id, p := range e.panes {
@@ -84,4 +88,10 @@ func (e *Engine) sweep() {
 	}
 	e.log.Info("retention sweep", "cutoff", cutoff, "present", len(present),
 		"transitions", r.Transitions, "resync_markers", r.ResyncMarkers, "acknowledgements", r.Acknowledgements)
+}
+
+// sweepBlocked reports whether a sweep must wait: the present set is not known
+// (not connected and ready), or a resync is running or scheduled.
+func (e *Engine) sweepBlocked() bool {
+	return !e.connected || !e.ready || e.resyncing || e.resyncScheduled
 }
