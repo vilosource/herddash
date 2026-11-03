@@ -2093,3 +2093,109 @@ func TestTestSeenDwell(t *testing.T) {
 		}
 	}
 }
+
+// TestHTTPServerClosesIdle reads one reply on a keep-alive connection and
+// sends nothing more: a server built with a short idle timeout closes it. A
+// response still in progress past that timeout, as an event stream is, is
+// not cut.
+func TestHTTPServerClosesIdle(t *testing.T) {
+	const idle = 100 * time.Millisecond
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/short" {
+			// As httpapi does, a write deadline left set; set once the whole
+			// reply is sent, so only the later request can meet it.
+			w.Header().Set("Content-Length", "2")
+			io.WriteString(w, "ok")
+			rc := http.NewResponseController(w)
+			rc.Flush()
+			rc.SetWriteDeadline(time.Now().Add(idle / 10))
+			return
+		}
+		if r.URL.Path != "/stream" {
+			io.WriteString(w, "ok")
+			return
+		}
+		rc := http.NewResponseController(w)
+		for range 6 {
+			io.WriteString(w, "tick\n")
+			rc.Flush()
+			time.Sleep(idle / 2)
+		}
+	})
+	srv := newHTTPServer(h, slog.New(slog.DiscardHandler), idle)
+	if srv.WriteTimeout != 0 || srv.ReadHeaderTimeout != readHeaderTimeout || srv.IdleTimeout != idle {
+		t.Fatalf("server timeouts: write %v, read header %v, idle %v", srv.WriteTimeout, srv.ReadHeaderTimeout, srv.IdleTimeout)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go srv.Serve(ln)
+	t.Cleanup(func() { srv.Close() })
+
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	br := bufio.NewReader(conn)
+	for _, path := range []string{"/stream", "/"} {
+		if _, err := conn.Write([]byte("GET " + path + " HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")); err != nil {
+			t.Fatal(err)
+		}
+		conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		resp, err := http.ReadResponse(br, nil)
+		if err != nil {
+			t.Fatalf("%s: %v", path, err)
+		}
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil || resp.StatusCode != http.StatusOK || resp.Close {
+			t.Fatalf("%s: status %d, close %v, body %q, error %v; want a whole 200 on a kept-alive connection", path, resp.StatusCode, resp.Close, body, err)
+		}
+		if path == "/stream" && strings.Count(string(body), "tick\n") != 6 {
+			t.Fatalf("/stream body %q, want six ticks", body)
+		}
+	}
+	start := time.Now()
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if n, err := br.Read(make([]byte, 1)); err != io.EOF {
+		t.Fatalf("idle connection: read %d bytes, error %v; want EOF", n, err)
+	}
+	if d := time.Since(start); d < idle/2 || d > 2*time.Second {
+		t.Errorf("idle connection closed after %v, want about %v", d, idle)
+	}
+
+	// A reply left a short write deadline set; once the connection went idle
+	// the server cleared it, so the 400 net/http writes itself for a
+	// malformed request after that deadline passed still arrives.
+	conn2, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn2.Close()
+	br2 := bufio.NewReader(conn2)
+	if _, err := conn2.Write([]byte("GET /short HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")); err != nil {
+		t.Fatal(err)
+	}
+	conn2.SetReadDeadline(time.Now().Add(5 * time.Second))
+	resp, err := http.ReadResponse(br2, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	time.Sleep(idle / 2) // past the deadline /short set, within idle
+	if _, err := conn2.Write([]byte("GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nbad header line\r\n\r\n")); err != nil {
+		t.Fatal(err)
+	}
+	conn2.SetReadDeadline(time.Now().Add(5 * time.Second))
+	resp, err = http.ReadResponse(br2, nil)
+	if err != nil {
+		t.Fatalf("malformed request after the deadline passed: %v; want net/http's 400", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("malformed request: status %d, want 400", resp.StatusCode)
+	}
+}

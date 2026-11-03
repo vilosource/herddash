@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -133,6 +134,9 @@ func (h *Handler) CloseStreams() {
 
 // ServeHTTP implements http.Handler.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Every reply's write is bounded, refusals included; /events clears the
+	// bound before it writes and sets its own around each write.
+	h.boundWrite(w, r)
 	hd := w.Header()
 	hd.Set("Cache-Control", "no-store")
 	hd.Set("X-Content-Type-Options", "nosniff")
@@ -219,6 +223,24 @@ func writeError(w http.ResponseWriter, r *http.Request, status int, code, messag
 	e.Error.Code, e.Error.Message = code, message
 	body, _ := json.Marshal(e) // two strings cannot fail to encode
 	writeJSON(w, r, status, body)
+}
+
+// boundWrite sets the write deadline of r's reply to writeTimeout from now.
+// ServeHTTP calls it first for every request, so every route, error and
+// refusal is bounded, including the server's own last write of the buffered
+// reply after the handler returns, which is all a short reply's write is.
+// History and the write routes call it again after their work (store reads,
+// the body read, the engine's answer), so their reply gets a full
+// writeTimeout of its own. Nothing here clears the deadline, which is what
+// lets it cover that last write: net/http clears it itself once the reply is
+// finished, and the next request sets a fresh one. The
+// server has no WriteTimeout, since the event stream outlives any. /events
+// clears it before it writes and sets its own around each write.
+func (h *Handler) boundWrite(w http.ResponseWriter, r *http.Request) {
+	err := http.NewResponseController(w).SetWriteDeadline(time.Now().Add(h.writeTimeout))
+	if err != nil && !errors.Is(err, http.ErrNotSupported) {
+		h.log.Warn("http: set write deadline", "path", r.URL.Path, "error", err.Error())
+	}
 }
 
 // writeJSON writes body as JSON with its length; a HEAD gets the headers only.

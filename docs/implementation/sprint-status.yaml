@@ -116,8 +116,8 @@ development_status:
   epic-7: in-progress  # 7.1 PR #64, 7.2 PR #65, released as v0.9.0
   7-1-say-when-recording-is-off: done  # PR #64
   7-2-the-log-is-rotated: done  # PR #65
-  7-3-ci-timing-tests-do-not-flake: done
-  7-4-the-http-server-bounds-idle-and-slow-connections: backlog
+  7-3-ci-timing-tests-do-not-flake: done  # PR #68
+  7-4-the-http-server-bounds-idle-and-slow-connections: done
   7-5-a-skipped-retention-sweep-is-caught-up: backlog
   epic-7-retrospective: optional
 

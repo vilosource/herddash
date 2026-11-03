@@ -365,7 +365,10 @@ spec, with its review triage log, is `docs/implementation/spec-<key>.md`. `go.mo
   herdr. `/api/state` and the `state` event carry `recording` (ADR-0016, Story 7.1), always
   sent: false for the whole run when the engine has no Recorder or its saved state failed to
   load. The engine loads that state in `New`, before the first View is stored, so no View a
-  client can read says true and is then withdrawn; no change event carries it.
+  client can read says true and is then withdrawn; no change event carries it. Every reply's
+  write must finish within 10 s of `ServeHTTP` starting (history and marking re-arm it after
+  their work), `/events` clears that bound and bounds each write itself, and `serve`'s server
+  closes a keep-alive connection idle for 60 s; there is no server-wide `WriteTimeout` (Story 7.4).
 - `internal/importer`: the plugin-log backfill.
 
 - The Board at `/`, with its files under `internal/httpapi/web/` embedded in the binary: the

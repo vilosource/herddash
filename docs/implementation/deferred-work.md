@@ -128,6 +128,7 @@
 - source_spec: `docs/implementation/epic-3-retro-2026-10-23.md`
   summary: `/api/state` and the static assets set no write deadline, and the HTTP server has no `IdleTimeout` (retro D7).
   evidence: `internal/httpapi/httpapi.go`, `board.go`, `cmd/herddash/serve.go`. Low: the server listens on loopback only.
+  resolved: 2026-11-02, Story 7.4 (`docs/implementation/spec-7-4-the-http-server-bounds-idle-and-slow-connections.md`). `newHTTPServer` (`cmd/herddash/serve.go`) sets `IdleTimeout` to `idleTimeout` (60 s); `Handler.ServeHTTP` bounds every reply's write with `boundWrite` (10 s), setting the deadline at the start of every request (history and marking re-arm it after their work) and leaving it set, so the server's write of a buffered reply after the handler returns is inside it; net/http clears it after each finished reply; `/events` still clears it and bounds each write itself. Tested by `TestHTTPServerClosesIdle` and `internal/httpapi/bounds_test.go`.
 - source_spec: `docs/implementation/epic-3-retro-2026-10-23.md`
   summary: The history endpoint is unbounded and orders by `observed_at, id` rather than append order (retro D10).
   evidence: `internal/httpapi/history.go`, `internal/store/record.go`. Deferred until something consumes it: nothing does yet, and Retention bounds the rows.
