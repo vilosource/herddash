@@ -178,3 +178,9 @@
 - source_spec: `docs/implementation/spec-7-2-the-log-is-rotated.md`
   summary: `herddash.stderr.log`, launchd's standard error for the Daemon on macOS, is not rotated; Story 7.2 rotates only `herddash.log`.
   evidence: The path is fixed in the launchd plist under `deploy/launchd/` and herddash never writes it itself. It was 0 bytes after 9 days on the operator's Mac, but a panic-restart loop would grow it without bound. Low until a Host shows it growing.
+- source_spec: `docs/implementation/spec-fix-background-task-closed-before-start.md`
+  summary: A subagent's launch or resume whose close is written before its start stays open, so its Box shows a false Background; only a background command's start is cancelled by an earlier close.
+  evidence: No such subagent exists in the 788 local transcripts on 2026-11-06, and all 5 resumes after an unmatched close had the start newer than the close, so a rule that cancelled them would hide real work. Comparing the two records' timestamps would separate the cases, and `TranscriptLine` carries none today. Recorded as a limit in ADR-0009.
+- source_spec: `docs/implementation/spec-fix-background-task-closed-before-start.md`
+  summary: After a first read that starts at the transcript bound, a background command whose close falls before the bound and whose start falls after it stays open, so its Box shows a false Background.
+  evidence: The first read takes only the last 8 MiB (`transcriptFirstBytes`). 21 of the 788 local transcripts on 2026-11-06 exceed it and no inversion straddles it; the widest close-to-start gap seen is 633 KB. Recorded as a limit in ADR-0009.

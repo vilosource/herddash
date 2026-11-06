@@ -3,6 +3,7 @@ package core
 import (
 	"bytes"
 	"encoding/json"
+	"slices"
 	"strings"
 	"unicode/utf8"
 )
@@ -389,6 +390,10 @@ func taskID(id string) bool {
 // it, the oldest is forgotten.
 const MaxOpenTasks = 256
 
+// maxEarlyCloses caps how many closes of tasks not open are remembered per
+// Agent; past it, the oldest is forgotten.
+const maxEarlyCloses = 256
+
 // BackgroundTasks is what one Claude Code Agent's transcript shows: its
 // background work (ADR-0009), the tasks started and not yet closed and
 // whether the main thread's turn has ended, and its latest session recap
@@ -401,6 +406,8 @@ type BackgroundTasks struct {
 	// pending is a local command seen and its result not yet: a turn start
 	// or end before that result confirms the command started a turn.
 	pending bool
+	// earlyCloses are ids closed while not open, oldest first (ADR-0009).
+	earlyCloses []string
 }
 
 type openTask struct {
@@ -418,6 +425,11 @@ type openTask struct {
 // turn start or end, which confirms a turn started before that marker
 // applies. Any other marker (a notification, a task start without a turn
 // start, a recap, another local command) leaves it pending.
+//
+// A close of a task not open is remembered, and a background command's start
+// naming it opens nothing: a command's notification can be written before its
+// start, and its id is never used again (ADR-0009). A subagent's start always
+// opens, since a resume reuses an id that was closed.
 func (b *BackgroundTasks) Apply(l TranscriptLine) {
 	if b.pending && (l.TurnStarted || l.TurnEnded) {
 		b.turnEnded = false
@@ -439,7 +451,8 @@ func (b *BackgroundTasks) Apply(l TranscriptLine) {
 	if l.TurnEnded {
 		b.turnEnded = true
 	}
-	if l.StartID != "" && b.index(l.StartID) < 0 {
+	closedEarly := l.StartCommand && slices.Contains(b.earlyCloses, l.StartID)
+	if l.StartID != "" && b.index(l.StartID) < 0 && !closedEarly {
 		if len(b.open) >= MaxOpenTasks {
 			b.open = append(b.open[:0:0], b.open[len(b.open)-MaxOpenTasks+1:]...)
 		}
@@ -448,6 +461,11 @@ func (b *BackgroundTasks) Apply(l TranscriptLine) {
 	if l.EndID != "" && closingStatuses[l.EndStatus] {
 		if i := b.index(l.EndID); i >= 0 {
 			b.open = append(b.open[:i:i], b.open[i+1:]...)
+		} else if !slices.Contains(b.earlyCloses, l.EndID) {
+			if len(b.earlyCloses) >= maxEarlyCloses {
+				b.earlyCloses = append(b.earlyCloses[:0:0], b.earlyCloses[len(b.earlyCloses)-maxEarlyCloses+1:]...)
+			}
+			b.earlyCloses = append(b.earlyCloses, l.EndID)
 		}
 	}
 }
@@ -485,5 +503,11 @@ func (b BackgroundTasks) Recap() string { return b.recap }
 
 // Clone is a copy of b that shares nothing with it.
 func (b BackgroundTasks) Clone() BackgroundTasks {
-	return BackgroundTasks{open: append([]openTask(nil), b.open...), turnEnded: b.turnEnded, recap: b.recap, pending: b.pending}
+	return BackgroundTasks{
+		open:        append([]openTask(nil), b.open...),
+		turnEnded:   b.turnEnded,
+		recap:       b.recap,
+		pending:     b.pending,
+		earlyCloses: slices.Clone(b.earlyCloses),
+	}
 }
