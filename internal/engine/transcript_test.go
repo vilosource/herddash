@@ -314,6 +314,27 @@ func TestTranscriptReadResumes(t *testing.T) {
 	}
 }
 
+// TestTranscriptClosedBeforeStart: a command whose notification is written
+// before its start is not background work, whether two reads or one see the
+// records. One read is also what a Daemon restart does: open tasks are held in
+// memory only, so a fresh Engine folds them from the transcript (ADR-0009,
+// amended). The subagent, open throughout, shows the records were read: were
+// the command open, closing the subagent would leave one task, not none.
+func TestTranscriptClosedBeforeStart(t *testing.T) {
+	t.Run("two reads", func(t *testing.T) {
+		r := startTranscript(t, core.StatusDone, []string{trPrompt, trSubStart, trDone("bk7q2x9"), trEndTurn}, nil)
+		r.awaitTasks(1, true)
+		writeTranscript(t, r.path, trBgStart, trDone("a3f9c2d1"))
+		r.awaitTasks(0, false)
+	})
+	t.Run("fresh Engine, one read", func(t *testing.T) {
+		r := startTranscript(t, core.StatusDone, []string{trPrompt, trDone("bk7q2x9"), trBgStart, trSubStart, trEndTurn}, nil)
+		r.awaitTasks(1, true)
+		writeTranscript(t, r.path, trDone("a3f9c2d1"))
+		r.awaitTasks(0, false)
+	})
+}
+
 // trStopped is the notification a resumed session enqueues for a task the
 // previous process left with no completion record (Claude Code 2.1.292,
 // observed 2026-10-23; every text invented and marked SECRET).
