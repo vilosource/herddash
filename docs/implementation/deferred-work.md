@@ -125,6 +125,7 @@
 - source_spec: `docs/implementation/epic-2-retro-2026-10-23.md`
   summary: A Retention sweep skipped because a resync was running or scheduled has no catch-up; the next attempt is a full hour later (retro F-8).
   evidence: `sweep` returns when `resyncing || resyncScheduled` (`internal/engine/retention.go`). Low: matters only on a Host where resyncs keep landing on the tick.
+  resolved: 2026-11-03, Story 7.5 (`docs/implementation/spec-7-5-a-skipped-retention-sweep-is-caught-up.md`). A skipped `sweep` sets `sweepOwed`; `onSnapshot` runs the owed sweep once after the first applied snapshot that leaves no resync running or scheduled (`sweepBlocked`), usually the one that ends the resync or makes a reconnect ready. The hourly ticker is unchanged. Not covered: resyncs that keep following one another with no gap at a snapshot keep it waiting, as before. Tested by `TestRetentionSkippedDuringResync`, `TestRetentionSkippedWhileResyncScheduled`, `TestRetentionSkippedWhileDisconnected`, `TestRetentionSkippedAcrossChainedResyncs`, `TestRetentionSkippedDuringAbandonedResync`, `TestRetentionReconnectOwesNothing` and `TestRetentionSweepFails`.
 - source_spec: `docs/implementation/epic-3-retro-2026-10-23.md`
   summary: `/api/state` and the static assets set no write deadline, and the HTTP server has no `IdleTimeout` (retro D7).
   evidence: `internal/httpapi/httpapi.go`, `board.go`, `cmd/herddash/serve.go`. Low: the server listens on loopback only.

@@ -297,6 +297,11 @@ type Engine struct {
 	// later one is a reconnect in the record. Unlike everReady, a saved state
 	// does not set it.
 	readyOnce bool
+	// sweepOwed is set when a Retention sweep was skipped because the present
+	// set was not known or a resync ran or was scheduled; the next applied
+	// snapshot after which a sweep can run runs it (Story 7.5). Memory only:
+	// a restart sweeps at its first ready connection anyway.
+	sweepOwed bool
 	// failures counts consecutive failed starts and lost streams, for the
 	// backoff. A connection that stays up for reconnectStableAfter clears it.
 	failures int
@@ -1406,6 +1411,14 @@ func (e *Engine) onSnapshot(m snapshotMsg) {
 	e.resyncSettle() // in case the snapshot removed the last pane it waited for
 	if firstOfRun {
 		e.startRetention()
+	} else if e.sweepOwed && !e.sweepBlocked() {
+		// A skipped tick is caught up after the first applied snapshot that
+		// leaves no resync running or scheduled: usually the one that ends a
+		// resync, or the one that makes a reconnect ready. While a resync
+		// still runs or is scheduled (this snapshot may have started the
+		// next) it stays owed, unlogged.
+		e.log.Debug("retention sweep caught up")
+		e.sweep()
 	}
 }
 

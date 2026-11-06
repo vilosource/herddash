@@ -157,6 +157,10 @@ absent = "claude"
 #
 # Record
 #   Retention sweep, every (from the first ready connection)    1 h
+#     (a sweep skipped while reconnecting, or while a resync runs or
+#     is scheduled, runs once after the first snapshot that leaves no
+#     resync running or scheduled; resyncs that keep following one
+#     another keep it waiting)
 #
 # HTTP and the Board
 #   a client's request headers, timeout                        10 s
