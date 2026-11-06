@@ -184,3 +184,6 @@
 - source_spec: `docs/implementation/spec-fix-background-task-closed-before-start.md`
   summary: After a first read that starts at the transcript bound, a background command whose close falls before the bound and whose start falls after it stays open, so its Box shows a false Background.
   evidence: The first read takes only the last 8 MiB (`transcriptFirstBytes`). 21 of the 788 local transcripts on 2026-11-06 exceed it and no inversion straddles it; the widest close-to-start gap seen is 633 KB. Recorded as a limit in ADR-0009.
+- source_spec: none
+  summary: `TestBackgroundShell` flaked once on CI with "a background change published connection": it takes its count of publications after the first Background view and requires every later one to be an Agent change, so it appears to race a connection publication.
+  evidence: `release-toolchain` on PR #70, run 41637321903, 2026-11-03, `internal/engine/background_test.go:157`; the PR's next CI run passed. `-race -count=100 -cpu=1,4,8` of this test passes on the operator's Mac (300 runs). Story 7.3's forced-race method would prove the cause, which is inferred from the test's code, not reproduced.
