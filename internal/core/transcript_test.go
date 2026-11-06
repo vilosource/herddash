@@ -373,6 +373,59 @@ func TestBackgroundTasksCap(t *testing.T) {
 	}
 }
 
+// TestTranscriptClosedBeforeStart: a background command whose notification
+// is written before its start never opens (ADR-0009, amended); a subagent's
+// start after such a close still does.
+func TestTranscriptClosedBeforeStart(t *testing.T) {
+	other := `{"type":"user","toolUseResult":{"backgroundTaskId":"bx2"}}`
+	for name, tc := range map[string]struct {
+		lines   []string
+		count   int
+		command bool
+	}{
+		"close then start":           {[]string{prompt, notify("bx1", "completed"), bgStart, endTurn}, 0, false},
+		"failed then start":          {[]string{notify("bx1", "failed"), bgStart}, 0, false},
+		"killed then start":          {[]string{notify("bx1", "killed"), bgStart}, 0, false},
+		"stopped then start":         {[]string{notify("bx1", "stopped"), bgStart}, 0, false},
+		"taskstop then start":        {[]string{`{"type":"user","toolUseResult":{"task_type":"local_bash","task_id":"bx1"}}`, bgStart}, 0, false},
+		"no status then start":       {[]string{notify("bx1", ""), bgStart}, 1, true},
+		"running status then start":  {[]string{notify("bx1", "running"), bgStart}, 1, true},
+		"another id's close":         {[]string{notify("bx2", "completed"), bgStart}, 1, true},
+		"start written twice":        {[]string{notify("bx1", "completed"), bgStart, bgStart}, 0, false},
+		"a matched close is not one": {[]string{bgStart, notify("bx1", "completed"), bgStart}, 1, true},
+		"others still open":          {[]string{other, notify("bx1", "completed"), bgStart}, 1, true},
+		"a launch still opens":       {[]string{notify("ag1", "completed"), agentStart}, 1, false},
+		"a resume still opens":       {[]string{notify("ag1", "completed"), resumed("ag1")}, 1, false},
+	} {
+		b := fold(tc.lines...)
+		if b.Count() != tc.count || b.OpenCommand() != tc.command {
+			t.Errorf("%s: %d open, command %v; want %d, %v", name, b.Count(), b.OpenCommand(), tc.count, tc.command)
+		}
+	}
+}
+
+// TestEarlyClosesCap: at most maxEarlyCloses are remembered, the oldest
+// forgotten; and a Clone shares them with nothing.
+func TestEarlyClosesCap(t *testing.T) {
+	var b BackgroundTasks
+	for i := 0; i < maxEarlyCloses+10; i++ {
+		b.Apply(TranscriptLine{EndID: fmt.Sprintf("t%d", i), EndStatus: "completed"})
+	}
+	if len(b.earlyCloses) != maxEarlyCloses {
+		t.Fatalf("%d remembered, want %d", len(b.earlyCloses), maxEarlyCloses)
+	}
+	c := b.Clone()
+	c.earlyCloses[0] = "changed"
+	if b.earlyCloses[0] == "changed" {
+		t.Error("a clone changed the original")
+	}
+	b.Apply(TranscriptLine{StartID: "t10", StartCommand: true})
+	b.Apply(TranscriptLine{StartID: "t9", StartCommand: true})
+	if b.Count() != 1 || b.index("t9") < 0 {
+		t.Errorf("%d open, t9 %d; want the forgotten t9 open and t10 not", b.Count(), b.index("t9"))
+	}
+}
+
 // recap is an away_summary record carrying content, shaped as observed on
 // 2026-10-22 (ADR-0010).
 func recap(content string) string {

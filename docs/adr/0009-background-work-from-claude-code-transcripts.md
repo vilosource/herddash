@@ -105,6 +105,23 @@ an ADR.
   the other 2 sit within the last 6 lines of their transcripts, still running when read. A resume
   whose notification never comes stays open, as a launch does; no task is aged out. A resume of a
   subagent launched in another session's transcript (across `/clear`) was not observed.
+  *Amended 2026-11-06:* a background command's close can be written before its start, though the
+  start carries the earlier timestamp; why is inferred from that order and those timestamps, not
+  observed. Without this rule the start opened a task nothing would close, and the Box stayed
+  Background, as the operator saw on Claude Code 2.1.311. A close for an id that is not open,
+  which the Story 5.3 amendment above says changes nothing, is now remembered, up to 256 per Agent
+  and in memory only, and a background command's start naming a remembered id opens nothing, since
+  a command's id is not used again. A subagent's start, launch or resume, still opens: a resume
+  reuses a closed id, and a transcript line does not tell a launch from a resume. Evidence
+  (structure only, the 788 transcripts under the four config directories, last written by Claude
+  Code 2.1.292 and 2.1.311): 13 starts named an id whose close had found it not open. The 8
+  background commands of the 708 all had the close with the newer timestamp and status
+  `completed`, the other closing statuses following by reason alone; none of the 708 ids started
+  twice. The 5 were resumed subagents with the start newer, by 17 s to 18 min, so not this
+  inversion. No transcript left more than 165 closes remembered. Two limits remain: a subagent
+  whose close is written before its start stays open (none seen), and a close before the first
+  read's bound is never seen, so a command whose start falls after it stays open (none seen; the
+  widest gap is 633 KB, the bound 8 MiB).
 - **View, not record.** `AgentView` gains `background_tasks` (a count). The Attention Class, the
   Fold, Waiting Time and the stored record are unchanged: no stored schema change.
 - **Main turn over, a background subagent running.** herdr reports `working` and Claude Code's
