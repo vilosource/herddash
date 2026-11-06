@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.10.0](https://github.com/vilosource/herddash/compare/v0.9.0...v0.10.0) (2026-11-06)
+
+
+### Features
+
+* catch up a Retention sweep that a resync or reconnect skipped (Story 7.5) ([#70](https://github.com/vilosource/herddash/issues/70)) ([8670e31](https://github.com/vilosource/herddash/commit/8670e3119e9bbd13ca6edc5e910ab0edcf25a984))
+* close idle HTTP connections and bound every reply's write (Story 7.4) ([#69](https://github.com/vilosource/herddash/issues/69)) ([8ac032a](https://github.com/vilosource/herddash/commit/8ac032afb881e0b417836032c932dff29c60509f))
+
+
+### Bug Fixes
+
+* stop a background command closed before its start showing Background ([#71](https://github.com/vilosource/herddash/issues/71)) ([81d9c05](https://github.com/vilosource/herddash/commit/81d9c059458bf839b76d4eaa4b00296fe6cadb8c))
+
 ## [0.9.0](https://github.com/vilosource/herddash/compare/v0.8.0...v0.9.0) (2026-10-30)
 
 
