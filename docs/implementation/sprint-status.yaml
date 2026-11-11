@@ -121,7 +121,7 @@ development_status:
   7-5-a-skipped-retention-sweep-is-caught-up: done  # PR #70
   epic-7-retrospective: optional
   epic-8: in-progress  # token usage, ADR-0017; planned 2026-11-11
-  8-1-the-decisions-adr-0017-the-prd-and-the-spine: review  # awaiting the operator's acceptance (checkpoint)
+  8-1-the-decisions-adr-0017-the-prd-and-the-spine: done  # PR #75; the operator accepted ADR-0017 on 2026-11-11
   8-2-decode-usage-and-fold-responses: backlog
   8-3-the-usage-table: backlog
   8-4-record-live-usage: backlog
@@ -173,7 +173,7 @@ action_items:
   - epic: 8
     action: "Story 8.1: the operator accepts ADR-0017, the PRD amendment and the spine amendment before Story 8.2 starts"
     owner: "operator"
-    status: open
+    status: done  # accepted 2026-11-11
   - epic: 8
     action: "Story 8.7: the operator approves the usage page rendered with live data, and decides how it is reached"
     owner: "operator"

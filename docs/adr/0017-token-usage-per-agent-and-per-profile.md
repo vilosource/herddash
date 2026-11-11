@@ -1,6 +1,6 @@
 # ADR-0017: Token usage per Agent and per Profile
 
-**Status: Proposed** on 2026-11-11, for the operator's acceptance as Story 8.1. The operator
+**Status: Accepted** by the operator on 2026-11-11 ("i accept"), as Story 8.1. The operator
 decided on 2026-11-09 to reverse PRD §5's non-goal "Not an orchestrator, scheduler, cost tracker
 or usage dashboard" so herddash can track token usage (vfkb, "the operator reverses the
 usage-dashboard non-goal"), and on 2026-11-11 answered the plan's two remaining design questions:
