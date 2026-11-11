@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 10-16-2026 09:40
-last_updated: 11-03-2026 09:00
+last_updated: 11-11-2026 09:00
 project: herddash
 project_key: NOKEY
 tracking_system: file-system
@@ -120,6 +120,16 @@ development_status:
   7-4-the-http-server-bounds-idle-and-slow-connections: done  # PR #69
   7-5-a-skipped-retention-sweep-is-caught-up: done  # PR #70
   epic-7-retrospective: optional
+  epic-8: in-progress  # token usage, ADR-0017; planned 2026-11-11
+  8-1-the-decisions-adr-0017-the-prd-and-the-spine: done  # PR #75; the operator accepted ADR-0017 on 2026-11-11
+  8-2-decode-usage-and-fold-responses: backlog
+  8-3-the-usage-table: backlog
+  8-4-record-live-usage: backlog
+  8-5-serve-usage: backlog
+  8-6-the-history-pass: backlog
+  8-7-the-usage-page: backlog
+  8-8-decide-whether-a-box-shows-usage: backlog
+  epic-8-retrospective: optional
 
 # Operator checkpoints and story-size notes carried from epics validation
 # (docs/planning/epics-validation.md, T-2..T-4 and S-4..S-7).
@@ -160,3 +170,15 @@ action_items:
     action: "When Epic 6 is built and its -dev build installed (Story 6.9, moved from 6.5 by ADR-0015), ask the operator once to dogfood the Seen control with Seen on leaving the pane; on their OK ship it as one PR and one release (vfkb 9aee0fc69560, f14fa1cdfa89)"
     owner: "operator"
     status: done  # 2026-10-28: the operator dogfooded the 6.9 -dev build (schema 7) and approved; shipped as one PR and one release
+  - epic: 8
+    action: "Story 8.1: the operator accepts ADR-0017, the PRD amendment and the spine amendment before Story 8.2 starts"
+    owner: "operator"
+    status: done  # accepted 2026-11-11
+  - epic: 8
+    action: "Story 8.7: the operator approves the usage page rendered with live data, and decides how it is reached"
+    owner: "operator"
+    status: open
+  - epic: 8
+    action: "Story 8.8: the operator decides whether a Box shows a usage figure; a yes needs a design gate with live data"
+    owner: "operator"
+    status: open

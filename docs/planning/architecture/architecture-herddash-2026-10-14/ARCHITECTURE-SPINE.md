@@ -7,8 +7,8 @@ paradigm: 'hexagonal (ports and adapters) around a pure core, with a single-writ
 scope: 'herddash v1: one Daemon per Host observing one herdr server - herdr client, recorder, attribution, HTTP API (read-only apart from acknowledgement, ADR-0014) and SSE, embedded Board, plugin-log import'
 status: final
 created: '2026-10-14'
-updated: '2026-10-27'
-binds: [FR-1, FR-2, FR-2a, FR-3, FR-4, FR-5, FR-5a, FR-6, FR-7, FR-8, FR-9, FR-9a, FR-10, FR-11, FR-12, FR-13, FR-14, FR-15, FR-16, FR-17]
+updated: '2026-11-11'
+binds: [FR-1, FR-2, FR-2a, FR-3, FR-4, FR-5, FR-5a, FR-6, FR-7, FR-8, FR-9, FR-9a, FR-10, FR-11, FR-12, FR-13, FR-14, FR-15, FR-16, FR-17, FR-18, FR-19]
 sources:
   - docs/prd.md
   - docs/planning/prds/prd-herddash-2026-10-08/addendum.md
@@ -16,6 +16,8 @@ sources:
   - docs/adr/0003-the-board-is-the-product.md
   - docs/adr/0014-acknowledging-a-finished-agent.md
   - docs/adr/0015-seen-when-you-leave-the-pane.md
+  - docs/adr/0017-token-usage-per-agent-and-per-profile.md
+  - docs/research/token-usage-sources-2026-11-09.md
   - docs/research/herdr-focus-events-2026-10-27.md
   - docs/research/herdr-socket-api.md
   - docs/research/herdr-on-this-machine.md
@@ -35,12 +37,12 @@ One **engine** goroutine is the only owner of current state and the only caller 
 
 | Layer | Package | Holds |
 | --- | --- | --- |
-| Core | `internal/core` | AgentKey, Agent, Transition and its constructor, Status, Attention Class, Waiting Time and exactness, sort key, history fold, Profile and Context Line rules, AgentView, ConnectionTruth; Acknowledgement, its constructor and the rule deciding whether a finish is Seen (ADR-0014); the acknowledgement's source and the rule deciding whether leaving a focused pane marks its finish Seen, `core.SeenOnLeave` (ADR-0015) |
-| Engine | `internal/engine` | the actor: pane set, current state, reconcile and Retention timers, resync decisions, publishing views; herdr's focused pane and its dwell, in memory only (ADR-0015) |
+| Core | `internal/core` | AgentKey, Agent, Transition and its constructor, Status, Attention Class, Waiting Time and exactness, sort key, history fold, Profile and Context Line rules, AgentView, ConnectionTruth; Acknowledgement, its constructor and the rule deciding whether a finish is Seen (ADR-0014); the acknowledgement's source and the rule deciding whether leaving a focused pane marks its finish Seen, `core.SeenOnLeave` (ADR-0015); a transcript line's usage marker and `core.UsageLedger`, which folds one file's markers into complete Responses with no clock (ADR-0017) |
+| Engine | `internal/engine` | the actor: pane set, current state, reconcile and Retention timers, resync decisions, publishing views; herdr's focused pane and its dwell, in memory only (ADR-0015); usage rows queued with the pane's Transitions, and the history pass's one worker, off the actor, which hands complete Responses back in batches (ADR-0017) |
 | Adapter | `internal/herdr` | socket mechanics: dial, ping, snapshot, subscribe, stream-health signals, generated wire types; reads focus (the `pane.focused` lifecycle kind and the snapshot's `focused_pane_id`, ADR-0015) and never sets it |
-| Adapter | `internal/procenv` | reading one process's environment, and its direct children with their arguments (linux: `/proc`; darwin: `kern.procargs2`, `kern.proc.all`; children added 2026-10-21 for Background); and Claude Code's session record for one process, exactly `<config dir>/sessions/<pid>.json`, decoding only `pid`, `status` and `statusUpdatedAt` (added 2026-10-21, ADR-0008: a second source of `blocked`, recorded as `observed_by = claude_session`), and `sessionId` and `cwd`, which name the session's transcript; and that transcript, exactly `<config dir>/projects/<cwd with every character but a letter or digit as "-", or with only "/" and "." as "-" when only that folder exists>/<sessionId>.jsonl`, tailed from an in-memory offset (the last 8 MiB at first sight, then at most 1 MiB of complete new lines per read), handing each line to `core.DecodeTranscriptLine` and keeping nothing of it (added 2026-10-21, ADR-0009: background tasks for the view only, never recorded); only with the operator's `claude_recaps` consent, the decoder also takes one more record, a non-sidechain `system` record of `subtype` `away_summary`, for its string `content` alone, the newest recap held in memory for the view, never recorded or logged (added 2026-10-22, ADR-0010); from 2026-10-23 (ADR-0010 amendment, Story 5.14), also a non-sidechain `system` record of `subtype` `local_command` whose `commandRun.command` is "recap", for the text inside its string content's `<local-command-stdout>` wrapper |
-| Adapter | `internal/store` | open with lock, migrations, append, history reads and fold input, Retention sweep; acknowledgements: batch append, per-Agent read, swept with their Agent (ADR-0014) |
-| Adapter | `internal/httpapi` | GET routes, SSE, embedded Board assets; the acknowledgement `POST` routes and their cross-site guard, which reach the engine by message (ADR-0014) |
+| Adapter | `internal/procenv` | reading one process's environment, and its direct children with their arguments (linux: `/proc`; darwin: `kern.procargs2`, `kern.proc.all`; children added 2026-10-21 for Background); and Claude Code's session record for one process, exactly `<config dir>/sessions/<pid>.json`, decoding only `pid`, `status` and `statusUpdatedAt` (added 2026-10-21, ADR-0008: a second source of `blocked`, recorded as `observed_by = claude_session`), and `sessionId` and `cwd`, which name the session's transcript; and that transcript, exactly `<config dir>/projects/<cwd with every character but a letter or digit as "-", or with only "/" and "." as "-" when only that folder exists>/<sessionId>.jsonl`, tailed from an in-memory offset (the last 8 MiB at first sight, then at most 1 MiB of complete new lines per read), handing each line to `core.DecodeTranscriptLine` and keeping nothing of it (added 2026-10-21, ADR-0009: background tasks for the view only, never recorded); only with the operator's `claude_recaps` consent, the decoder also takes one more record, a non-sidechain `system` record of `subtype` `away_summary`, for its string `content` alone, the newest recap held in memory for the view, never recorded or logged (added 2026-10-22, ADR-0010); from 2026-10-23 (ADR-0010 amendment, Story 5.14), also a non-sidechain `system` record of `subtype` `local_command` whose `commandRun.command` is "recap", for the text inside its string content's `<local-command-stdout>` wrapper; from 2026-11-11 (ADR-0017), unless `claude_usage` is false, each assistant record's usage marker (ids, model, stop flag, token counts, timestamp, `agentId`, never text), from the main transcript and from each `<sessionId>/subagents/agent-*.jsonl` whose size changed, each with its own offset; and the history pass's usage-only read of one file from byte 0 to the live tail's start, capped at 256 MiB |
+| Adapter | `internal/store` | open with lock, migrations, append, history reads and fold input, Retention sweep; acknowledgements: batch append, per-Agent read, swept with their Agent (ADR-0014); usage: idempotent batch insert, per-Agent sums, hourly totals, swept by age except the present Agent's (ADR-0017) |
+| Adapter | `internal/httpapi` | GET routes, SSE, embedded Board assets and the usage page (ADR-0017); the acknowledgement `POST` routes and their cross-site guard, which reach the engine by message (ADR-0014) |
 | Adapter | `internal/importer` | parsing the plugin log into core Transitions |
 | Wiring | `internal/config`, `cmd/herddash` | TOML config, socket and Server resolution, flags, lifecycle, subcommands |
 
@@ -73,7 +75,7 @@ so do `herdr` and the packages under it, `herdr/gen` and `herdr/gen/genwire` (AD
 `internal/herdr` and the packages under it import `herdr/gen`; `herdr` itself may import only
 `core` and its own `gen` (ADR-0011). `httpapi` may call only `store`'s read functions; only
 `engine` and `importer` call `store.Append`, and only `engine` calls
-`store.AppendAcknowledgements`: `httpapi` reaches an acknowledgement only through
+`store.AppendAcknowledgements` and `store.AppendUsage` (ADR-0017): `httpapi` reaches an acknowledgement only through
 `engine.Engine.Acknowledge`, a message to the actor (ADR-0014; no new edge). `arch_test.go` and
 `callsite_test.go` enforce all of this.
 
@@ -230,6 +232,14 @@ so do `herdr` and the packages under it, `herdr/gen` and `herdr/gen/genwire` (AD
   Agents no longer present are swept purely by age. Each Daemon start is recorded as a resync
   marker with reason `daemon_start`.
 
+  **Usage (added 2026-11-11, ADR-0017, migration 0008).** One `usage` row per complete Response,
+  inserted once with `INSERT OR IGNORE` under `UNIQUE (message_id, request_id)` and never updated;
+  nothing is written while a Response is pending. A row names its Agent instance by AgentKey and
+  `agent_since`, the `observed_at` of the key's last Transition with no previous Status (AD-3), and
+  `epoch >= 1` is a CHECK: there is no usage backfill. The sweep deletes usage rows older than the
+  cutoff in its transaction, except the present Agent's (its AgentKey and `agent_since`), and
+  `SweepResult` counts them.
+
 ### AD-5 — herdr is reached only through `internal/herdr` — ADR-0006
 
 - **Binds:** FR-6, FR-7, FR-8, FR-16, PRD §5 never-focus and never-read-output rules
@@ -248,11 +258,15 @@ so do `herdr` and the packages under it, `herdr/gen` and `herdr/gen/genwire` (AD
 
 ### AD-6 — The HTTP surface is read-only apart from acknowledgement, and never calls herdr — ADR-0007, ADR-0014
 
-- **Binds:** FR-5a, FR-12, FR-13, FR-14, FR-17
+- **Binds:** FR-5a, FR-12, FR-13, FR-14, FR-17, FR-19
 - **Prevents:** any write route but acknowledgement, an on-demand herdr call per page view, a page
   on another origin reading the API, or a page on another origin making an acknowledgement.
 - **Rule:** GET (and HEAD, except `/events`) on the read routes: `/` (root only), `/assets/` (the
-  embedded Board files), `/api/state`, the history route in AD-3, and `/events`. Every response is
+  embedded Board files), `/api/state`, the history route in AD-3, and `/events`; from 2026-11-11
+  (ADR-0017) also `/usage`, the embedded usage page, and `/api/usage?from=&to=&by=&bucket=hour`
+  (`from` < `to`, UTC ms, at most 31 days apart; `by` one of `profile`, `model`, `agent`; at most
+  50,000 buckets, else 400 `range_too_large`; malformed parameters 400), built from a `store`
+  read. Every response is
   built from the published view or a `store` read. A request whose `Host` header is not a loopback
   name is rejected. Errors, including 405, use the JSON error shape.
 
@@ -280,7 +294,9 @@ so do `herdr` and the packages under it, `herdr/gen` and `herdr/gen/genwire` (AD
     events, in publish order. The client applies events in arrival order. An acknowledgement or
     undo (ADR-0014) is published as the `agent` event of each Agent whose view changed; it adds no
     event name. So is a focus move (ADR-0015): the `agent` event of the pane left and of the pane
-    landed on, whose `in_view` changed, and of an automatic mark.
+    landed on, whose `in_view` changed, and of an automatic mark. So is a change of an Agent's
+    `usage` (ADR-0017): at most one per transcript read or history batch, no throttle and no new
+    event name.
   - **Keepalive** (added 2026-10-23, ADR-0012).
     Every 15 s a stream also sends a `keepalive` event: a liveness event, not a change, with data
     `{}` and no `id:`, so `id:` stays the view sequence of real changes. A client that hears
@@ -300,7 +316,8 @@ so do `herdr` and the packages under it, `herdr/gen` and `herdr/gen/genwire` (AD
   defaults. It owns socket-path resolution (`--session`, `HERDR_SOCKET_PATH`, `HERDR_SESSION`, then
   the default session) and FR-16's dogfooding flag. Defaults: `~/.config/herddash/config.toml`, and
   a data directory of `$XDG_DATA_HOME/herddash`, falling back to `~/.local/share/herddash`, on both
-  operating systems.
+  operating systems. `claude_usage` (ADR-0017) is a file key with no flag, default true; false
+  means no usage is decoded, read or recorded and every `AgentView.usage` is `null`.
 
 ### AD-9 — One process owns the database
 
@@ -324,10 +341,11 @@ so do `herdr` and the packages under it, `herdr/gen` and `herdr/gen/genwire` (AD
   The migrations so far: 0001 the record; 0002 `server_state` (AD-3); 0003 the transitions table's
   `observed_by` column (ADR-0008); 0004 `server_state.released` (Story 5.17); 0005 the append-only
   `acknowledgements` table (ADR-0014, Epic 6); 0006 its nullable `herdr_order` column (ADR-0014's
-  amendment); 0007 its `source` column, `'board'` for every earlier row (ADR-0015). 0002 and 0004 change engine state only, outside the append-only record, so they
+  amendment); 0007 its `source` column, `'board'` for every earlier row (ADR-0015); 0008 the append-only
+  `usage` table (ADR-0017, Epic 8). 0002 and 0004 change engine state only, outside the append-only record, so they
   needed no ADR. Every migration is a one-way door for older binaries: a database at schema 4 is
   refused by 0.5.0, which knows schema 3, one at schema 5 by 0.7.x, one at schema 6 by a build
-  that knows schema 5, and one at schema 7 by a build that knows schema 6, so going back means restoring or removing the database.
+  that knows schema 5, one at schema 7 by a build that knows schema 6, and one at schema 8 by 0.10.x and earlier, so going back means restoring or removing the database.
 
 ### AD-11 — The engine decides; `internal/herdr` only does
 
@@ -419,6 +437,10 @@ so do `herdr` and the packages under it, `herdr/gen` and `herdr/gen/genwire` (AD
   previous Status; only their Profile is decided at release. At most one lookup's reads run per
   pane at a time.
 
+  **Usage rows (added 2026-11-11, ADR-0017)** queue with the pane's Transitions: while the pane's
+  rows are held, its usage rows are held too and released with the same Profile, so no usage row
+  pairs a Response with a Profile resolved for another program.
+
 ## Consistency Conventions
 
 | Concern | Convention |
@@ -427,7 +449,7 @@ so do `herdr` and the packages under it, `herdr/gen` and `herdr/gen/genwire` (AD
 | Time | UTC Unix milliseconds in storage and on the wire. `observed_at` is the Daemon's clock. Order within an Agent is `observed_at`, then the order the engine recorded them. herdr's sequence (`state_change_seq`) is kept as evidence; it exists only for snapshot-derived Transitions and restarts with herdr, so it is compared only within one server instance. |
 | Status and class values | herdr's strings verbatim: `working`, `blocked`, `done`, `idle`, `unknown`. Attention Class values are `needs_you`, `finished`, `working` and `unknown`. Provenance is one of `live`, `snapshot` or `backfill`. |
 | ConnectionTruth | `{connected, last_snapshot_at, herdr_version, herdr_minimum, gate: ok\|advisory\|refused, resync_guaranteed}`. |
-| JSON | `snake_case` fields. Errors are `{"error":{"code":"...","message":"..."}}` with a matching status. String fields are always sent, `""` when unknown or empty: an AgentView's `heading`, `profile`, `directory`, `workspace`, `tab`, `pane_position`, `pane_title`, `context_line` and `recap`, and a Transition's `profile`. Omitted when absent: an AgentView's `waiting_since` (no class start known); ConnectionTruth's `last_snapshot_at`, `herdr_version` and `gate`; a Transition's `previous`, `herdr_order`, `herdr_version` and `observed_by`; a resync's `detail`. Each AgentView carries `heading` and `waiting_exact`, and `waiting_since` whenever its class start is known, and `seen` (ADR-0014), always sent. An `engine.View` carries `recording` (ADR-0016), always sent: whether the run has a usable Recorder, false when it has none or its saved state failed to load, fixed for the run, so no change event carries it. It does not say rows are being written: a refused gate records nothing too while `recording` stays true, and its own strip says so. A history body carries `acknowledgements`, always sent, `[]` when none. Three packages own the shapes: `engine.View` is the `/api/state` body and the `state` event; `core` owns `AgentView`, `AgentKey`, `SortKey` and `ConnectionTruth`; `httpapi` owns the other SSE payloads, the history body and the error shape. |
+| JSON | `snake_case` fields. Errors are `{"error":{"code":"...","message":"..."}}` with a matching status. String fields are always sent, `""` when unknown or empty: an AgentView's `heading`, `profile`, `directory`, `workspace`, `tab`, `pane_position`, `pane_title`, `context_line` and `recap`, and a Transition's `profile`. Omitted when absent: an AgentView's `waiting_since` (no class start known); ConnectionTruth's `last_snapshot_at`, `herdr_version` and `gate`; a Transition's `previous`, `herdr_order`, `herdr_version` and `observed_by`; a resync's `detail`. Each AgentView carries `heading` and `waiting_exact`, and `waiting_since` whenever its class start is known, and `seen` (ADR-0014), always sent. An `engine.View` carries `recording` (ADR-0016), always sent: whether the run has a usable Recorder, false when it has none or its saved state failed to load, fixed for the run, so no change event carries it. It does not say rows are being written: a refused gate records nothing too while `recording` stays true, and its own strip says so. A history body carries `acknowledgements`, always sent, `[]` when none. Each AgentView carries `usage` (ADR-0017), always sent: `{input, output, cache_write, cache_read, responses, last_response_at, partial}`, or `null` when `claude_usage` is false. The `/api/usage` body is `{from, to, by, buckets: [{start, key, input, output, cache_write, cache_read, responses}]}`, owned by `httpapi`. Three packages own the shapes: `engine.View` is the `/api/state` body and the `state` event; `core` owns `AgentView`, `AgentKey`, `SortKey` and `ConnectionTruth`; `httpapi` owns the other SSE payloads, the history body and the error shape. |
 | SSE | Event names `state`, `agent`, `removed`, `transition`, `resync` and `connection`, plus `keepalive`, which is sent with no `id:` (ADR-0012). `id:` is the view sequence. `data:` is one JSON object. Every reply's write is bounded (10 s) from `ServeHTTP` entry, and history and marking re-arm the bound after their work; `/events` clears it before it writes and bounds each write itself; net/http clears it after each finished reply; `IdleTimeout` is 60 s, and there is no server `WriteTimeout` (Story 7.4). |
 | Errors | Adapters wrap with `%w`. herdr error codes are an open set: an unknown code on a subscription is a resync, never a crash. |
 | Logging | `log/slog`, JSON, to `herddash.log` in the data directory. Never log environment values except a matched `CLAUDE_CONFIG_DIR`; Pane Titles only at debug. |
@@ -474,6 +496,7 @@ graph LR
 erDiagram
   AGENT_KEY ||--o{ TRANSITION : records
   AGENT_KEY ||--o{ ACKNOWLEDGEMENT : "seen or undone"
+  AGENT_KEY ||--o{ USAGE : "responses of"
   AGENT_KEY }o--|| SERVER_EPOCH : "scoped by"
   SERVER_EPOCH ||--o{ RESYNC_MARKER : "affected by"
   SCHEMA_VERSION ||--|| DATABASE : versions
@@ -511,6 +534,8 @@ SIGTERM. There is no container, no root and no system service.
 | FR-15 Binary and config | `cmd/herddash`, `internal/config` | AD-8 |
 | FR-16 Version gate | `internal/engine` via `herdr` ping | AD-8, AD-11 |
 | FR-17 Loopback, owner-only | `internal/httpapi`, `internal/store` | AD-6, AD-9 |
+| FR-18 Record token usage | `internal/core`, `internal/procenv`, `internal/engine`, `internal/store` | AD-1, AD-2, AD-3, AD-4, AD-8, AD-10, AD-14; ADR-0017 |
+| FR-19 Show token usage | `internal/engine`, `internal/httpapi`, `store` reads | AD-6, AD-7; ADR-0017 |
 
 ## Open Questions
 

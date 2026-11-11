@@ -3,7 +3,8 @@
 **Status: Accepted.** Decided by the operator 2026-10-08 during the PRD rework, written
 2026-10-14. Amends one consequence of [ADR-0001](0001-what-herddash-is.md), which otherwise stays
 in force. Amended by [ADR-0013](0013-a-title-bar-on-the-board.md) (a title bar, 2026-10-26)
-and [ADR-0014](0014-acknowledging-a-finished-agent.md) (acknowledgement controls, 2026-10-27).
+[ADR-0014](0014-acknowledging-a-finished-agent.md) (acknowledgement controls, 2026-10-27)
+and [ADR-0017](0017-token-usage-per-agent-and-per-profile.md) (a usage page beside the Board, 2026-11-11).
 
 ## Context
 
