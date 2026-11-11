@@ -594,8 +594,8 @@ func TestUpgradeFromSchema6(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v := userVersion(t, s.db); v != 7 {
-		t.Errorf("user_version %d, want 7", v)
+	if v := userVersion(t, s.db); v != schemaVersion {
+		t.Errorf("user_version %d, want %d", v, schemaVersion)
 	}
 	for _, table := range recordTables {
 		if got := dumpTable(t, s.db, table); got != before[table] {
@@ -632,8 +632,8 @@ func TestUpgradeFromSchema6(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = (&Store{db: raw}).prepare(context.Background(), path, ms[:6])
-	if !errors.Is(err, ErrSchemaNewer) || !strings.Contains(err.Error(), "version 7") || !strings.Contains(err.Error(), "up to 6") {
-		t.Errorf("schema-6 binary on a schema-7 database: %v, want ErrSchemaNewer naming 7 and 6", err)
+	if !errors.Is(err, ErrSchemaNewer) || !strings.Contains(err.Error(), fmt.Sprintf("version %d", schemaVersion)) || !strings.Contains(err.Error(), "up to 6") {
+		t.Errorf("schema-6 binary on a schema-%d database: %v, want ErrSchemaNewer naming %d and 6", schemaVersion, err, schemaVersion)
 	}
 }
 

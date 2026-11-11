@@ -456,3 +456,157 @@ func TestSweepAcknowledgementsRollsBack(t *testing.T) {
 		t.Errorf("acknowledgements %s, want %s", got, want)
 	}
 }
+
+// usageAt appends one usage row of key's Agent instance since for Response
+// id, responded daysAgo days before sweepNow.
+func usageAt(t *testing.T, s *Store, key core.AgentKey, since int64, id string, daysAgo int64) {
+	t.Helper()
+	appendUsage(t, s, usageRow(key, since, "work", id, sweepNow-daysAgo*day, 1))
+}
+
+// usageIDs is the message ids of key's usage rows, in id order.
+func usageIDs(t *testing.T, s *Store, key core.AgentKey) string {
+	t.Helper()
+	rows, err := s.db.Query(`SELECT message_id FROM usage WHERE host = ? AND server = ? AND epoch = ? AND pane_id = ?
+		ORDER BY id`, key.Host, key.Server, key.Epoch, key.PaneID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return strings.Join(ids, " ")
+}
+
+// TestSweepUsage: a gone Agent's old usage goes; the present Agent
+// instance's stays whatever its age; an earlier Agent's old usage on a
+// present key goes; recent rows stay. Age is responded_at, not observed_at.
+func TestSweepUsage(t *testing.T) {
+	s, _ := openTemp(t)
+	here, gone := keyOf("w1:here"), keyOf("w1:gone")
+	const earlier, present = 5, 7
+	usageAt(t, s, here, earlier, "e-old", 200)
+	usageAt(t, s, here, earlier, "e-new", 10)
+	usageAt(t, s, here, present, "p-old", 150)
+	usageAt(t, s, here, present, "p-new", 1)
+	usageAt(t, s, gone, present, "g-old", 100)
+	usageAt(t, s, gone, present, "g-new", 89)
+	// Observed now but responded long ago, as the history pass writes it:
+	// swept by its age.
+	r := usageRow(gone, present, "work", "g-hist", sweepNow-300*day, 1)
+	r.ObservedAt = sweepNow
+	appendUsage(t, s, r)
+
+	res := sweep(t, s, Present{Key: here, Since: 1, AgentSince: present})
+	if got, want := usageIDs(t, s, here), "e-new p-old p-new"; got != want {
+		t.Errorf("present key's usage %s, want %s", got, want)
+	}
+	if got, want := usageIDs(t, s, gone), "g-new"; got != want {
+		t.Errorf("gone key's usage %s, want %s", got, want)
+	}
+	if res.Usage != 3 {
+		t.Errorf("result %+v, want 3 usage rows swept", res)
+	}
+	tot, err := s.UsageTotals(context.Background(), here, present)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tot.Responses != 2 {
+		t.Errorf("present totals %+v, want both Responses kept", tot)
+	}
+}
+
+// TestSweepUsageUnknownAgentSinceKeepsAll: a present key whose Agent start is
+// unknown (0, as the engine passes until Story 8.4) keeps every usage row of
+// the key, any instance; the key is matched whole.
+func TestSweepUsageUnknownAgentSinceKeepsAll(t *testing.T) {
+	s, _ := openTemp(t)
+	here := keyOf("w1:here")
+	otherEpoch := core.AgentKey{Host: here.Host, Server: here.Server, Epoch: here.Epoch + 1, PaneID: here.PaneID}
+	usageAt(t, s, here, 5, "a", 200)
+	usageAt(t, s, here, 7, "b", 150)
+	usageAt(t, s, otherEpoch, 7, "c", 150)
+	res := sweep(t, s, Present{Key: here, Since: 0})
+	if got, want := usageIDs(t, s, here), "a b"; got != want {
+		t.Errorf("usage %s, want %s", got, want)
+	}
+	if got := usageIDs(t, s, otherEpoch); got != "" {
+		t.Errorf("another epoch's usage %s, want swept", got)
+	}
+	if res.Usage != 1 {
+		t.Errorf("result %+v, want 1 usage row swept", res)
+	}
+}
+
+// TestSweepUsageRollsBack: the transitions, markers and acknowledgements
+// deletes run, then the usage delete fails: the sweep errors and no table
+// changes.
+func TestSweepUsageRollsBack(t *testing.T) {
+	s, _ := openTemp(t)
+	gone := keyOf("w1:gone")
+	appendAt(t, s, gone, "", core.StatusWorking, 200)
+	appendAt(t, s, gone, core.StatusWorking, core.StatusDone, 199)
+	appendMarkerAt(t, s, 200)
+	ackAt(t, s, gone, 199, true, 198)
+	usageAt(t, s, gone, 5, "u", 198)
+	if _, err := s.db.Exec(`CREATE TABLE deleted (what TEXT);
+		CREATE TRIGGER t_deleted AFTER DELETE ON transitions BEGIN INSERT INTO deleted VALUES ('transition'); END;
+		CREATE TRIGGER m_deleted AFTER DELETE ON resync_markers BEGIN INSERT INTO deleted VALUES ('marker'); END;
+		CREATE TRIGGER a_deleted AFTER DELETE ON acknowledgements BEGIN INSERT INTO deleted VALUES ('ack'); END;
+		CREATE TRIGGER no_usage_delete BEFORE DELETE ON usage
+			WHEN (SELECT count(*) FROM deleted WHERE what = 'transition') = 2
+			AND (SELECT count(*) FROM deleted WHERE what = 'marker') = 1
+			AND (SELECT count(*) FROM deleted WHERE what = 'ack') = 1
+			BEGIN SELECT RAISE(ABORT, 'usage locked'); END`); err != nil {
+		t.Fatal(err)
+	}
+	_, err := s.Sweep(context.Background(), sweepCutoff, nil)
+	if err == nil || !strings.Contains(err.Error(), "usage locked") {
+		t.Fatalf("sweep error %v, want the usage delete's", err)
+	}
+	expectDays(t, s, gone, "working@200", "done@199")
+	var witnessed int
+	if err := s.db.QueryRow(`SELECT count(*) FROM deleted`).Scan(&witnessed); err != nil {
+		t.Fatal(err)
+	}
+	if witnessed != 0 {
+		t.Errorf("%d witnessed deletes left, want none", witnessed)
+	}
+	if got, want := acksOf(t, s, gone), "[199:true]"; got != want {
+		t.Errorf("acknowledgements %s, want %s", got, want)
+	}
+	if got := usageIDs(t, s, gone); got != "u" {
+		t.Errorf("usage %s, want u kept", got)
+	}
+}
+
+// TestSweepUsageKnownSinceUnknownAgentSince: what the engine sends until
+// Story 8.4, a known class start with AgentSince 0, keeps every usage row of
+// the key while its transitions still follow Since.
+func TestSweepUsageKnownSinceUnknownAgentSince(t *testing.T) {
+	s, _ := openTemp(t)
+	k := keyOf("w1:here")
+	appendAt(t, s, k, "", core.StatusIdle, 200)
+	appendAt(t, s, k, core.StatusIdle, core.StatusWorking, 150)
+	appendAt(t, s, k, core.StatusWorking, core.StatusBlocked, 120)
+	usageAt(t, s, k, 5, "a", 200)
+	usageAt(t, s, k, 7, "b", 150)
+	f := folded(t, s, k)
+	res := sweep(t, s, Present{Key: k, Since: f.Since})
+	expectDays(t, s, k, "working@150", "blocked@120")
+	if got, want := usageIDs(t, s, k), "a b"; got != want {
+		t.Errorf("usage %s, want %s", got, want)
+	}
+	if res.Transitions != 1 || res.Usage != 0 {
+		t.Errorf("result %+v, want 1 transition and no usage swept", res)
+	}
+}

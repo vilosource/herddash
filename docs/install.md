@@ -437,6 +437,7 @@ then means restoring a backup taken before the upgrade, and losing what was reco
 | 5 | Epic 6's first `-dev` builds, acknowledgement ("Seen", ADR-0014); 0.7.x and earlier refuse it |
 | 6 | Epic 6, herdr's order on an acknowledgement (ADR-0014's amendment); schema-5 builds refuse it |
 | 7 | Epic 6, where an acknowledgement came from, `board` or `herdr_focus` (Seen on leaving a pane, ADR-0015); schema-6 builds, including the first Epic 6 `-dev` builds, refuse it |
+| 8 | Epic 8, token usage, the `usage` table (ADR-0017); 0.10.x and earlier refuse it |
 
 So before installing a build with a newer schema than the running one, take a backup with the
 Daemon stopped, exactly as above, and install the new binary while it is still stopped:

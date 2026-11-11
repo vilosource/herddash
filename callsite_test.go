@@ -12,7 +12,8 @@ package herddash_test
 // internal/store) may call it, so the engine may not (AD-13).
 // AppendAcknowledgements, the acknowledgement write (ADR-0014), is the
 // engine's alone: only internal/engine (and internal/store) may call it, so
-// neither httpapi nor the importer may.
+// neither httpapi nor the importer may. AppendUsage, the usage write
+// (ADR-0017), is the engine's alone too, under the same rule.
 //
 // It reads syntax, not types, so it is deliberately broad: outside the
 // permitted packages, any selector of a guarded name whose left side is not an
@@ -64,6 +65,7 @@ var guarded = map[string]struct {
 	"AppendBackfill":     {"imports into the record", recordImporters},
 
 	"AppendAcknowledgements": {"acknowledges in the record", recordAcknowledgers},
+	"AppendUsage":            {"records usage in the record", recordAcknowledgers},
 }
 
 // mayCallAll reports whether code in dir may call every guarded method, so
@@ -170,7 +172,8 @@ func TestRecordCallSites(t *testing.T) {
 // sweep, the importer's appends and backfill, a _test.go file and a
 // package-level function are not. The engine importing backfill is reported.
 // An acknowledgement recorded from cmd, httpapi or the importer is reported;
-// the engine's is not.
+// the engine's is not. So is usage recorded from cmd, httpapi or the
+// importer; the engine's is not.
 func TestCheckCallSitesCatchesViolations(t *testing.T) {
 	got, err := checkCallSites(filepath.Join("testdata", "callsite"))
 	if err != nil {
@@ -183,13 +186,16 @@ func TestCheckCallSitesCatchesViolations(t *testing.T) {
 		"cmd/herddash/bad.go:13: SaveServerState writes the record; only internal/engine, internal/importer, internal/store may call it",
 		"cmd/herddash/bad.go:14: Sweep deletes from the record; only internal/engine, internal/store may call it",
 		"cmd/herddash/bad.go:15: AppendAcknowledgements acknowledges in the record; only internal/engine, internal/store may call it",
-		"cmd/herddash/bad.go:20: Append writes the record; only internal/engine, internal/importer, internal/store may call it",
-		"cmd/herddash/bad.go:21: Sweep deletes from the record; only internal/engine, internal/store may call it",
+		"cmd/herddash/bad.go:16: AppendUsage records usage in the record; only internal/engine, internal/store may call it",
+		"cmd/herddash/bad.go:21: Append writes the record; only internal/engine, internal/importer, internal/store may call it",
+		"cmd/herddash/bad.go:22: Sweep deletes from the record; only internal/engine, internal/store may call it",
 		"internal/engine/backfill.go:5: AppendBackfill imports into the record; only internal/importer, internal/store may call it",
-		"internal/httpapi/bad.go:12: Append writes the record; only internal/engine, internal/importer, internal/store may call it",
-		"internal/httpapi/bad.go:13: AppendAcknowledgements acknowledges in the record; only internal/engine, internal/store may call it",
-		"internal/importer/bad.go:10: Sweep deletes from the record; only internal/engine, internal/store may call it",
-		"internal/importer/bad.go:13: AppendAcknowledgements acknowledges in the record; only internal/engine, internal/store may call it",
+		"internal/httpapi/bad.go:13: Append writes the record; only internal/engine, internal/importer, internal/store may call it",
+		"internal/httpapi/bad.go:14: AppendAcknowledgements acknowledges in the record; only internal/engine, internal/store may call it",
+		"internal/httpapi/bad.go:15: AppendUsage records usage in the record; only internal/engine, internal/store may call it",
+		"internal/importer/bad.go:11: Sweep deletes from the record; only internal/engine, internal/store may call it",
+		"internal/importer/bad.go:14: AppendAcknowledgements acknowledges in the record; only internal/engine, internal/store may call it",
+		"internal/importer/bad.go:15: AppendUsage records usage in the record; only internal/engine, internal/store may call it",
 	}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Errorf("violations\n got %s\nwant %s", strings.Join(got, "\n     "), strings.Join(want, "\n     "))

@@ -6,4 +6,5 @@ func (e *Engine) record(t any) {
 	e.store.SaveServerState(t)
 	e.store.Sweep(nil, 0, nil)
 	e.store.AppendAcknowledgements(nil, t)
+	e.store.AppendUsage(nil, t)
 }

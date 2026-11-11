@@ -2026,6 +2026,17 @@ Story 8.2's golden replay, 2026-11-11, which reads the main file first and so ca
 **When** it runs
 **Then** its totals equal the independent count except for the documented loss
 
+**Given** an Agent whose start (`agent_since`) is not yet known
+**When** its usage arrives
+**Then** the engine holds that usage rather than writing it, and passes `store.AppendUsage` only
+rows with a known `agent_since` (> 0), so no batch fails the table's CHECK
+
+**Given** a Retention sweep with a present Agent whose start is known (deferred from Story 8.3,
+which added `store.Present.AgentSince` and left it 0, so every present key keeps all its usage)
+**When** the engine sweeps
+**Then** it passes each present Agent's `agent_since` in `Present.AgentSince`, so an earlier
+Agent's old usage on a reused pane is swept by age while the present Agent's is kept
+
 ### Story 8.5: Serve usage
 
 As the operator,
@@ -2083,6 +2094,12 @@ never taking the session read's busy flag, and hands complete Responses to the a
 **When** a Daemon starts with this build
 **Then** the pass's time and memory are measured and recorded in the story's spec before merge,
 and the golden replay agrees
+
+**Given** a transcript holding Responses that responded before the Retention cutoff (found in
+Story 8.3's review)
+**When** the history pass reads it
+**Then** it does not write those Responses, so a swept Response of an earlier Agent is never
+re-inserted under the present one
 
 ### Story 8.7: The usage page
 

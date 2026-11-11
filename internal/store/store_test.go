@@ -66,8 +66,8 @@ func TestOpenFresh(t *testing.T) {
 		}
 		tables = append(tables, n)
 	}
-	if got := strings.Join(tables, ","); got != "acknowledgements,resync_markers,server_state,transitions" {
-		t.Errorf("tables %s, want acknowledgements,resync_markers,server_state,transitions", got)
+	if got := strings.Join(tables, ","); got != "acknowledgements,resync_markers,server_state,transitions,usage" {
+		t.Errorf("tables %s, want acknowledgements,resync_markers,server_state,transitions,usage", got)
 	}
 }
 
@@ -574,7 +574,7 @@ func TestMigrationsNumbered(t *testing.T) {
 	for _, m := range ms {
 		names = append(names, m.name)
 	}
-	if got, want := strings.Join(names, ","), "0001_initial.sql,0002_server_state.sql,0003_observed_by.sql,0004_server_state_released.sql,0005_acknowledgements.sql,0006_acknowledgement_order.sql,0007_acknowledgement_source.sql"; got != want {
+	if got, want := strings.Join(names, ","), "0001_initial.sql,0002_server_state.sql,0003_observed_by.sql,0004_server_state_released.sql,0005_acknowledgements.sql,0006_acknowledgement_order.sql,0007_acknowledgement_source.sql,0008_usage.sql"; got != want {
 		t.Errorf("migrations %s, want %s", got, want)
 	}
 	if len(ms) != schemaVersion {
@@ -583,7 +583,7 @@ func TestMigrationsNumbered(t *testing.T) {
 }
 
 // schemaVersion is the user_version a fully migrated database has.
-const schemaVersion = 7
+const schemaVersion = 8
 
 // TestFailedMigrationRollsBack runs a migration list whose second step fails:
 // nothing from the first step survives and user_version is unchanged.

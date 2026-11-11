@@ -338,15 +338,21 @@ spec, with its review triage log, is `docs/implementation/spec-<key>.md`. `go.mo
   pure Seen-on-leave decision). `core.NewTransition` refuses a
   `HerdrOrder` on a `live` or `backfill` Transition (`core.ErrInvalidHerdrOrder`).
 - `internal/store`: the SQLite record (`modernc.org/sqlite`, WAL, flock-owned), plus the engine's
-  `server_state`, which is engine state, not the append-only record. Seven migrations, 0001 to
-  0007; 0004 (Story 5.17) adds `server_state.released`, engine state only, 0005 (Story 6.1)
+  `server_state`, which is engine state, not the append-only record. Eight migrations, 0001 to
+  0008; 0004 (Story 5.17) adds `server_state.released`, engine state only, 0005 (Story 6.1)
   adds the append-only `acknowledgements` table, swept by Retention with its Agent's rows, 0006
   (ADR-0014's amendment) its nullable `herdr_order`, and 0007 (Story 6.6, ADR-0015) its `source`,
-  `'board'` or `'herdr_focus'`, defaulting every earlier row to `'board'`. A database is refused
-  by a binary that knows an older schema (`store.ErrSchemaNewer`), so each migration is a one-way
-  door: 0.5.0 cannot open schema 4, **0.7.x and earlier cannot open schema 5, 6 or 7**, and the
-  Epic 6 `-dev` builds before Story 6.6, which know schema 5 or 6, cannot open schema 7. Going back means restoring the backup taken before the upgrade (`docs/install.md`,
-  "Before a build with a new schema") or removing the database. `store.AppendAcknowledgements` is
+  `'board'` or `'herdr_focus'`, defaulting every earlier row to `'board'`. 0008 (Story 8.3,
+  ADR-0017) adds the append-only `usage` table, one row per Response under
+  `UNIQUE (message_id, request_id)`, written by `store.AppendUsage` (`INSERT OR IGNORE`, one
+  transaction per batch, called only by the engine, `callsite_test.go`) and swept by Retention
+  by `responded_at` except the present Agent instance's rows (`store.Present.AgentSince`, left 0
+  until Story 8.4, so a present key keeps all its usage). A database is refused by a binary that
+  knows an older schema (`store.ErrSchemaNewer`), so each migration is a one-way door: 0.5.0
+  cannot open schema 4, **0.7.x and earlier cannot open schema 5, 6 or 7**, the Epic 6 `-dev`
+  builds before Story 6.6, which know schema 5 or 6, cannot open schema 7, and **0.10.x and
+  earlier cannot open schema 8**. Going back means restoring the backup taken before the upgrade
+  (`docs/install.md`, "Before a build with a new schema") or removing the database. `store.AppendAcknowledgements` is
   called only by the engine (`callsite_test.go`).
 - `internal/httpapi`: the loopback API: `/api/state`, `/events` (SSE) and
   `/api/agents/{host}/{server}/{epoch}/{pane}/history`, whose body also carries the Agent's

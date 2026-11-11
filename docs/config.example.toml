@@ -61,7 +61,8 @@
 # Database file. Default: <data_dir>/herddash.db.       Flag: --database
 # database = "~/.local/share/herddash/herddash.db"
 
-# Days of history kept. Must be at least 1. Default: 90.
+# Days of history kept, which also bounds recorded token usage, except the
+# present Agent's. Must be at least 1. Default: 90.
 #                                                       Flag: --retention-days
 # retention_days = 90
 

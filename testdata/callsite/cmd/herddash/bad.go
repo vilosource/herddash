@@ -13,6 +13,7 @@ func record(st *store.Store, rec interface{ Append(any) error }) {
 	st.SaveServerState("h", "s", store.ServerState{Epoch: 1})
 	st.Sweep(nil, 0, nil)
 	st.AppendAcknowledgements(nil, nil)
+	st.AppendUsage(nil, nil)
 	keep(rec)
 }
 

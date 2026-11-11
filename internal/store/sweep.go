@@ -12,10 +12,13 @@ import (
 // Attention Class began (core.FoldResult.Since). Since 0 means it is not
 // known, and then none of the Agent's rows is swept. The present Agent is the
 // one the key's last row with no previous Status began; earlier rows of the
-// key belong to an earlier Agent (AD-3).
+// key belong to an earlier Agent (AD-3). AgentSince is that row's observed_at,
+// the Agent instance's start that its usage rows carry (ADR-0017); 0 means it
+// is not known, and then none of the key's usage rows is swept.
 type Present struct {
-	Key   core.AgentKey
-	Since int64
+	Key        core.AgentKey
+	Since      int64
+	AgentSince int64
 }
 
 // SweepResult counts the rows one Sweep deleted.
@@ -23,6 +26,7 @@ type SweepResult struct {
 	Transitions      int64
 	ResyncMarkers    int64
 	Acknowledgements int64
+	Usage            int64
 }
 
 // presentRow is one Present as the sweep's statement reads it through
@@ -33,6 +37,7 @@ type presentRow struct {
 	Epoch  int64  `json:"e"`
 	PaneID string `json:"p"`
 	Since  int64  `json:"since"`
+	AS     int64  `json:"as"`
 }
 
 // sweepTransitions deletes the transitions observed before the cutoff (?1),
@@ -79,6 +84,21 @@ const sweepAcknowledgements = `DELETE FROM acknowledgements AS a
 		AND p.value ->> 'e' = a.epoch AND p.value ->> 'p' = a.pane_id
 		AND (p.value ->> 'since' = 0 OR a.finished_since >= p.value ->> 'since'))`
 
+// sweepUsage deletes the usage rows that responded before the cutoff (?1),
+// by the Response's own time, not observed_at, which a later history pass
+// sets fresh (ADR-0017). It keeps, for an Agent in the present set (?2, as
+// for sweepTransitions), the rows of its present Agent instance, those whose
+// agent_since is its AgentSince ("as"), so present totals never shrink; all
+// of the key's rows when that is unknown, 0. An earlier Agent's rows on a
+// present key, and rows of any other key, go by age alone.
+const sweepUsage = `DELETE FROM usage AS u
+	WHERE u.responded_at < ?1
+	AND NOT EXISTS (
+		SELECT 1 FROM json_each(?2) AS p
+		WHERE p.value ->> 'h' = u.host AND p.value ->> 's' = u.server
+		AND p.value ->> 'e' = u.epoch AND p.value ->> 'p' = u.pane_id
+		AND (p.value ->> 'as' = 0 OR u.agent_since = p.value ->> 'as'))`
+
 // Sweep applies Retention (FR-9, AD-4) in one transaction: it deletes every
 // Transition observed before cutoff (UTC Unix ms) that no present Agent still
 // needs, every resync marker observed before cutoff, and every acknowledgement
@@ -87,8 +107,10 @@ const sweepAcknowledgements = `DELETE FROM acknowledgements AS a
 // Since, and the current Agent's latest working row: none from before the
 // key's last row with no previous Status, which began that Agent (AD-3); and
 // every acknowledgement naming a finish at or after its Since. A present Since
-// of 0 keeps all of the key's rows. It is the only delete in the codebase, and
-// only the engine calls it.
+// of 0 keeps all of the key's rows. It also deletes every usage row that
+// responded before cutoff except the present Agent instances' (ADR-0017): a
+// present AgentSince of 0 keeps all of the key's usage. It is the only delete
+// in the codebase, and only the engine calls it.
 func (s *Store) Sweep(ctx context.Context, cutoff int64, present []Present) (SweepResult, error) {
 	ps := make([]presentRow, 0, len(present))
 	for _, p := range present {
@@ -96,7 +118,8 @@ func (s *Store) Sweep(ctx context.Context, cutoff int64, present []Present) (Swe
 		if err != nil {
 			return SweepResult{}, err
 		}
-		ps = append(ps, presentRow{Host: p.Key.Host, Server: p.Key.Server, Epoch: epoch, PaneID: p.Key.PaneID, Since: p.Since})
+		ps = append(ps, presentRow{Host: p.Key.Host, Server: p.Key.Server, Epoch: epoch, PaneID: p.Key.PaneID, Since: p.Since,
+			AS: p.AgentSince})
 	}
 	b, err := json.Marshal(ps)
 	if err != nil {
@@ -128,6 +151,13 @@ func (s *Store) Sweep(ctx context.Context, cutoff int64, present []Present) (Swe
 	}
 	if r.Acknowledgements, err = res.RowsAffected(); err != nil {
 		return SweepResult{}, fmt.Errorf("store: sweep acknowledgements: %w", err)
+	}
+	res, err = tx.ExecContext(ctx, sweepUsage, cutoff, string(b))
+	if err != nil {
+		return SweepResult{}, fmt.Errorf("store: sweep usage: %w", err)
+	}
+	if r.Usage, err = res.RowsAffected(); err != nil {
+		return SweepResult{}, fmt.Errorf("store: sweep usage: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return SweepResult{}, fmt.Errorf("store: sweep: %w", err)

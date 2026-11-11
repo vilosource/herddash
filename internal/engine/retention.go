@@ -87,7 +87,8 @@ func (e *Engine) sweep() {
 		return
 	}
 	e.log.Info("retention sweep", "cutoff", cutoff, "present", len(present),
-		"transitions", r.Transitions, "resync_markers", r.ResyncMarkers, "acknowledgements", r.Acknowledgements)
+		"transitions", r.Transitions, "resync_markers", r.ResyncMarkers, "acknowledgements", r.Acknowledgements,
+		"usage", r.Usage)
 }
 
 // sweepBlocked reports whether a sweep must wait: the present set is not known
