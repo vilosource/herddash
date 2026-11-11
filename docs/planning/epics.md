@@ -12,6 +12,7 @@ inputDocuments:
   - docs/adr/0006-how-herddash-speaks-to-herdr.md
   - docs/adr/0007-read-only-loopback-http-surface.md
   - docs/adr/0014-acknowledging-a-finished-agent.md
+  - docs/adr/0017-token-usage-per-agent-and-per-profile.md
 ---
 
 # herddash - Epic Breakdown
@@ -46,6 +47,8 @@ FR-14: A history request for one Agent returns its Transitions within Retention,
 FR-15: herddash is one binary with embedded assets and one config file, and runs with only the Profile Map configured. It finds the herdr socket by herdr's own resolution order, including under launchd or systemd.
 FR-16: A version gate refuses to record from herdr older than 0.9.5 and shows an unsupported-version strip. A config flag makes the gate advisory for dogfooding on 0.8.2, with a warning strip, and records the herdr version on every row.
 FR-17: The Daemon binds to loopback by default on a port distinct from 7317, refuses a non-loopback bind without authentication, and creates the data directory `0700` and its files `0600`.
+FR-18: The Daemon records each completed Response of a Claude Code Agent once, from its main and subagent transcripts and a history pass, with its Agent, Profile, model and five token counts, under Retention except the present Agent's; on by default, `claude_usage = false` turns it off (added 2026-11-11, ADR-0017).
+FR-19: Every AgentView carries `usage`; `GET /api/usage` serves hourly totals by Profile, model or Agent; `/usage` shows today, 7 and 30 days; the Board's Boxes are unchanged without a design gate (added 2026-11-11, ADR-0017).
 
 ### NonFunctional Requirements
 
@@ -123,6 +126,8 @@ FR-14: Epic 3 - history route
 FR-15: Epic 1 - one binary, one config, socket discovery; Epic 4 - service units
 FR-16: Epic 1 - version gate and dogfooding flag (its Board strip lands in Epic 3)
 FR-17: Epic 3 - loopback listener and Host check; Epic 1 - owner-only data directory
+FR-18: Epic 8 - decode, record, history pass
+FR-19: Epic 8 - AgentView.usage, /api/usage, the usage page
 
 ## Epic List
 
@@ -147,6 +152,15 @@ cross-site requests. Decided 2026-10-27 by the operator (vfkb 9aee0fc69560, ADR-
 rendered with live data.
 **FRs covered:** FR-5a (new); amends FR-3's order (Seen ranks with Idle), FR-13 (the `agent` event
 carries it), FR-14 (history shows acknowledgements), FR-17 (the write guard).
+
+#### Epic 8: Token usage per Agent and per Profile
+
+The Daemon records every Claude Code Response's token counts once, with the Agent and Profile
+that spent them, keeps them past the 30 days Claude Code keeps its transcripts, and shows totals
+on a usage page and in the API. Decided by the operator on 2026-11-09 and 2026-11-11 (ADR-0017).
+**FRs covered:** FR-18, FR-19 (new); amends PRD §5's non-goal, FR-12 (`usage` on each AgentView),
+FR-13 (the `agent` event carries it), FR-9 (usage under Retention), FR-10 (usage rows join the
+Profile hold).
 
 ## Epic 1: See every agent's status, live, from the terminal
 
@@ -1854,3 +1868,248 @@ unchanged
 **Given** `deferred-work.md`'s F-8 entry
 **When** the story is done
 **Then** it carries a `resolved:` line naming this story
+
+## Epic 8: Token usage per Agent and per Profile
+
+Claude Code writes every Response's token counts into its transcripts and deletes them after 30
+days, and nothing on the Host says which subscription spent them. The Daemon already tails each
+Claude Code Agent's transcript and knows its Profile, so it records each Response once with both,
+keeps it under Retention, and serves totals. Decided by the operator: the non-goal reversed on
+2026-11-09, recording on by default and the history pass kept on 2026-11-11 (vfkb, "the operator
+reverses the usage-dashboard non-goal"). The structure is
+[ADR-0017](../adr/0017-token-usage-per-agent-and-per-profile.md), which every story obeys and
+which amends ADR-0001, ADR-0003, ADR-0005, ADR-0007, ADR-0009, PRD §3 to §8 and the spine. The
+plan it was drawn from, with the measurements and an independent review's 14 findings, is
+[token-usage-plan-2026-11-09.md](token-usage-plan-2026-11-09.md). Decided in advance, so no story
+asks them again:
+
+- One pull request per story into `develop`. Checkpoints: Story 8.1 (the operator accepts
+  ADR-0017, the PRD amendment and the spine amendment), Story 8.7 (the page, rendered with live
+  data) and Story 8.8 (only if the operator wants a usage figure on a Box).
+- Tokens only: no dollar figure, no plan-limit gauge, no Codex, no statusline hook or
+  OpenTelemetry receiver, no transcripts no present Agent owns, no other Hosts.
+- No new dependency and no new import edge. Migration 0008 is the only schema change.
+- No message text is kept or logged.
+- **Golden replay.** A test helper, not shipped, replays every local transcript through the
+  decoder and ledger and compares the totals with an independent count (last record per
+  `message.id` and `requestId`, across files). They agree except for the documented end-of-file
+  loss. It runs by hand before each of Stories 8.2, 8.4 and 8.6 merges, and its numbers go into
+  that story's spec.
+
+Build order: the decisions, the decoder and fold, the table, live recording, serving, the history
+pass, the page, then the Board decision.
+
+### Story 8.1: The decisions: ADR-0017, the PRD and the spine
+
+As the operator,
+I want the usage decision recorded before any code,
+So that every later story is held to one accepted structure.
+
+**Acceptance Criteria:**
+
+**Given** ADR-0017, the PRD amendment (glossary, §4.4, §4.6 FR-18 and FR-19, §5, §6, SM-C1,
+SM-C3, §8 Q5), the spine amendment (AD-4, AD-6, AD-7, AD-8, AD-10, AD-14, the JSON convention, the
+capability map) and the amended ADRs' status lines
+**When** the operator reviews them
+**Then** they accept all of it, ADR-0017's status becomes Accepted, and the tracking file names
+Story 8.2 next
+
+### Story 8.2: Decode usage and fold Responses
+
+As the operator,
+I want each transcript line's usage read exactly and each Response counted once,
+So that every total herddash shows rests on one tested rule.
+
+`core.DecodeTranscriptLine` gains a usage marker carrying only the two ids, the model, whether a
+stop reason is set, the token counts with the cache split, the record's timestamp and, in a
+subagent file, `agentId`. `core.UsageLedger`, new and pure, folds one file's markers in order and
+returns the Responses that became complete; it holds at most the current pending Response and has
+no clock.
+
+**Acceptance Criteria:**
+
+**Given** fixtures built from real shapes (field names and values only, no text): a Response over
+several records, a stop reason before the last record, no stop reason then another Response, no
+stop reason at the end of the file, a `<synthetic>` record, an all-zero Response, a record with no
+`requestId`, and an unknown `usage` shape
+**When** the ledger folds them
+**Then** each Response completes once with its final counts, the last pending Response stays
+pending, synthetic and missing-key records count nothing, the all-zero Response is returned, and
+the unknown shape is reported, not dropped
+
+**Given** `arch_test.go`
+**When** the story is done
+**Then** `core` still imports only the standard library and reads no clock
+
+**Given** the golden replay over every local transcript
+**When** it runs
+**Then** its totals equal the independent count except for the documented end-of-file loss, and
+the numbers are in the story's spec
+
+### Story 8.3: The usage table
+
+As the operator,
+I want Responses kept in the record under the same rules as Transitions,
+So that usage survives restarts, never double-counts, and stays bounded.
+
+Migration 0008 adds the `usage` table of ADR-0017 with `UNIQUE (message_id, request_id)` and a
+CHECK `epoch >= 1`. `store.AppendUsage` inserts a batch with `INSERT OR IGNORE` in one
+transaction; the store reads per-Agent sums and hourly totals; the sweep deletes usage older than
+the cutoff except the present Agent's, in its transaction.
+
+**Acceptance Criteria:**
+
+**Given** a batch appended twice, and a batch overlapping one already written
+**When** they are written
+**Then** each Response is one row and the second write adds only what is new
+
+**Given** a rollback test that fails after rows are written in the transaction
+**When** it runs
+**Then** none of the batch is kept
+
+**Given** a sweep with usage rows older than the cutoff for a present Agent and for a gone one
+**When** it runs
+**Then** the gone Agent's old rows are deleted, the present Agent's are kept, and `SweepResult`
+counts them
+
+**Given** a row with epoch 0
+**When** it is inserted
+**Then** the database refuses it
+
+**Given** `docs/install.md`'s schema table and `callsite_test.go`
+**When** the story is done
+**Then** schema 8 is listed as refused by 0.10.x and earlier, and only the engine calls
+`store.AppendUsage`
+
+### Story 8.4: Record live usage
+
+As the operator,
+I want each Claude Code Agent's Responses recorded as they happen, subagents included,
+So that the record holds what each Agent and Profile spends.
+
+The session read also yields usage markers from the main transcript, and lists
+`<sessionId>/subagents/`, tailing each file whose size changed with its own offset and ledger
+within the session timeout, resuming where it stopped. A path change ends that file's ledger. The
+engine queues usage rows with the pane's Transitions under the Profile hold (AD-14), keyed by
+AgentKey and `agent_since`. `claude_usage` (default true) is added to the configuration; false
+reads and records nothing.
+
+**Acceptance Criteria:**
+
+**Given** a fake transcript with Responses appended across two reads, a Daemon restart, a
+session continued into a new file, a `/clear`, and a new Agent in a reused pane
+**When** the engine records them
+**Then** each Response is one row, a new Agent's usage starts at zero, and each row has the Agent
+and `agent_since` that first saw it
+
+**Given** a pane whose rows are held for a Profile lookup
+**When** usage arrives during the hold
+**Then** its rows are released with the Profile decided at release, never one resolved for another
+program
+
+**Given** a session with many subagent files
+**When** a read exceeds the session timeout
+**Then** it stops, keeps every file's offset, resumes there next read, and no file is dropped
+
+**Given** the new concurrency tests
+**When** they run with `-race -count=50`
+**Then** they pass every time
+
+**Given** the golden replay over every local transcript, through the engine's reading path
+**When** it runs
+**Then** its totals equal the independent count except for the documented loss
+
+### Story 8.5: Serve usage
+
+As the operator,
+I want usage in the API and on each Agent's view,
+So that a page, or any later surface, can show it.
+
+`AgentView.usage` is summed from the record at seed and advanced by each written batch;
+`GET /api/usage` (and HEAD) serves hourly UTC totals by Profile, model or Agent under the read
+routes' guards, with ADR-0017's limits.
+
+**Acceptance Criteria:**
+
+**Given** a Daemon restart with usage recorded
+**When** the engine seeds
+**Then** each present Agent's `usage` equals its totals before the restart
+
+**Given** `/api/usage` with a valid window, one over 31 days, one over 50,000 buckets, `from` not
+before `to`, and malformed parameters
+**When** each is requested
+**Then** the valid one returns the documented body and each other a 400 with the JSON error shape
+
+**Given** `engine_contract_test.go` and `order.mjs`
+**When** usage changes interleave with Status changes, a removal and a reconnect
+**Then** the Board's model equals the published view, and no new event name appears
+
+**Given** `claude_usage = false`
+**When** the view is published
+**Then** every `usage` is `null` and `/api/usage` returns no buckets
+
+### Story 8.6: The history pass
+
+As the operator,
+I want each transcript's earlier Responses recorded too,
+So that a long session's totals are complete, not just what followed the Daemon's first read.
+
+One worker off the actor reads each newly seen transcript path, main or subagent, from byte 0 to
+the live tail's start, one file at a time, capped at 256 MiB per file with a pause between files,
+never taking the session read's busy flag, and hands complete Responses to the actor in batches.
+
+**Acceptance Criteria:**
+
+**Given** a transcript larger than the first read's 8 MiB
+**When** the pass completes
+**Then** its earlier Responses are recorded and overlap with the live tail adds no row
+
+**Given** a file over the cap, or a read that fails
+**When** the pass meets it
+**Then** the Agent's `usage.partial` is true and the log says so once
+
+**Given** a Status change during the pass
+**When** the session read runs
+**Then** it is not delayed by the pass
+
+**Given** the operator's Mac with every current transcript
+**When** a Daemon starts with this build
+**Then** the pass's time and memory are measured and recorded in the story's spec before merge,
+and the golden replay agrees
+
+### Story 8.7: The usage page
+
+As the operator,
+I want one page showing usage by Profile and by model,
+So that I can see which subscription spent what today, this week and this month.
+
+`/usage` serves an embedded page that draws today, 7 days and 30 days per Profile and per model
+from `/api/usage`, grouping UTC hours into local days.
+
+**Acceptance Criteria:**
+
+**Given** the page's design rendered with the operator's live data
+**When** the operator reviews it
+**Then** they approve it, and decide how it is reached (a title-bar link, which amends ADR-0013, a
+link at the Board's foot, or its URL alone) **(checkpoint)**
+
+**Given** no usage recorded, or `/api/usage` failing
+**When** the page loads
+**Then** it says "No usage recorded yet", or shows an error line
+
+**Given** `board-browser.mjs`
+**When** CI runs it
+**Then** it checks the page's drawing with recorded and with empty data
+
+### Story 8.8: Decide whether a Box shows usage
+
+As the operator,
+I want to choose, after living with the page, whether a Box shows a usage figure,
+So that the Board gains a second data type only if it earns it.
+
+**Acceptance Criteria:**
+
+**Given** the operator has used the page
+**When** they are asked whether a Box should show a figure
+**Then** if not, the story closes with no change; if so, a design with their live data is approved
+first, and the change amends ADR-0003 and SM-C1 before it is built **(checkpoint)**

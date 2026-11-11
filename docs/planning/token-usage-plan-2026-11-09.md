@@ -8,6 +8,10 @@ each changed. Evidence: [the research record](../research/token-usage-sources-20
 its run folder. Once the open questions in §9 are answered, this becomes ADR-0017, a PRD
 amendment, spine amendments and Epic 8, built story by story with `/bmad-build`.
 
+*2026-11-11:* the operator answered §9 Q2 (on by default) and Q3 (keep the history pass), and this
+plan is now recorded as [ADR-0017](../adr/0017-token-usage-per-agent-and-per-profile.md), the PRD
+and spine amendments, and Epic 8 in [epics.md](epics.md). Where they differ, they govern.
+
 ## 1. Scope
 
 **In:** tokens for each model response of a Claude Code Agent, read from its main transcript and
@@ -303,8 +307,9 @@ The order is 8.1 to 8.8, with one pull request per story into `develop`.
 
 1. **The non-goal.** Decided 2026-11-09: reverse it.
 2. **Default.** Should `claude_usage` be on by default (numbers only, no text), or opt-in like
-   recaps? Recommendation: on.
+   recaps? Recommendation: on. *Decided 2026-11-11: on.*
 3. **The history pass.** Keep it (recommended), or record from the first read onward only?
+   *Decided 2026-11-11: keep it.*
 4. **Reaching `/usage`.** A link in the title bar (amends ADR-0013), a link at the Board's foot, or
    no link (reached by its URL)? Recommendation: the title bar, decided at 8.7.
 5. **The Board.** Should a Box ever show a usage figure? Recommendation: decide after living with

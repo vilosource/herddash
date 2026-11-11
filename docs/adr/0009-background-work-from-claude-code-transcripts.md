@@ -1,6 +1,7 @@
 # ADR-0009: Background work from Claude Code's session transcripts
 
-**Status: Accepted** by the operator on 2026-10-21 ("Approve, build locally"). Written the same
+**Status: Accepted; amended by [ADR-0017](0017-token-usage-per-agent-and-per-profile.md)** (usage numbers from transcripts are
+recorded, and subagent transcripts are read, 2026-11-11). Accepted by the operator on 2026-10-21 ("Approve, build locally"). Written the same
 day, first as part of ADR-0008; the operator split it out so the session record
 ([ADR-0008](0008-claude-code-session-record-as-status-authority.md)) could be accepted first.
 Workflows are to be confirmed by one authorised run before the Board claims them.

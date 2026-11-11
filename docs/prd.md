@@ -5,7 +5,7 @@ created: 2026-10-08
 updated: 2026-10-14
 supersedes: the 2026-10-05 draft of docs/prd.md
 governed_by: [docs/adr/0001-what-herddash-is.md, docs/adr/0003-the-board-is-the-product.md]
-amended: 2026-10-27 (ADR-0014, acknowledgement: glossary, FR-5a, §4.4, §6.2, SM-C1, §8 Q1); 2026-10-27 (ADR-0015, Seen on leaving the pane: glossary, FR-5a, §4.4, §5, SM-C1); 2026-10-30 (ADR-0016, recording strip: SM-C1)
+amended: 2026-10-27 (ADR-0014, acknowledgement: glossary, FR-5a, §4.4, §6.2, SM-C1, §8 Q1); 2026-10-27 (ADR-0015, Seen on leaving the pane: glossary, FR-5a, §4.4, §5, SM-C1); 2026-10-30 (ADR-0016, recording strip: SM-C1); 2026-11-11 (ADR-0017, token usage: glossary, §4.4, §4.6 FR-18 and FR-19, §5, §6, SM-C1, SM-C3, §8 Q5)
 ---
 
 # PRD: herddash
@@ -137,7 +137,8 @@ read-only, so any future surface shows the same truth the Board does.
 - **Daemon** — the herddash process: herdr client, recorder, and HTTP server in one binary. It
   runs on the Host it observes, as the same user as the Agents, because it gathers facts that
   exist only there: the herdr socket and the Agents' process environments. It gathers what the
-  Board needs to answer its question, and nothing merely because it is available.
+  Board needs to answer its question, and nothing merely because it is available. *Amended
+  2026-11-11 (ADR-0017):* and what the usage page shows (FR-18, FR-19).
 - **Retention** — the bounded policy under which recorded Transitions are kept and then deleted.
 - **Seen** — a Finished Agent the operator has acknowledged on the Board: they have read its
   result. An **acknowledgement** names one exact finish (the Agent and the instant its Finished
@@ -151,7 +152,13 @@ read-only, so any future surface shows the same truth the Board does.
   2026-10-27). herdr names a focused pane even with no terminal client attached, so it does not
   mean that someone is looking.
 - **API** — the Daemon's HTTP surface: current state, history, and an event stream, all
-  read-only, plus the acknowledgement write routes (*amended 2026-10-27, ADR-0014*).
+  read-only, plus the acknowledgement write routes (*amended 2026-10-27, ADR-0014*), and usage
+  totals (*amended 2026-11-11, ADR-0017*).
+- **Response** — one reply of the model to a Claude Code Agent: the transcript records sharing
+  one `message.id` and `requestId`. Several records make one Response; it is counted once
+  (ADR-0017, 2026-11-11).
+- **Usage** — a Response's token counts: input, output, cache write (5 minute and 1 hour) and
+  cache read, with its model. Tokens only, never a cost (ADR-0017, 2026-11-11).
 
 ## 4. Features
 
@@ -596,6 +603,8 @@ Retention, in order.
   *Amended 2026-10-27 (ADR-0015):* each with its source, `board` or `herdr_focus`; and every
   AgentView carries `in_view`.
 - The API never proxies a herdr call on demand; it serves the Daemon's own record and cache.
+- *Amended 2026-11-11 (ADR-0017):* every AgentView carries `usage` (FR-19), and the read routes
+  gain `/api/usage` and the `/usage` page, both GET only.
 
 ### 4.5 Running It
 
@@ -643,6 +652,58 @@ browser never reaches the herdr socket.
 - Data directory mode is `0700`; database and log file mode is `0600`.
 - Setting a non-loopback bind address without authentication configured is refused at startup.
 
+### 4.6 Token Usage
+
+*Added 2026-11-11 by operator decision (ADR-0017), reversing part of §5's non-goal.*
+
+**Description:** Claude Code writes every Response's Usage into its transcripts and deletes them
+after 30 days, and nothing on the Host says which subscription spent it. The Daemon already reads
+each Claude Code Agent's transcript and knows its Profile, so it records each Response once, with
+its Agent and Profile, keeps it under Retention, and serves totals. Realizes the functional jobs in
+§2.1 for usage: which Agent and which subscription spent what.
+
+**Functional Requirements:**
+
+#### FR-18: Record token usage
+
+The Daemon records each completed Response of a Claude Code Agent whose transcript it reads, once,
+with: Host, herdr server, epoch and pane id, the Agent's start, its Profile, session id and
+subagent id, the model, the response time, and its input, output, cache-write (5 minute, 1 hour)
+and cache-read tokens. It reads the Agent's main transcript and its subagents' transcripts.
+
+**Consequences (testable):**
+- A Response written as several records is recorded once, with its final counts. A Response seen
+  twice (a continued session, a Daemon restart, a re-read) is one row.
+- A Response is complete at its first record with a stop reason, or, with none, when a record of
+  another Response follows it in the same file. The only Responses not recorded are a file's last
+  Response while it has no stop reason, and any Response in a file the Agent stops reading before
+  then (measured 2026-11-09: 0.04%).
+- A transcript's Responses from before the Daemon first read it are recorded too, by a history
+  pass that never delays Status. A file it cannot read whole marks the Agent's usage partial.
+- A new Agent in a reused pane starts at zero. Each row keeps the Profile its Agent had, through
+  the same hold as Transitions (FR-10).
+- Retention deletes usage older than N days, except the present Agent's. The record keeps usage
+  after Claude Code deletes the transcript.
+- No message text is stored or logged. Other Agent Programs record no usage.
+- `claude_usage = false` in the configuration turns all of it off. It is on by default.
+
+#### FR-19: Show token usage
+
+**Consequences (testable):**
+- Every AgentView carries `usage`: the present Agent's totals, Response count, last Response time
+  and whether it is partial, or `null` when usage is off. It survives a Daemon restart and changes
+  through the ordinary `agent` event.
+- `GET /api/usage` returns hourly totals by Profile, model or Agent for a window of at most 31
+  days, refusing a malformed or too large request with the JSON error shape.
+- `/usage` shows today, the last 7 days and the last 30 days by Profile and by model, says so when
+  nothing is recorded, and shows an error line when the API fails.
+- The Board's Boxes are unchanged. A usage figure on a Box needs a design gate with live data
+  (SM-C1).
+
+**Out of Scope:**
+- Dollar costs, plan limits, and usage of Agent Programs other than Claude Code.
+- Sessions no present Agent owns, and other Hosts.
+
 ## 5. Non-Goals (Explicit)
 
 - **Not a herdr client.** No terminal, no chat, no sending prompts or keys, no creating, splitting,
@@ -661,7 +722,9 @@ browser never reaches the herdr socket.
   Ids are namespaced by Host and herdr server from the first commit so aggregation is additive
   later, by reading several Daemons' APIs, never several sockets.
 - **Does not replace herdr's toasts.** They stay on until the Board has earned trust.
-- **Not an orchestrator, scheduler, cost tracker or usage dashboard.**
+- **Not an orchestrator, scheduler, cost tracker or usage dashboard.** *Amended 2026-11-11 by
+  operator decision (ADR-0017):* **not an orchestrator, scheduler, billing or cost tool.** herddash
+  records and shows token usage (§4.6); it does not price it, budget it, or act on it.
 - **Not installed as a herdr plugin.** It runs from its own directory with its own socket
   connection.
 
@@ -676,6 +739,7 @@ browser never reaches the herdr socket.
 - Running it: FR-15, FR-16, FR-17.
 - One Host, one operator, loopback, herdr 0.9.5 or newer with the dogfooding gate for 0.8.2
   (FR-16).
+- *Amended 2026-11-11 (ADR-0017):* token usage, FR-18 and FR-19, built as Epic 8 after the MVP.
 
 ### 6.2 Out of Scope for MVP
 
@@ -733,9 +797,15 @@ browser never reaches the herdr socket.
   a control.
   *Amended 2026-10-30 (operator decision, ADR-0016):* the Board also carries a recording strip,
   shown only on a run whose saved state could not be loaded and that therefore records nothing.
+  *Amended 2026-11-11 (operator decision, ADR-0017):* token usage adds nothing to the Board. Its
+  figures are on the `/usage` page; a usage figure on a Box is a second data type per Box and
+  needs a design gate with the operator's live data and an ADR amending ADR-0003.
 
 - **SM-C2: herdr load.** The Daemon issues no on-demand herdr reads to serve a page view; snapshot
   frequency is bounded by the reconcile timer. Counterbalances SM-2.
+- **SM-C3: Usage never costs the Board.** *Added 2026-11-11 (ADR-0017).* Reading usage, the
+  history pass included, never delays a Status read or a Board update, and usage figures are not
+  read as dollars. Counterbalances FR-18 and FR-19.
 
 ## 8. Open Questions
 
@@ -765,6 +835,10 @@ are now FR-9a and §6.2.
    observed to be short and free of prompt text. Codex and Antigravity titles have not been
    observed. Until they are, FR-2a's global default applies to them. Revisit when an Agent of each
    Agent Program has been seen on the Board.
+5. **Should herddash track token usage?** *Raised and closed 2026-11-09/11 by operator decision:*
+   yes, per Agent and per Profile, recorded on by default with a history pass, tokens only
+   (§4.6, ADR-0017). Whether a Box shows a figure, and how `/usage` is reached, are decided at
+   Epic 8's checkpoints.
 
 ## 9. Confirmed Assumptions
 

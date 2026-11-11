@@ -1,6 +1,7 @@
 # ADR-0001: What herddash is, after evaluating the prior art
 
-**Status: Accepted, option B.** Written 2026-10-05, decided 2026-10-08. This record existed to be
+**Status: Accepted, option B; amended by [ADR-0017](0017-token-usage-per-agent-and-per-profile.md) (token usage recorded beside Transitions,
+2026-11-11).** Written 2026-10-05, decided 2026-10-08. This record existed to be
 accepted or overturned deliberately, not inherited by default, because every option below implies
 a different build.
 

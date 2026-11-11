@@ -38,7 +38,8 @@ them to disagree.
 6.1 to 6.5 planned 2026-10-27 with ADR-0014 and 6.6 to 6.9 added the same day with ADR-0015,
 and 5 for Epic 7, Daemon health, 7.1 and 7.2 planned 2026-10-30 with ADR-0016 and 7.3 to 7.5
 added 2026-11-02) are
-final, and
+final, and Epic 8, token usage (8.1 to 8.8, planned 2026-11-11 with ADR-0017, proposed until
+the operator accepts it as Story 8.1), follows them, and
 `docs/implementation/sprint-status.yaml` tracks them. Build one story at a time with
 `/bmad-build`, in the order the tracking file lists; it names the next one. Do not write code that
 no story asks for.
