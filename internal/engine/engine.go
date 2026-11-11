@@ -2559,7 +2559,8 @@ func (e *Engine) readTranscript(dir string, s procenv.Session, tail procenv.Tail
 	}
 	var lines []core.TranscriptLine
 	next, restarted, err := e.transcript(tail, path, func(line []byte) {
-		if l, ok := core.DecodeTranscriptLine(line, e.recaps); ok {
+		// Usage is decoded from Story 8.4, under claude_usage (ADR-0017).
+		if l, ok := core.DecodeTranscriptLine(line, e.recaps, false); ok {
 			lines = append(lines, l)
 		}
 	})

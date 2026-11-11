@@ -29,6 +29,9 @@ jobs:
         run: go build ./...
       - name: vet
         run: go vet ./...
+      # The golden replay is run by hand; vet keeps it compiling.
+      - name: vet golden
+        run: go vet -tags golden ./internal/core
       - name: test
         run: go test -race ./...
       # The Board's ordering module, against core's golden fixture. Node is
