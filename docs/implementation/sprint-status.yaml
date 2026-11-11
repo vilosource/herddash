@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 10-16-2026 09:40
-last_updated: 11-11-2026 09:00
+last_updated: 11-11-2026 10:00
 project: herddash
 project_key: NOKEY
 tracking_system: file-system
@@ -122,7 +122,7 @@ development_status:
   epic-7-retrospective: optional
   epic-8: in-progress  # token usage, ADR-0017; planned 2026-11-11
   8-1-the-decisions-adr-0017-the-prd-and-the-spine: done  # PR #75; the operator accepted ADR-0017 on 2026-11-11
-  8-2-decode-usage-and-fold-responses: backlog
+  8-2-decode-usage-and-fold-responses: review
   8-3-the-usage-table: backlog
   8-4-record-live-usage: backlog
   8-5-serve-usage: backlog

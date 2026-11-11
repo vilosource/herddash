@@ -9,9 +9,10 @@ import (
 )
 
 // TranscriptLine is everything herddash takes from one line of a Claude Code
-// session transcript (ADR-0009): task ids, a task's closing status and
-// whether the main thread's turn started or ended, and, only when recaps are
-// on, Claude Code's session recap (ADR-0010). Nothing else of the line is
+// session transcript (ADR-0009): task ids; a task's closing status; whether
+// the main thread's turn started or ended; only when recaps are on, Claude
+// Code's session recap (ADR-0010); and, only when usage is on, an assistant
+// record's token usage (ADR-0017). Nothing else of the line is
 // kept: no other text, input, output, prompt or result.
 type TranscriptLine struct {
 	// StartID is a background task started by the line, "" when none;
@@ -37,6 +38,11 @@ type TranscriptLine struct {
 	// trimmed, without its trailing "(disable recaps in /config)" and at most
 	// MaxRecapRunes long; "" when none, and always "" when recaps are off.
 	Recap string
+	// Usage is the line's token usage marker (ADR-0017), the zero value when
+	// none, and always the zero value when usage is off; UsageIssue says why
+	// an assistant record carrying a usage object yields none.
+	Usage      UsageMarker
+	UsageIssue UsageIssue
 }
 
 // MaxRecapRunes caps a recap's length: Claude Code's documented cap.
@@ -68,6 +74,12 @@ type transcriptRecord struct {
 	// IsCompactSummary marks the summary /compact writes as a user record.
 	IsCompactSummary bool            `json:"isCompactSummary"`
 	CommandRun       json.RawMessage `json:"commandRun"`
+	// RequestID, Timestamp and AgentID are copied raw from every line but
+	// examined only when usage is true (ADR-0017), AgentID only on a
+	// sidechain record.
+	RequestID json.RawMessage `json:"requestId"`
+	Timestamp json.RawMessage `json:"timestamp"`
+	AgentID   json.RawMessage `json:"agentId"`
 }
 
 // The tags a local command's records start with (Story 5.14); tagStderr is
@@ -130,11 +142,24 @@ const (
 //     local_command record whose commandRun.command is "recap" and whose
 //     string content is wrapped in <local-command-stdout> tags (a manual
 //     /recap, Story 5.14). With recaps false neither carries one, and their
-//     content and commandRun are never looked at.
+//     content and commandRun are never looked at;
+//   - only when usage is true (ADR-0017): an assistant record whose
+//     message.usage is an object, and whose message.model is not
+//     "<synthetic>", carries a UsageMarker: message.id, requestId,
+//     message.model, whether message.stop_reason is a non-empty string, the
+//     record's timestamp, the five counts (input_tokens, output_tokens,
+//     cache_read_input_tokens and cache_creation's ephemeral_5m and
+//     ephemeral_1h input tokens, which must sum to
+//     cache_creation_input_tokens) and, on a sidechain, its agentId. A record
+//     lacking either id is UsageNoKey; one whose fields are not that shape is
+//     UsageUnknownShape (see usageOf); neither carries a marker. An assistant
+//     record whose usage is absent or not an object is neither. requestId,
+//     timestamp and agentId are copied raw from every line, but with usage
+//     false neither they nor message's usage fields are examined.
 //
 // Ids must be 1 to 128 letters, digits, "-" or "_"; a line with any other is
 // not a marker for that id.
-func DecodeTranscriptLine(line []byte, recaps bool) (TranscriptLine, bool) {
+func DecodeTranscriptLine(line []byte, recaps, usage bool) (TranscriptLine, bool) {
 	var l TranscriptLine
 	var rec transcriptRecord
 	if len(bytes.TrimSpace(line)) == 0 || json.Unmarshal(line, &rec) != nil {
@@ -159,6 +184,9 @@ func DecodeTranscriptLine(line []byte, recaps bool) (TranscriptLine, bool) {
 		switch stopReason(rec.Message) {
 		case "end_turn", "stop_sequence":
 			l.TurnEnded = !rec.IsSidechain
+		}
+		if usage {
+			l.Usage, l.UsageIssue = usageOf(rec)
 		}
 	case "attachment":
 		var a struct {

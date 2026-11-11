@@ -56,7 +56,7 @@ func fold(lines ...string) BackgroundTasks {
 func foldRecaps(recaps bool, lines ...string) BackgroundTasks {
 	var b BackgroundTasks
 	for _, l := range lines {
-		if m, ok := DecodeTranscriptLine([]byte(l), recaps); ok {
+		if m, ok := DecodeTranscriptLine([]byte(l), recaps, false); ok {
 			b.Apply(m)
 		}
 	}
@@ -89,7 +89,7 @@ func TestTranscriptFixture(t *testing.T) {
 	var b BackgroundTasks
 	var got []TranscriptLine
 	for _, l := range fixtureLines(t) {
-		if m, ok := DecodeTranscriptLine(l, true); ok {
+		if m, ok := DecodeTranscriptLine(l, true, false); ok {
 			got = append(got, m)
 			b.Apply(m)
 		}
@@ -117,7 +117,8 @@ func TestTranscriptPrivacy(t *testing.T) {
 	// The marker type has only these fields, of these kinds.
 	want := map[string]reflect.Kind{"StartID": reflect.String, "StartCommand": reflect.Bool,
 		"EndID": reflect.String, "EndStatus": reflect.String, "TurnStarted": reflect.Bool, "TurnEnded": reflect.Bool,
-		"Recap": reflect.String, "CommandPending": reflect.Bool, "CommandResult": reflect.Bool}
+		"Recap": reflect.String, "CommandPending": reflect.Bool, "CommandResult": reflect.Bool,
+		"Usage": reflect.Struct, "UsageIssue": reflect.Uint8}
 	rt := reflect.TypeOf(TranscriptLine{})
 	if rt.NumField() != len(want) {
 		t.Fatalf("TranscriptLine has %d fields, want %d", rt.NumField(), len(want))
@@ -168,7 +169,7 @@ func TestTranscriptPrivacy(t *testing.T) {
 	)
 	var b BackgroundTasks
 	for _, l := range lines {
-		m, ok := DecodeTranscriptLine(l, true)
+		m, ok := DecodeTranscriptLine(l, true, false)
 		if !ok {
 			continue
 		}
@@ -254,7 +255,7 @@ func TestTranscriptMatrix(t *testing.T) {
 		}
 	}
 	for _, l := range []string{"garbage", "", `{"type":"user",`, `{"type":"summary","summary":"x"}`, toolUse} {
-		if m, ok := DecodeTranscriptLine([]byte(l), true); ok {
+		if m, ok := DecodeTranscriptLine([]byte(l), true, false); ok {
 			t.Errorf("%q decoded as %+v", l, m)
 		}
 	}
@@ -274,7 +275,7 @@ const resumeStopped = `{"type":"queue-operation","operation":"enqueue","timestam
 // the full 2.1.292 notification decodes to the id and stopped, nothing more,
 // and closes the task; with any status but a closing one it stays open.
 func TestTranscriptResumeStoppedShape(t *testing.T) {
-	m, ok := DecodeTranscriptLine([]byte(resumeStopped), true)
+	m, ok := DecodeTranscriptLine([]byte(resumeStopped), true, false)
 	if want := (TranscriptLine{EndID: "bx1", EndStatus: "stopped"}); !ok || m != want {
 		t.Errorf("decoded %+v, %v; want %+v", m, ok, want)
 	}
@@ -283,7 +284,7 @@ func TestTranscriptResumeStoppedShape(t *testing.T) {
 	}
 	for _, s := range []string{"<status>running</status>", ""} {
 		l := strings.Replace(resumeStopped, "<status>stopped</status>", s, 1)
-		if m, _ := DecodeTranscriptLine([]byte(l), true); m.EndStatus != "" || m.EndID != "bx1" {
+		if m, _ := DecodeTranscriptLine([]byte(l), true, false); m.EndStatus != "" || m.EndID != "bx1" {
 			t.Errorf("status %q decoded as %+v", s, m)
 		}
 		if b := fold(bgStart, l); b.Count() != 1 {
@@ -313,7 +314,7 @@ func resumed(id string) string {
 // resume reopens the subagent it names, as a subagent, and its next closing
 // notification closes it; a failed or malformed resume opens nothing.
 func TestTranscriptResumedSubagent(t *testing.T) {
-	m, ok := DecodeTranscriptLine([]byte(resumeShape), true)
+	m, ok := DecodeTranscriptLine([]byte(resumeShape), true, false)
 	if want := (TranscriptLine{StartID: "ag1", TurnStarted: true}); !ok || m != want {
 		t.Errorf("decoded %+v, %v; want %+v", m, ok, want)
 	}
@@ -441,7 +442,7 @@ func TestRecapFixture(t *testing.T) {
 	var got []string
 	var b BackgroundTasks
 	for _, l := range recapFixtureLines(t) {
-		if m, ok := DecodeTranscriptLine(l, true); ok {
+		if m, ok := DecodeTranscriptLine(l, true, false); ok {
 			b.Apply(m)
 			if m.Recap != "" {
 				got = append(got, m.Recap)
@@ -460,7 +461,7 @@ func TestRecapFixture(t *testing.T) {
 	}
 	b = BackgroundTasks{}
 	for _, l := range recapFixtureLines(t) {
-		m, ok := DecodeTranscriptLine(l, false)
+		m, ok := DecodeTranscriptLine(l, false, false)
 		if ok {
 			b.Apply(m)
 		}
@@ -510,11 +511,11 @@ func TestRecapMatrix(t *testing.T) {
 	}
 	for _, l := range []string{recap(""), recap(" (disable recaps in /config)"),
 		`{"type":"system","subtype":"away_summary","isSidechain":true,"content":"S."}`} {
-		if m, ok := DecodeTranscriptLine([]byte(l), true); ok {
+		if m, ok := DecodeTranscriptLine([]byte(l), true, false); ok {
 			t.Errorf("%s decoded as %+v", l, m)
 		}
 	}
-	if m, ok := DecodeTranscriptLine([]byte(x), false); ok || m != (TranscriptLine{}) {
+	if m, ok := DecodeTranscriptLine([]byte(x), false, false); ok || m != (TranscriptLine{}) {
 		t.Errorf("recaps off: decoded as %+v", m)
 	}
 }
@@ -570,8 +571,8 @@ func TestRecapOffChangesNothingElse(t *testing.T) {
 	}
 	sawRecap := false
 	for _, l := range lines {
-		off, okOff := DecodeTranscriptLine(l, false)
-		on, okOn := DecodeTranscriptLine(l, true)
+		off, okOff := DecodeTranscriptLine(l, false, false)
+		on, okOn := DecodeTranscriptLine(l, true, false)
 		if off.Recap != "" {
 			t.Errorf("%s: recap %q with recaps off", l, off.Recap)
 		}

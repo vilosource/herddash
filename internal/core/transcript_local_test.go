@@ -73,7 +73,7 @@ func TestLocalCommandFixture(t *testing.T) {
 	var got []TranscriptLine
 	var b BackgroundTasks
 	for _, l := range localFixtureLines(t) {
-		if m, ok := DecodeTranscriptLine(l, true); ok {
+		if m, ok := DecodeTranscriptLine(l, true, false); ok {
 			got = append(got, m)
 			b.Apply(m)
 		}
@@ -100,7 +100,7 @@ func TestLocalCommandFixture(t *testing.T) {
 	lines := localFixtureLines(t)
 	b = BackgroundTasks{}
 	for _, l := range lines[:len(lines)-2] {
-		if m, ok := DecodeTranscriptLine(l, true); ok {
+		if m, ok := DecodeTranscriptLine(l, true, false); ok {
 			b.Apply(m)
 		}
 	}
@@ -110,7 +110,7 @@ func TestLocalCommandFixture(t *testing.T) {
 	// Up to /usage: the away_summary kept, turn still ended.
 	b = BackgroundTasks{}
 	for _, l := range lines[:7] {
-		if m, ok := DecodeTranscriptLine(l, true); ok {
+		if m, ok := DecodeTranscriptLine(l, true, false); ok {
 			b.Apply(m)
 		}
 	}
@@ -180,14 +180,14 @@ func TestLocalCommandMatrix(t *testing.T) {
 	for _, l := range []string{oldStderr, localResult("recap", "<local-command-stderr>ERR</local-command-stderr>"),
 		localResult("recap", []string{"R."}), localResult("recap", "R."),
 		localResult("recap", "<local-command-stdout> </local-command-stdout>"), localResult("recap", nil)} {
-		if m, ok := DecodeTranscriptLine([]byte(l), true); !ok || m != (TranscriptLine{CommandResult: true}) {
+		if m, ok := DecodeTranscriptLine([]byte(l), true, false); !ok || m != (TranscriptLine{CommandResult: true}) {
 			t.Errorf("%s decoded as %+v, %v", l, m, ok)
 		}
 	}
 	// The caveat and a sidechain result are no marker at all.
 	for _, l := range []string{caveat,
 		`{"type":"system","subtype":"local_command","isSidechain":true,"commandRun":{"command":"recap"},"content":"<local-command-stdout>R.</local-command-stdout>"}`} {
-		if m, ok := DecodeTranscriptLine([]byte(l), true); ok {
+		if m, ok := DecodeTranscriptLine([]byte(l), true, false); ok {
 			t.Errorf("%s decoded as %+v", l, m)
 		}
 	}
@@ -202,7 +202,7 @@ func TestLocalCommandPendingAcrossReads(t *testing.T) {
 		t.Fatalf("clone: pending %v, recap %q, turn ended %v", c.pending, c.Recap(), c.TurnEnded())
 	}
 	// The next read: the result.
-	if m, ok := DecodeTranscriptLine([]byte(localResult("recap", "<local-command-stdout>R.</local-command-stdout>")), true); ok {
+	if m, ok := DecodeTranscriptLine([]byte(localResult("recap", "<local-command-stdout>R.</local-command-stdout>")), true, false); ok {
 		c.Apply(m)
 	}
 	if c.Recap() != "R." || !c.TurnEnded() || c.pending {
@@ -212,7 +212,7 @@ func TestLocalCommandPendingAcrossReads(t *testing.T) {
 		t.Error("a clone changed the original")
 	}
 	// Or a prompt: the turn started.
-	if m, ok := DecodeTranscriptLine([]byte(prompt), true); ok {
+	if m, ok := DecodeTranscriptLine([]byte(prompt), true, false); ok {
 		b.Apply(m)
 	}
 	if b.Recap() != "" || b.TurnEnded() || b.pending {
@@ -226,7 +226,7 @@ func TestLocalCommandPendingAcrossReads(t *testing.T) {
 func TestBashModeIsATurn(t *testing.T) {
 	for _, l := range []string{bashInput, bashStdout} {
 		for _, recaps := range []bool{false, true} {
-			if m, ok := DecodeTranscriptLine([]byte(l), recaps); !ok || m != (TranscriptLine{TurnStarted: true}) {
+			if m, ok := DecodeTranscriptLine([]byte(l), recaps, false); !ok || m != (TranscriptLine{TurnStarted: true}) {
 				t.Errorf("%s (recaps %v) decoded as %+v, %v", l, recaps, m, ok)
 			}
 		}

@@ -2007,6 +2007,13 @@ and `agent_since` that first saw it
 **Then** its rows are released with the Profile decided at release, never one resolved for another
 program
 
+**Given** a forked subagent's file (first record `fork-context-ref`) that starts with an early,
+unstopped copy of its parent's Response, whichever file is read first
+**When** both files are read
+**Then** that Response is recorded once, with the main file's final counts and no subagent id,
+tested with the fork's file read first; the fix may extend `core`'s decoder or ledger (found by
+Story 8.2's golden replay, 2026-11-11, which reads the main file first and so cannot show it)
+
 **Given** a session with many subagent files
 **When** a read exceeds the session timeout
 **Then** it stops, keeps every file's offset, resumes there next read, and no file is dropped
